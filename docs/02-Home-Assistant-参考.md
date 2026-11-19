@@ -87,39 +87,49 @@ HA 的动作不绑定单个实体，而是可以指向 **entity / device / area 
 
 ## 8. 对数据模型的最小改动（草案）
 
-把上面结论落成两张表就够：
+**已定：做通用步骤编辑器**（不收敛成 5 个内置模式，见第 9 节）。因此步骤是**可嵌套的树**，不是平铺列表——`choose`（if-then-else）、`repeat`、`parallel` 都会再带子步骤。
+
+树用 **JSONB 文档**存，不拆成邻接表：编辑器的保存/撤销/复制整棵树是一次写，拆表反而要维护 `parent_id + seq` 的一致性。
 
 ```
-mode          id, name, trigger(jsonb|null), conditions(jsonb), run_mode, enabled
-mode_step     mode_id, seq, alias, action, target(jsonb), data(jsonb),
-              delay_ms, continue_on_error, enabled
+mode    id, name, definition jsonb, run_mode, enabled, updated_at
+run     id, mode_id, started_at, finished_at, status, definition_snapshot jsonb
+run_step_run_id, node_id, path, alias, status, started_at, finished_at, error
 ```
 
-一个「回家」模式的形状：
+`definition` 的形状（每个节点都有稳定 `nodeId`，执行记录按 `nodeId` 回填）：
 
 ```json
 {
-  "name": "回家",
+  "version": 1,
   "trigger": { "type": "state", "entity": "binary_sensor.door", "to": "on" },
   "conditions": [{ "type": "numeric_state", "entity": "sensor.illuminance", "below": 50 }],
   "runMode": "restart",
   "steps": [
-    { "alias": "玄关灯",  "action": "light.turn_on", "target": {"area": "玄关"}, "data": {"brightness": 30} },
-    { "alias": "等 2 秒", "delay": "2s" },
-    { "alias": "客厅灯",  "action": "light.turn_on", "target": {"area": "客厅"}, "data": {"brightness": 80} },
-    { "alias": "空调",    "action": "climate.set_temp", "target": {"area": "客厅", "domain": "climate"},
-      "data": {"mode": "auto", "reason": "computed"} },
-    { "alias": "窗帘",    "action": "cover.set_position", "target": {"area": "客厅", "domain": "cover"}, "data": {"position": 70} },
-    { "alias": "净化器",  "action": "fan.turn_on", "target": {"area": "客厅"}, "data": {"speed": 1},
+    { "nodeId": "n1", "alias": "玄关灯", "action": "light.turn_on", "target": {"area": "玄关"}, "data": {"brightness": 30} },
+    { "nodeId": "n2", "alias": "等 2 秒", "block": "delay", "duration": "2s" },
+    { "nodeId": "n3", "alias": "客厅灯", "action": "light.turn_on", "target": {"area": "客厅"}, "data": {"brightness": 80} },
+    { "nodeId": "n4", "alias": "空调", "action": "climate.set_temp", "target": {"area": "客厅", "domain": "climate"},
+      "data": { "mode": "auto" },
+      "valueFrom": "comfort", "reason": "computed" },
+    { "nodeId": "n5", "block": "choose",
+      "branches": [
+        { "conditions": [{ "type": "state", "entity": "person.li", "state": "home" }],
+          "steps": [{ "nodeId": "n5a", "action": "climate.set_temp", "target": {"area": "主卧"}, "data": {"temp": 25} }] },
+        { "steps": [{ "nodeId": "n5b", "action": "climate.turn_off", "target": {"area": "主卧"} }] }
+      ]
+    },
+    { "nodeId": "n6", "alias": "净化器", "action": "fan.turn_on", "target": {"area": "客厅"}, "data": {"speed": 1},
       "continueOnError": true }
   ]
 }
 ```
 
-注意 `"reason": "computed"` —— 空调那一步的参数由策略层算出来（F5 的动态温控），不是写死的 26。**这是 HA 也不管、我们必须自己做的部分。**
+注意 `"valueFrom": "comfort"` —— 空调那一步的参数由策略层算出来（F5 的动态温控），不是写死的 26，且把依据文案一起写进执行记录。**这是 HA 也不管、我们必须自己做的部分。**
 
-## 9. 待办
+## 9. 待办与已决
 
-- [ ] 把第 8 节的形状并进 ADR 0002（数据模型与分层，第 11 周）。
-- [ ] 确认 F5 的「模式」在 UI 上允许用户自己加步骤（编辑器），还是只提供内置 5 个模式（回家/离家/睡眠/夜起/补眠）。前者工作量翻倍但更符合「条件 + 动作集」的原文。
+- [x] **已决（m00639）：做通用步骤编辑器**，不收敛成 5 个内置模式。理由：效率上来得及，且通用编排器本身就是答辩区分点。代价是模型从平铺列表升级成嵌套树（见第 8 节），编辑器 UI 要处理 `choose` / `repeat` / `delay` 等块。
+- [ ] 把第 8 节的 JSONB 树模型并进 ADR 0002（数据模型与分层，第 11 周）。
+- [ ] 编辑器的最小可用范围：首版支持 `action` / `delay` / `choose` 三种节点，`repeat` / `parallel` 留到增量。
 - [ ] E1 的「手动接管后让位」与 run mode 的关系：需要一条 `suppressed_until` 字段。
