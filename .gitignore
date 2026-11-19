@@ -1,0 +1,53 @@
+# 依赖
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+
+# 构建产物
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# 环境变量与凭据
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 数据库与数据文件
+*.sqlite
+*.sqlite3
+*.db
+dump.sql
+*.dump
+
+# 日志与缓存
+*.log
+logs/
+.cache/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 文档源文件（仓库内只保留 md）
+*.docx
+*.doc
+*.pdf
