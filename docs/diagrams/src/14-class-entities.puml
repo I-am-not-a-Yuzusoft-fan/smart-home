@@ -1,0 +1,139 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName SansSerif
+skinparam classAttributeIconSize 0
+skinparam nodesep 45
+skinparam ranksep 55
+title 图 14 设计类图（领域实体与关系）
+
+package "类型与物品" {
+  class ItemType {
+    +key : String
+    +kind : ItemKind
+    +name : String
+    +defaultW : Double
+    +defaultH : Double
+    +capabilitiesVersion : int
+    +capabilities : Capability[]
+  }
+  class Capability {
+    +key : String
+    +name : String
+    +type : CapType
+    +writable : Boolean
+    +history : Boolean
+  }
+  class Item {
+    +id : UUID
+    +typeKey : String
+    +name : String
+    +roomHash : String?
+    +x : Double
+    +y : Double
+    +rotation : Double
+    +status : String?
+  }
+  class CapabilityState {
+    +itemId : UUID
+    +key : String
+    +value : Json
+    +source : Source
+    +updatedAt : Timestamp
+  }
+}
+
+package "户型" {
+  class Corner {
+    +id : UUID
+    +x : Double
+    +y : Double
+  }
+  class Wall {
+    +id : UUID
+    +a : UUID
+    +b : UUID
+    +thickness : Double
+  }
+  class Opening {
+    +id : UUID
+    +wallId : UUID
+    +offset : Double
+    +width : Double
+    +height : Double
+    +sill : Double
+  }
+  class RoomName {
+    +polygonHash : String
+    +name : String
+    +kind : RoomKind
+  }
+}
+
+package "场景与账号" {
+  class Mode {
+    +id : UUID
+    +name : String
+    +runMode : RunMode
+    +enabled : Boolean
+    +createdBy : UUID
+  }
+  abstract class Step {
+    +nodeId : String
+    +alias : String?
+    +enabled : Boolean
+  }
+  class ActionStep {
+    +itemId : UUID
+    +key : String
+    +value : Json
+    +valueFrom : String?
+  }
+  class DelayStep {
+    +seconds : int
+  }
+  class ChooseStep {
+    +guard : Guard
+  }
+  class Run {
+    +id : UUID
+    +modeId : UUID
+    +status : RunStatus
+    +startedAt : Timestamp
+  }
+  class RunStep {
+    +runId : UUID
+    +nodeId : String
+    +path : String
+    +status : StepStatus
+    +error : String?
+  }
+  class Command {
+    +requestId : UUID
+    +itemId : UUID
+    +key : String
+    +value : Json
+    +source : Source
+  }
+  class AppUser {
+    +id : UUID
+    +username : String
+    +role : Role
+  }
+}
+
+ItemType "1" *-- "*" Capability : 定义
+Item "*" --> "1" ItemType : typeKey
+CapabilityState "*" --> "1" Item : itemId
+Wall "1" --> "2" Corner : a, b
+Opening "*" --> "1" Wall : wallId
+RoomName "1" ..> "1" Wall : polygonHash（由环推导）
+Mode "1" *-- "1" Step : definition
+Step <|-- ActionStep
+Step <|-- DelayStep
+Step <|-- ChooseStep
+ChooseStep "1" *-- "*" Step : then / else
+Run "*" --> "1" Mode : modeId
+RunStep "*" --> "1" Run : runId
+Command "*" --> "1" Item : itemId
+
+@enduml

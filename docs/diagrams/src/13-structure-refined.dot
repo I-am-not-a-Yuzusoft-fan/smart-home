@@ -1,0 +1,38 @@
+digraph refined {
+  rankdir=TB;
+  nodesep=0.32; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fillcolor="#f7f7f7", color="#555555",
+        fontname="Helvetica", fontsize=10, height=0.7];
+  edge [fontname="Helvetica", fontsize=8];
+  Cm [label="M-Cm 智能家居主控", fillcolor="#eef3fb", width=2.4];
+  Ca1 [label="M-Ca-01 接收用户操作"];
+  Ca2 [label="M-Ca-02 接收上报"];
+  Ct1 [label="M-Ct-01 求值意图"];
+  Ct2 [label="M-Ct-02 编排场景"];
+  Ct3 [label="M-Ct-03 计算策略"];
+  Ct4 [label="M-Ct-04 分发命令"];
+  Ct5 [label="M-Ct-05 适配设备"];
+  Ce1 [label="M-Ce-01 广播状态"];
+  Ce2 [label="M-Ce-02 渲染视图"];
+  Ce3 [label="M-Ce-03 回显执行过程"];
+  Dm1 [label="M-Dm-01 读写能力状态", fillcolor="#eef3fb"];
+  Dm2 [label="M-Dm-02 记录历史与命令日志", fillcolor="#eef3fb"];
+  Dm3 [label="M-Dm-03 读取类型与能力元数据", fillcolor="#eef3fb"];
+  Cm -> Ca1; Cm -> Ca2; Cm -> Ct1; Cm -> Ct2; Cm -> Ct4; Cm -> Ce1; Cm -> Ce2; Cm -> Ce3;
+  { rank=same; Ca1; Ca2 }
+  { rank=same; Ct1; Ct2; Ct3; Ce1; Ce2; Ce3 }
+  { rank=same; Ct4 }
+  { rank=same; Ct5; Dm1; Dm2; Dm3 }
+  Ct1 -> Ct3 [label="目标值"];
+  Ct1 -> Ct4 [label="指令"];
+  Ct1 -> Dm3 [style=dashed];
+  Ct2 -> Ct4 [label="每步指令"];
+  Ct3 -> Dm3 [style=dashed];
+  Ct4 -> Ct5 [label="Dispatch"];
+  Ct4 -> Dm1 [label="写状态"];
+  Ct4 -> Dm2 [label="写日志"];
+  Ct5 -> Dm1 [label="回显"];
+  Ce1 -> Dm1 [style=dashed, label="读落库值"];
+  Ce2 -> Dm1 [style=dashed];
+  Ce3 -> Dm2 [style=dashed];
+}

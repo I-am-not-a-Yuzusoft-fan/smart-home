@@ -1,0 +1,19 @@
+digraph layers {
+  rankdir=TB;
+  nodesep=0.5; ranksep=0.55;
+  node [shape=box, style="rounded,filled", fillcolor="#f7f7f7", color="#555555",
+        fontname="Helvetica", fontsize=11, width=3.6, height=0.75];
+  edge [fontname="Helvetica", fontsize=9, color="#444444"];
+  L1 [label="展示层   frontend/src\n平面图 · 面板 · 场景编辑器"];
+  L2 [label="策略层   backend/policy\n纯函数：意图 → 指令 + 依据"];
+  L3 [label="控制层   backend/control\n唯一写入点：校验 · 幂等 · 超时 · 广播"];
+  L4 [label="设备层   backend/device\nAdapter 接口 + 模拟器实现"];
+  D  [label="数据层   backend/store + sql\n查询与事务（sqlc 生成）", fillcolor="#e9eff7", width=6.0];
+  L1 -> L2 [label="意图 Intent\n（HTTP / WS 跨进程）"];
+  L2 -> L3 [label="指令 Command"];
+  L3 -> L4 [label="Dispatch"];
+  L3 -> D  [label="读写状态"];
+  L4 -> D  [style=dashed, label="回显写入"];
+  L2 -> D  [style=dashed, label="读环境与元数据"];
+  D  -> L1 [style=dotted, label="WS 增量广播", constraint=false];
+}

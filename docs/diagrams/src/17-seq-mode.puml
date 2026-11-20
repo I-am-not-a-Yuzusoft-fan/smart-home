@@ -1,0 +1,49 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName SansSerif
+title 图 17 设计级顺序图：场景执行（F5 步骤树 + 过程回显）
+
+actor "用户" as U
+participant "场景编辑器\n(展示层)" as FE
+participant "API" as API
+participant "ModeRunner\n(控制层)" as MR
+participant "PolicyEngine" as P
+participant "CommandHandler" as CH
+participant "Store" as S
+participant "Broadcaster" as BC
+
+U -> FE : 点击「回家」
+FE -> API : POST /api/modes/{id}/run
+API -> MR : Start(modeId, user)
+MR -> S : 读 mode.definition（步骤树）
+MR -> S : insert run(status="running")
+MR --> FE : runId
+FE -> FE : 打开执行时间线
+
+loop 按序取节点
+  alt ActionStep
+    MR -> P : Execute(intent from step)
+    P --> MR : 指令
+    MR -> CH : Handle(cmd)
+    CH --> MR : ok / error
+  else DelayStep
+    MR -> MR : 等待 seconds
+  else ChooseStep
+    MR -> MR : 求值守卫
+    MR -> MR : 选 then / else 子树
+  end
+  MR -> S : upsert run_step(status)
+  MR -> BC : Broadcast(执行进度)
+  BC --> FE : {runId, nodeId, status}
+end
+
+MR -> S : update run(status="done")
+MR -> BC : Broadcast(run 结束)
+BC --> FE : 时间线全部标绿
+
+note right of MR
+  单步失败默认中止整个 run，
+  并把它之前已成功的步骤保持原样；
+  失败原因写入 run_step.error。
+end note
+@enduml

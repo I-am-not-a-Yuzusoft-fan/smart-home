@@ -1,0 +1,29 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName SansSerif
+skinparam noteBackgroundColor #FFF8E1
+title 图 11 部署图（docker-compose 一键启动）
+
+actor "用户" as User
+
+node "浏览器\nChrome / Edge 1366×768" as Browser
+
+node "宿主机 Docker Compose 网络" {
+  artifact "web :8080\n静态资源 + /api、/ws 反代" as Web
+  artifact "api :8081\nGo + chi" as API
+  database "PostgreSQL 17\n:5432（仅内网）" as PG
+  artifact "simulator :8082\n设备模拟器（Go HTTP）" as SIM
+}
+
+User --> Browser
+Browser --> Web : HTTP / WebSocket
+Web --> API : /api/*\n/ws/state
+API --> PG : pgx v5
+API --> SIM : Adapter.Dispatch
+
+note bottom
+  start.sh / docker-compose.yml 负责「迁移 → seed → 启动」三个服务；
+  不引入 MQTT broker（模拟器走 HTTP，真实硬件接缝 S2 在设备层内部）；
+  simulator 无独立数据库，状态一律由 api 写入。
+end note
+@enduml

@@ -1,0 +1,25 @@
+digraph initial {
+  rankdir=TB;
+  nodesep=0.45; ranksep=0.6;
+  node [shape=box, style="rounded,filled", fillcolor="#f7f7f7", color="#555555",
+        fontname="Helvetica", fontsize=10, height=0.9];
+  edge [fontname="Helvetica", fontsize=9];
+  Cm  [label="M-Cm\n智能家居主控", fillcolor="#eef3fb", width=2.6];
+  Ca1 [label="M-Ca-01\n接收用户操作\n（建图 / 控制 / 场景 / 查询）"];
+  Ca2 [label="M-Ca-02\n接收上报\n（环境读数 / 设备回显）"];
+  Ct  [label="M-Ct-01\n求值意图\n（意图 → 指令 + 依据）", fillcolor="#f3f0e8"];
+  Ce1 [label="M-Ce-01\n广播状态\n（WS 增量推送）"];
+  Ce2 [label="M-Ce-02\n渲染视图\n（平面图 / 列表 / 面板）"];
+  Dm  [label="M-Dm-01\n存取状态与元数据", fillcolor="#eef3fb", width=2.6];
+  Cm -> Ca1 [label="操作请求"];
+  Cm -> Ca2 [label="读数 / 回显"];
+  Cm -> Ct  [label="意图"];
+  Cm -> Ce1 [label="状态变更"];
+  Cm -> Ce2 [label="视图快照"];
+  { rank=same; Ca1; Ca2; Ct; Ce1; Ce2 }
+  Ca2 -> Dm [label="回显写入"];
+  Ct  -> Dm [label="读写"];
+  Ce1 -> Dm [label="只读"];
+  { rank=same; Cm }
+  { rank=same; Dm }
+}

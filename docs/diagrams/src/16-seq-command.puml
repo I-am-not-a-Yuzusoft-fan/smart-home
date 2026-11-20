@@ -1,0 +1,44 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName SansSerif
+title 图 16 设计级顺序图：一次手动控制（F4 主线）
+
+actor "用户" as U
+participant "平面图\n(展示层)" as FE
+participant "API\n(控制层入口)" as API
+participant "PolicyEngine\n(策略层)" as P
+participant "CommandHandler\n(控制层)" as CH
+participant "Adapter\n(设备层)" as A
+participant "Store\n(数据层)" as S
+database "PostgreSQL" as DB
+participant "Broadcaster" as BC
+
+U -> FE : 拖动亮度到 80%
+FE -> API : 意图 {itemId, key:"brightness", value:80}
+API -> API : 校验会话 Cookie 与角色
+API -> P : Execute(intent)
+P -> P : 范围校验 + 手动接管标记
+P --> API : 指令 + 依据文案
+API -> CH : Handle(cmd)
+CH -> CH : 幂等检查 requestId
+CH -> A : Dispatch(cmd)
+A -> A : 模拟器：延时 120ms 回显
+A --> CH : 回显值 80
+CH -> S : WriteState(tx)
+S -> DB : upsert capability_state
+S -> DB : insert state_history
+S -> DB : insert command_log
+DB --> S : commit
+S --> CH : ok
+CH -> BC : Broadcast({itemId, key, value, ts, source:"manual"})
+BC --> FE : /ws/state
+FE -> FE : 三处视图同源更新
+
+alt 设备超时
+  A --> CH : timeout
+  CH -> S : insert command_log(status="timeout")
+  CH --> API : error 504
+  API --> FE : 可读失败原因
+  BC --> FE : {status:"unavailable"}
+end
+@enduml

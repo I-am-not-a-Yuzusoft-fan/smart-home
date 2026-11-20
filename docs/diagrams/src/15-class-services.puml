@@ -1,0 +1,63 @@
+@startuml
+skinparam shadowing false
+skinparam defaultFontName SansSerif
+skinparam classAttributeIconSize 0
+title 图 15 设计类图（跨层接口与控制类）
+
+package "跨层接口（接缝）" {
+  interface Store {
+    +WriteState(tx, itemId, key, value, source) error
+    +ListStates(filter) CapabilityState[]
+    +InsertCommandLog(tx, log) error
+  }
+  interface Adapter {
+    +Dispatch(ctx, cmd) (Value, error)
+    +Describe(typeKey) DriverMeta
+  }
+  interface PolicyEngine {
+    +Execute(intent) (Command[], String, error)
+  }
+  interface Broadcaster {
+    +Broadcast(evt : StateEvent)
+  }
+}
+
+package "实现" {
+  class StoreImpl
+  class SimulatorAdapter
+  class ComfortPolicy
+  class HubBroadcaster
+}
+
+package "控制层" {
+  class CommandHandler {
+    +Handle(ctx, cmd) error
+    -validate(cmd) error
+    -markManualTakeover(cmd)
+  }
+  class ModeRunner {
+    +Start(modeId, user) (runId : UUID, error)
+    +Advance(runId) error
+  }
+  class RoomDeriver {
+    +Derive(corners, walls) Polygon[]
+    +Hash(poly) String
+  }
+}
+
+Store <|.. StoreImpl
+Adapter <|.. SimulatorAdapter
+PolicyEngine <|.. ComfortPolicy
+Broadcaster <|.. HubBroadcaster
+CommandHandler ..> PolicyEngine : 求值
+CommandHandler ..> Adapter : 下发
+CommandHandler ..> Store : 写状态
+CommandHandler ..> Broadcaster : 广播
+ModeRunner ..> CommandHandler : 每步复用
+RoomDeriver ..> Store : 读墙与端点
+
+note right of CommandHandler
+  控制层只有一个写入入口：
+  任何改状态的路径都必须经过 Handle。
+end note
+@enduml
