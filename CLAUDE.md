@@ -17,6 +17,10 @@ Issues 存放在 `I-am-not-a-Yuzusoft-fan/smart-home` 的 GitHub Issues；在仓
 
 单上下文：仓库根目录的 `CONTEXT.md` 与 `docs/adr/` 中的 ADR。详见 `docs/agents/domain.md`。
 
+## 文档与图表
+
+图表一律用 PlantUML / Graphviz 源码生成 SVG 再嵌入 Markdown。**禁止在 Markdown 里用代码块或 ASCII 字符画图**（代码清单、目录树不在此列）。源码放 `docs/diagrams/src/`，产物放 `docs/diagrams/svg/`，改完用 `scripts/build-diagrams.sh` 重新渲染，并转 PNG 目视核对一遍。字号与配色沿用现有图：中文用「苹方」，线宽 1px，黑白灰为主。
+
 ## Git 规范
 
 主分支 `main` 保持可运行；功能在 `feature/<模块>` 分支开发，经 PR 合并且合并前需他人评审；提交信息用 `feat` / `fix` / `docs` / `refactor` / `test` 前缀；禁止向 `main` 强推；禁止提交密钥、数据库密码与 `node_modules`。详见 `docs/agents/git-workflow.md`。

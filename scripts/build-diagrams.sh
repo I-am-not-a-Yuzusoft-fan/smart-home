@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# 重新生成需求阶段全部图纸（SVG）。
+# 重新生成全部图纸（SVG）：可行性报告、需求规格说明书、ADR 共用的图。
 # 依赖：plantuml 1.2026+、graphviz 12+。
 # 用法：./scripts/build-diagrams.sh
+# 产物提交进仓库；改图只改 src/ 下的 .puml / .dot，不要手改 svg。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

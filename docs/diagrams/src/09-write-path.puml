@@ -1,0 +1,62 @@
+@startuml 09-write-path
+' 图 9  单一写入点：一条命令从意图到广播的完整路径（ADR 0002 §2.4）
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "PingFang SC"
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam ActivityBackgroundColor #FFFFFF
+skinparam ActivityBorderColor #333333
+skinparam ActivityDiamondBackgroundColor #F7F7F7
+skinparam ActivityDiamondBorderColor #333333
+skinparam NoteBackgroundColor #FBFBFB
+skinparam NoteBorderColor #BBBBBB
+skinparam NoteFontSize 10
+
+title 图 9  单一写入点：一条命令的完整路径
+
+start
+
+:【展示层】用户操作\n点开关 / 拖亮度 / 执行场景;
+:【展示层】提交**意图**\n{房间, 设备, 能力, 值, 来源};
+note right
+  前端发出的是意图，不是设备命令；
+  这是策略层能存在的前提。
+end note
+
+:【策略层】Policy.Execute(intent);
+note right
+  ① 参数校验：类型 / 范围 / 可写
+  ② 危险操作二次确认
+  ③ 手动接管判定：人工来源则打 30 分钟让位标记
+end note
+:【策略层】翻译为**指令**\n{deviceId, capability, value};
+
+:【控制层】Control.Execute(cmd);
+:【控制层】按能力元数据复核 · 记录 request_id;
+
+:【设备层】Adapter.Dispatch(cmd);
+:【设备层】等待回显 / 超时;
+
+:【数据层】store.WriteState（单事务）;
+fork
+  :capability_state\n当前值 + updated_at;
+fork again
+  :state_history\n值或 source 变化时才追加;
+fork again
+  :command_log\n成功 / 失败 / 超时都写;
+end fork
+
+if (写入成功？) then (是)
+  :【控制层】Broadcaster.Broadcast\n{itemId, key, value, ts, source};
+  :【展示层】/ws/state 增量\n平面图 / 设备列表 / 控制面板三处同步;
+else (否)
+  :【控制层】标记 unaffected / unavailable;
+  note right
+    失败不产生 state_history 行，
+    但 command_log 必须留下记录。
+  end note
+endif
+
+stop
+
+@enduml
