@@ -1,0 +1,57 @@
+// 图 5  分层数据流图（DFD 第 1 层）
+digraph DFD {
+  graph [rankdir=TB, fontname="PingFang SC", nodesep=0.6, ranksep=1.1, splines=spline, bgcolor="white"];
+  node  [fontname="PingFang SC", fontsize=11, margin="0.12,0.06"];
+  edge  [fontname="PingFang SC", fontsize=9, color="#444444", arrowsize=0.6, penwidth=0.9];
+
+  // 第一列：外部实体
+  node [shape=box, style="filled", fillcolor="#E8E8E8"];
+  用户; 环境传感器; 设备执行器;
+
+  // 第二列：加工
+  node [shape=ellipse, style="filled", fillcolor="#FFFFFF"];
+  P1 [label="1\n物品与平面图管理"];
+  P2 [label="2\n类型模板管理"];
+  P3 [label="3\n设备控制与状态同步"];
+  P4 [label="4\n场景编排与执行"];
+  P5 [label="5\n环境自适应调控"];
+
+  // 第三列：数据存储
+  node [shape=box, style="filled", fillcolor="#F7F7F7"];
+  D1 [label="D1 物品与平面图"];
+  D2 [label="D2 类型模板"];
+  D3 [label="D3 设备状态与历史"];
+  D4 [label="D4 场景定义"];
+  D5 [label="D5 操作日志"];
+
+  { rank=same; 用户; 环境传感器; 设备执行器; }
+  { rank=same; P1; P2; P3; P4; P5; }
+  { rank=same; D1; D2; D3; D4; D5; }
+
+  用户 -> P1 [label="物品/坐标"];
+  用户 -> P2 [label="类型定义"];
+  用户 -> P3 [label="控制意图"];
+  用户 -> P4 [label="场景/执行请求"];
+  用户 -> P5 [label="手动接管"];
+
+  P1 -> D1 [label="物品记录"];
+  P2 -> D2 [label="类型模板"];
+  P4 -> D4 [label="场景与动作"];
+  P3 -> D3 [label="状态与历史"];
+  P3 -> D5 [label="操作记录"];
+
+  D2 -> P1 [label="可用类型", style=dashed];
+  D2 -> P3 [label="能力约束", style=dashed];
+  D1 -> P3 [label="被控对象", style=dashed];
+  D3 -> P5 [label="历史环境值", style=dashed];
+  D5 -> P4 [label="习惯统计", style=dashed];
+
+  P3 -> 设备执行器 [label="设备指令"];
+  设备执行器 -> P3 [label="回显值/结果"];
+  P4 -> P3 [label="指令序列"];
+  环境传感器 -> P5 [label="温湿度/光照/人体"];
+  P5 -> P3 [label="自动指令"];
+  P3 -> P5 [label="当前状态"];
+  P3 -> 用户 [label="状态推送"];
+
+}

@@ -1,0 +1,65 @@
+@startuml
+' 图 8  ECB 分析类图（边界-控制-实体）
+skinparam defaultFontName "PingFang SC"
+skinparam shadowing false
+skinparam packageStyle rectangle
+
+package "边界类（用户可见的界面）" {
+  class 登录界面
+  class 平面图界面
+  class 设备面板界面
+  class 场景编辑器界面
+  class 只读大屏
+}
+
+package "控制类（用例的编排者）" {
+  class 登录控制
+  class 物品管理控制
+  class 平面图控制
+  class 设备控制
+  class 场景控制
+  class 环境策略控制
+  class 对话控制
+}
+
+package "实体类（可持久化的业务事实）" {
+  class 用户
+  class 房间
+  class 墙体
+  class 物品
+  class 类型模板
+  class 能力项
+  class 能力状态
+  class 场景
+  class 场景动作
+  class 操作记录
+}
+
+登录界面 --> 登录控制
+平面图界面 --> 平面图控制
+设备面板界面 --> 设备控制
+场景编辑器界面 --> 场景控制
+只读大屏 ..> 设备控制 : 只读订阅
+
+设备控制 --> 物品
+设备控制 --> 能力状态
+平面图控制 --> 房间
+平面图控制 --> 墙体
+平面图控制 --> 物品
+场景控制 --> 场景
+场景控制 --> 场景动作
+物品管理控制 --> 类型模板
+物品管理控制 --> 能力项
+环境策略控制 --> 能力状态
+对话控制 --> 设备控制
+登录控制 --> 用户
+物品管理控制 --> 操作记录
+设备控制 --> 操作记录
+
+note bottom of 设备控制
+  规则：实体类不直接连边界类；
+  一个用例对应一个控制类；
+  边界类只做展示与采集，不含业务规则。
+end note
+
+@enduml

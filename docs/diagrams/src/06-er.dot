@@ -1,0 +1,45 @@
+// 图 6  实体-联系图（陈氏记法，仅画主键与联系）
+digraph ER {
+  graph [rankdir=LR, fontname="PingFang SC", nodesep=0.5, ranksep=1.0, splines=true, bgcolor="white"];
+  node  [fontname="PingFang SC", fontsize=11];
+  edge  [fontname="PingFang SC", fontsize=9, color="#333333"];
+
+  node [shape=box, style="filled", fillcolor="#FFFFFF"];
+  房间 [label="房间\n(PK 房间号)"];
+  墙体 [label="墙体\n(PK 墙号)"];
+  开口 [label="开口\n(PK 开口号)"];
+  物品 [label="物品\n(PK 物品号)"];
+  类型模板 [label="类型模板\n(PK 类型号)"];
+  能力项 [label="能力项\n(PK 类型号, 能力名)"];
+  能力状态 [label="能力状态\n(PK 物品号, 能力名)"];
+  场景 [label="场景\n(PK 场景号)"];
+  场景动作 [label="场景动作\n(PK 场景号, 序号)"];
+  用户 [label="用户\n(PK 账号)"];
+  操作记录 [label="操作记录\n(PK 记录号)"];
+  状态历史 [label="状态历史\n(PK 历史号)"];
+
+  node [shape=diamond, style="filled", fillcolor="#FAFAFA", height=0.7];
+  R围合 [label="围合"];
+  R开有 [label="开有"];
+  R所属 [label="所属"];
+  R属于 [label="属于"];
+  R定义 [label="定义"];
+  R持有 [label="持有"];
+  R对应 [label="对应"];
+  R包含 [label="包含"];
+  R作用 [label="作用于"];
+  R产生 [label="产生"];
+  R留下 [label="留下"];
+
+  房间 -> R围合 [label="1"]; R围合 -> 墙体 [label="n"];
+  墙体 -> R开有 [label="1"]; R开有 -> 开口 [label="n"];
+  房间 -> R所属 [label="1"]; R所属 -> 物品 [label="n"];
+  类型模板 -> R属于 [label="1"]; R属于 -> 物品 [label="n"];
+  类型模板 -> R定义 [label="1"]; R定义 -> 能力项 [label="n"];
+  物品 -> R持有 [label="1"]; R持有 -> 能力状态 [label="n"];
+  能力项 -> R对应 [label="1"]; R对应 -> 能力状态 [label="n"];
+  场景 -> R包含 [label="1"]; R包含 -> 场景动作 [label="n"];
+  场景动作 -> R作用 [label="n"]; R作用 -> 物品 [label="1"];
+  用户 -> R产生 [label="1"]; R产生 -> 操作记录 [label="n"];
+  物品 -> R留下 [label="1"]; R留下 -> 状态历史 [label="n"];
+}

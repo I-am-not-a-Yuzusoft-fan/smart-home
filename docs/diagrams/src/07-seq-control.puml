@@ -1,0 +1,41 @@
+@startuml
+' 图 7  顺序图：下发一条设备控制命令（分析级，ECB）
+skinparam defaultFontName "PingFang SC"
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+autonumber
+
+actor 用户 as U
+boundary "控制面板\n（边界类）" as B
+control "策略层\n（控制类）" as S
+control "设备控制\n（控制类）" as C
+entity "能力状态\n（实体类）" as E
+participant "设备\n（外部）" as D
+
+U -> B : 点击「开灯」，亮度 80%
+B -> S : 提交意图(房间=客厅, 设备=主灯,\n能力=亮度, 值=80, 来源=人工)
+
+S -> S : 检查是否需二次确认\n（越界 / 批量 / 删除）
+S -> S : 记录「手动接管」标记\n（该设备该能力 30 分钟内禁止自动改写）
+S -> C : 指令(设备, 能力, 值)
+
+C -> C : 按能力项约束校验\n（类型、范围、可写）
+alt 校验不通过
+  C --> S : 拒绝(原因)
+  S --> B : 失败提示
+  B --> U : 展示原因与合法范围
+else 校验通过
+  C -> D : 下发指令
+  D --> C : 回显值 / 执行结果
+  alt 成功
+    C -> E : 写入新值与更新时间
+    C --> B : 广播新状态
+    B --> U : 平面图、列表、面板三处同步
+  else 超时或失败
+    C --> S : 结果(失败/超时)
+    S --> B : 失败提示
+    B --> U : 显示「可重试」
+  end
+end
+
+@enduml
