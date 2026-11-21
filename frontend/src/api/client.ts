@@ -83,7 +83,28 @@ export type Wall = {
 }
 
 /** 整个户型。端点单列是因为两面墙共用一个端点。 */
-export type Plan = { corners: Corner[]; walls: Wall[] }
+export type PlanPoint = { x: number; y: number }
+
+/**
+ * 房间。几何**不存库**：后端每次从墙的闭环推导出来，哈希是多边形的身份，
+ * 房间的名字挂在这个哈希上。所以墙一改，旧的命名自然失配——不会把
+ * 「客厅」这个名字挂到别处的房间上。
+ */
+export type Room = {
+  hash: string
+  ring: PlanPoint[]
+  areaM2: number
+  name?: string
+  kind?: string
+}
+
+export type Plan = {
+  corners: Corner[]
+  walls: Wall[]
+  rooms: Room[]
+  /** 没参与任何闭合区域的墙数：大于 0 说明还有墙没围上 */
+  openWalls: number
+}
 
 /** 读当前户型。 */
 export const getPlan = () => request<Plan>('/api/plan')

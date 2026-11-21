@@ -3,18 +3,32 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 // planBody 只取测试要用的字段，避免和生成的模型耦合。
+type planRoom struct {
+	Hash   string  `json:"hash"`
+	AreaM2 float64 `json:"areaM2"`
+	Ring   []struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	} `json:"ring"`
+	Name *string `json:"name"`
+	Kind *string `json:"kind"`
+}
+
 type planBody struct {
 	Corners []struct {
 		ID string  `json:"id"`
 		X  float64 `json:"x"`
 		Y  float64 `json:"y"`
 	} `json:"corners"`
-	Walls []struct {
+	Rooms     []planRoom `json:"rooms"`
+	OpenWalls int        `json:"openWalls"`
+	Walls     []struct {
 		ID  string  `json:"id"`
 		AID string  `json:"aId"`
 		BID string  `json:"bId"`
@@ -192,4 +206,94 @@ func TestCreateWallRejectsSubCentimetreThickness(t *testing.T) {
 	if code := errorCode(t, res); code != "VALIDATION_FAILED" {
 		t.Errorf("错误码应为 VALIDATION_FAILED，实际 %s", code)
 	}
+}
+
+// 四面墙围成矩形 -> 响应里带回房间；拆掉一面墙 -> 房间消失、未围合的墙数上去。
+// 房间由后端推导并在保存墙的响应里返回，前端不自己算（这是 #6 的验收点）。
+func TestPlanDerivesRoomsFromWalls(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+
+	before := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
+
+	// 200×200 的方框，避开 seed 的 400×300 区域
+	type pt struct{ x, y float64 }
+	corners := []pt{{2000, 2000}, {2200, 2000}, {2200, 2200}, {2000, 2200}}
+	walls := [][2]int{{0, 1}, {1, 2}, {2, 3}, {3, 0}}
+
+	// 先登记清理：中间任何一条 t.Fatalf 都会提前返回，遗留的墙会让下次运行
+	// 的 before.Rooms / before.OpenWalls 全变，本地和 CI 都会莫名其妙地挂。
+	var created []string
+	t.Cleanup(func() {
+		for _, id := range created {
+			do(t, h, http.MethodDelete, "/api/walls/"+id, "", cookie)
+		}
+		// POST 失败时 created 可能不全，按区域兜底再删一遍
+		if resp := do(t, h, http.MethodGet, "/api/plan", "", cookie); resp.Code == http.StatusOK {
+			for _, w := range decodePlan(t, resp.Body.Bytes()).Walls {
+				if inRect(w.AX, w.AY, w.BX, w.BY) {
+					do(t, h, http.MethodDelete, "/api/walls/"+w.ID, "", cookie)
+				}
+			}
+		}
+	})
+
+	var last planBody
+	for _, w := range walls {
+		a, b := corners[w[0]], corners[w[1]]
+		body := `{"ax":` + ftoa(a.x) + `,"ay":` + ftoa(a.y) +
+			`,"bx":` + ftoa(b.x) + `,"by":` + ftoa(b.y) + `}`
+		res := do(t, h, http.MethodPost, "/api/walls", body, cookie)
+		if res.Code != http.StatusCreated {
+			t.Fatalf("画墙应 201，实际 %d：%s", res.Code, res.Body.String())
+		}
+		last = decodePlan(t, res.Body.Bytes())
+	}
+	for _, w := range last.Walls {
+		if inRect(w.AX, w.AY, w.BX, w.BY) {
+			created = append(created, w.ID)
+		}
+	}
+	if len(created) != 4 {
+		t.Fatalf("应建出 4 面墙，实际 %d", len(created))
+	}
+
+	if got, want := len(last.Rooms), len(before.Rooms)+1; got != want {
+		t.Fatalf("闭合后房间数应 %d，实际 %d", want, got)
+	}
+	var square *float64
+	for _, r := range last.Rooms {
+		if len(r.Ring) == 4 && r.AreaM2 == 4 {
+			area := r.AreaM2
+			square = &area
+		}
+	}
+	if square == nil {
+		t.Fatalf("应有面积为 4 平方米的方形房间，实际 %+v", last.Rooms)
+	}
+
+	// 拆掉一面墙：房间消失，未围合的墙数 +3（剩下三面墙都悬空了）
+	res := do(t, h, http.MethodDelete, "/api/walls/"+created[0], "", cookie)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("删墙应 204，实际 %d：%s", res.Code, res.Body.String())
+	}
+	after := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
+	if got, want := len(after.Rooms), len(before.Rooms); got != want {
+		t.Errorf("拆墙后房间数应回到 %d，实际 %d", want, got)
+	}
+	if got, want := after.OpenWalls, before.OpenWalls+3; got != want {
+		t.Errorf("拆墙后未围合的墙数应 %d，实际 %d", want, got)
+	}
+}
+
+func inRect(ax, ay, bx, by float64) bool {
+	in := func(x, y float64) bool {
+		return (x == 2000 || x == 2200) && (y == 2000 || y == 2200)
+	}
+	return in(ax, ay) && in(bx, by)
+}
+
+func ftoa(v float64) string {
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }

@@ -60,6 +60,36 @@ func (e ErrorErrorCode) Valid() bool {
 	}
 }
 
+// Defines values for RoomKind.
+const (
+	Bathroom RoomKind = "bathroom"
+	Bedroom  RoomKind = "bedroom"
+	Hallway  RoomKind = "hallway"
+	Kitchen  RoomKind = "kitchen"
+	Living   RoomKind = "living"
+	Study    RoomKind = "study"
+)
+
+// Valid indicates whether the value is a known member of the RoomKind enum.
+func (e RoomKind) Valid() bool {
+	switch e {
+	case Bathroom:
+		return true
+	case Bedroom:
+		return true
+	case Hallway:
+		return true
+	case Kitchen:
+		return true
+	case Living:
+		return true
+	case Study:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionUserRole.
 const (
 	Admin  SessionUserRole = "admin"
@@ -131,8 +161,43 @@ type LoginRequest struct {
 // Plan defines model for Plan.
 type Plan struct {
 	Corners []Corner `json:"corners"`
-	Walls   []Wall   `json:"walls"`
+
+	// OpenWalls 没有参与任何闭合区域的墙数；大于 0 时前端提示「还有墙没围上」
+	OpenWalls int `json:"openWalls"`
+
+	// Rooms 由墙的闭环推导出来的房间。前端只渲染，不自己推导。
+	// 墙没围成闭环时这里是空数组，`openWalls` 会给出提示依据。
+	Rooms []Room `json:"rooms"`
+	Walls []Wall `json:"walls"`
 }
+
+// PlanPoint defines model for PlanPoint.
+type PlanPoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+// Room 由墙的闭环推导出来的房间。几何不落库，只把多边形的哈希当作身份：
+// 墙一改，哈希就变，挂在旧哈希上的名字自然失配（不会把「客厅」挂到卫生间上）。
+type Room struct {
+	// AreaM2 面积（平方米，两位小数）
+	AreaM2 float64 `json:"areaM2"`
+
+	// Hash 多边形顶点规范化后的哈希，房间命名的键
+	Hash string `json:"hash"`
+
+	// Kind 房间用途；还没指定时为空
+	Kind *RoomKind `json:"kind,omitempty"`
+
+	// Name 用户起的名字；还没起名时为空
+	Name *string `json:"name,omitempty"`
+
+	// Ring 闭合多边形的顶点，首尾不重复
+	Ring []PlanPoint `json:"ring"`
+}
+
+// RoomKind 房间用途；还没指定时为空
+type RoomKind string
 
 // SessionUser defines model for SessionUser.
 type SessionUser struct {

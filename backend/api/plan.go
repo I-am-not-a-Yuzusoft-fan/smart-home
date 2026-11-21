@@ -9,6 +9,7 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api/gen"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
 )
 
 // 坐标单位是厘米，原点在平面图左上角。
@@ -44,12 +45,21 @@ type WallInput struct {
 	Thickness float64
 }
 
+// RoomName 是用户给某个房间起的名字，键是房间多边形的哈希。
+type RoomName struct {
+	Hash string
+	Name string
+	Kind string
+}
+
 // PlanStore 保存户型。
 //
 // 只有两个写操作：画一面墙、删一面墙。端点去重与「同一对端点只留一面墙」
 // 属于持久化语义，放在实现里（PGPlan），接口层不掺和。
 type PlanStore interface {
 	LoadPlan(ctx context.Context) ([]PlanCorner, []PlanWall, error)
+	// LoadRoomNames 只取"名字"，几何由墙推导——房间不存几何是 ADR 0002 定下的。
+	LoadRoomNames(ctx context.Context) ([]RoomName, error)
 	CreateWall(ctx context.Context, in WallInput) error
 	DeleteWall(ctx context.Context, id openapi_types.UUID) (int64, error)
 }
@@ -136,6 +146,43 @@ func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 	for _, c := range corners {
 		plan.Corners = append(plan.Corners, gen.Corner{Id: c.ID, X: c.X, Y: c.Y})
 	}
+	// 房间由后端唯一推导：前端拿到的是结果，不自己算——两套实现迟早会分叉。
+	points := make([]control.Point, 0, len(corners))
+	for _, c := range corners {
+		points = append(points, control.Point{ID: c.ID.String(), X: c.X, Y: c.Y})
+	}
+	edges := make([]control.Wall, 0, len(walls))
+	for _, w := range walls {
+		edges = append(edges, control.Wall{A: w.AID.String(), B: w.BID.String()})
+	}
+	derived := control.Derive(points, edges)
+
+	names, err := s.plan.LoadRoomNames(ctx)
+	if err != nil {
+		return gen.Plan{}, err
+	}
+	named := make(map[string]RoomName, len(names))
+	for _, n := range names {
+		named[n.Hash] = n
+	}
+
+	plan.Rooms = make([]gen.Room, 0, len(derived.Rings))
+	for _, ring := range derived.Rings {
+		pts := make([]gen.PlanPoint, 0, len(ring.Points))
+		for _, p := range ring.Points {
+			pts = append(pts, gen.PlanPoint{X: p.X, Y: p.Y})
+		}
+		room := gen.Room{Hash: ring.Hash, Ring: pts, AreaM2: ring.AreaM2}
+		if n, ok := named[ring.Hash]; ok {
+			name := n.Name
+			room.Name = &name
+			kind := gen.RoomKind(n.Kind)
+			room.Kind = &kind
+		}
+		plan.Rooms = append(plan.Rooms, room)
+	}
+	plan.OpenWalls = derived.OpenWalls
+
 	for _, w := range walls {
 		plan.Walls = append(plan.Walls, gen.Wall{
 			Id:        w.ID,
