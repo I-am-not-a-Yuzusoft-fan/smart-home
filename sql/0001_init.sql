@@ -45,6 +45,15 @@ COMMENT ON TABLE opening IS '门窗：沿墙 "offset" 定位（不存绝对坐�
 
 CREATE INDEX opening_wall_idx ON opening (wall_id);
 
+-- 端点以坐标为身份：吸附不再是前端约定，而是数据库不变量。
+-- 写入约定：INSERT INTO corner (x, y) VALUES ($1, $2)
+--           ON CONFLICT (x, y) DO UPDATE SET x = EXCLUDED.x RETURNING id;
+-- （DO UPDATE 的值故意等于原值，只为拿到已存在的 id）
+CREATE UNIQUE INDEX corner_xy_uniq ON corner (x, y);
+
+-- 墙是无向边：UNIQUE (a, b) 挡不住 (b, a)，会让半边图出现重边、绕环时打转。
+CREATE UNIQUE INDEX wall_pair_uniq ON wall (LEAST(a, b), GREATEST(a, b));
+
 CREATE TABLE room_name (
     polygon_hash  text PRIMARY KEY,
     name          text NOT NULL,
