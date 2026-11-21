@@ -1,0 +1,25 @@
+digraph sitemap {
+  graph [rankdir=TB, bgcolor="white", nodesep=0.55, ranksep=0.7, fontname="PingFang SC"];
+  node  [shape=box, style="rounded,filled", fillcolor="#EEF3FA", color="#5B7FA6",
+         fontname="PingFang SC", fontsize=11, margin="0.18,0.10"];
+  edge  [color="#5B7FA6", arrowsize=0.7, fontname="PingFang SC", fontsize=9];
+
+  login   [label="登录", fillcolor="#FFF2DD", color="#C9953F"];
+  home    [label="平面图主页（首屏）"];
+  three   [label="三维视图（只读投影）"];
+  list    [label="设备列表"];
+  panel   [label="控制面板"];
+  modes   [label="场景编辑器"];
+  timeline[label="场景执行与时间线"];
+  settings[label="设置与账号（仅 admin）", fillcolor="#E8F3EC", color="#4F8A63"];
+  wall    [label="只读大屏 /wall（免登录）", fillcolor="#F3ECFA", color="#7A5EA6"];
+
+  login  -> home;
+  home   -> three   [label="切视图"];
+  home   -> list    [label="列表"];
+  home   -> panel   [label="选中设备"];
+  list   -> panel;
+  home   -> modes   [label="场景"];
+  modes  -> timeline;
+  home   -> settings;
+}
