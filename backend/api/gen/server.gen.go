@@ -613,6 +613,9 @@ type UpdateItemJSONRequestBody = ItemUpdate
 // CreateWallJSONRequestBody defines body for CreateWall for application/json ContentType.
 type CreateWallJSONRequestBody = WallInput
 
+// UpdateWallJSONRequestBody defines body for UpdateWall for application/json ContentType.
+type UpdateWallJSONRequestBody = WallInput
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// Login 用账号密码换取会话 Cookie
@@ -660,6 +663,9 @@ type ServerInterface interface {
 	// DeleteWall 删除一面墙
 	// (DELETE /api/walls/{wallId})
 	DeleteWall(w http.ResponseWriter, r *http.Request, wallId openapi_types.UUID)
+	// UpdateWall 改一面墙的端点或厚度
+	// (PATCH /api/walls/{wallId})
+	UpdateWall(w http.ResponseWriter, r *http.Request, wallId openapi_types.UUID)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -753,6 +759,12 @@ func (_ Unimplemented) CreateWall(w http.ResponseWriter, r *http.Request) {
 // DeleteWall 删除一面墙
 // (DELETE /api/walls/{wallId})
 func (_ Unimplemented) DeleteWall(w http.ResponseWriter, r *http.Request, wallId openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateWall 改一面墙的端点或厚度
+// (PATCH /api/walls/{wallId})
+func (_ Unimplemented) UpdateWall(w http.ResponseWriter, r *http.Request, wallId openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1080,6 +1092,32 @@ func (siw *ServerInterfaceWrapper) DeleteWall(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// UpdateWall operation middleware
+func (siw *ServerInterfaceWrapper) UpdateWall(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "wallId" -------------
+	var wallId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "wallId", chi.URLParam(r, "wallId"), &wallId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "wallId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateWall(w, r, wallId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1213,6 +1251,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/api/walls/{wallId}", wrapper.DeleteWall)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/api/walls/{wallId}", wrapper.UpdateWall)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/item-types", wrapper.ListItemTypes)

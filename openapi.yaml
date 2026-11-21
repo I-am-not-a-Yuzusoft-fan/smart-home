@@ -124,11 +124,55 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthenticated"
   /api/walls/{wallId}:
+    patch:
+      operationId: updateWall
+      summary: 改一面墙的端点或厚度
+      description: |
+        用于拖端点微调长度与角度。端点同样按坐标落库（已存在就复用），
+        所以把端点拖到另一面墙的端点上是"合并到那个点"，不是新建一个重合点。
+        改完不再被任何墙引用的端点会被清掉。
+        若改完与另一面已有墙完全重合（同一对端点），返回 409，不悄悄合并两面墙。
+      parameters:
+        - name: wallId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WallInput"
+      responses:
+        "200":
+          description: 已更新，返回整个户型
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: 没有这面墙
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 改完会和另一面墙重合成同一对端点
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     delete:
       operationId: deleteWall
       summary: 删除一面墙
       description: |
-        只删墙，不删端点——端点可能被其他墙共用，成为孤立端点也是合法状态。
+        删掉这面墙，并清理因此不再被任何墙引用的端点（共用端点会保留）。
         重复删除返回 404（后端不做幂等处理），调用方应把 404 当作"已经没了"。
       parameters:
         - name: wallId

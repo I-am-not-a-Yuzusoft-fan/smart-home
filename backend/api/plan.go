@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 
@@ -45,6 +46,12 @@ type WallInput struct {
 	Thickness float64
 }
 
+// 改墙时的两种失败：墙不存在、改完与别的墙重合。
+var (
+	ErrWallNotFound = errors.New("墙不存在")
+	ErrWallConflict = errors.New("改完与另一面墙重合")
+)
+
 // RoomName 是用户给某个房间起的名字，键是房间多边形的哈希。
 type RoomName struct {
 	Hash string
@@ -54,13 +61,14 @@ type RoomName struct {
 
 // PlanStore 保存户型。
 //
-// 只有两个写操作：画一面墙、删一面墙。端点去重与「同一对端点只留一面墙」
-// 属于持久化语义，放在实现里（PGPlan），接口层不掺和。
+// 写操作：画墙、改墙、删墙。端点去重与「同一对端点只留一面墙」属于持久化语义，
+// 放在实现里（PGPlan），接口层不掺和。
 type PlanStore interface {
 	LoadPlan(ctx context.Context) ([]PlanCorner, []PlanWall, error)
 	// LoadRoomNames 只取"名字"，几何由墙推导——房间不存几何是 ADR 0002 定下的。
 	LoadRoomNames(ctx context.Context) ([]RoomName, error)
 	CreateWall(ctx context.Context, in WallInput) error
+	UpdateWall(ctx context.Context, id openapi_types.UUID, in WallInput) error
 	DeleteWall(ctx context.Context, id openapi_types.UUID) (int64, error)
 }
 
@@ -118,6 +126,56 @@ func (s *Server) CreateWall(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteWall 删墙。端点保留：它可能被别的墙共用，孤立端点本身是合法状态。
+// UpdateWall 改一面墙的端点或厚度——拖端点微调长度与角度走这条。
+// 端点仍按坐标去重，所以把端点拖到别处已有端点上等于合并到这个点。
+func (s *Server) UpdateWall(w http.ResponseWriter, r *http.Request, wallID openapi_types.UUID) {
+	var body gen.WallInput
+
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "请求体不是合法的 JSON")
+		return
+	}
+
+	thickness := defaultThick
+	if body.Thickness != nil {
+		thickness = float64(*body.Thickness)
+	}
+	in := WallInput{
+		AX: float64(body.Ax), AY: float64(body.Ay),
+		BX: float64(body.Bx), BY: float64(body.By),
+		Thickness: thickness,
+	}
+	if msg, ok := validateWall(in); !ok {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
+		return
+	}
+
+	ctx := r.Context()
+	switch err := s.plan.UpdateWall(ctx, wallID, in); {
+	case err == nil:
+	case errors.Is(err, ErrWallNotFound):
+		writeError(w, http.StatusNotFound, gen.NOTFOUND, "没有这面墙")
+		return
+	case errors.Is(err, ErrWallConflict):
+		writeError(w, http.StatusConflict, gen.CONFLICT, "这个位置已经有一面同样的墙了")
+		return
+	default:
+		s.log.Error("改墙失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "保存失败")
+		return
+	}
+
+	plan, err := s.readPlan(ctx)
+	if err != nil {
+		s.log.Error("读取户型失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取户型失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
+}
+
 func (s *Server) DeleteWall(w http.ResponseWriter, r *http.Request, wallID openapi_types.UUID) {
 	n, err := s.plan.DeleteWall(r.Context(), wallID)
 	if err != nil {

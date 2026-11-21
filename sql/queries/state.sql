@@ -69,3 +69,13 @@ DELETE FROM wall WHERE id = $1;
 -- 房间只存名字：几何由墙推导，哈希变了旧名字自然失配。
 SELECT polygon_hash, name, kind
 FROM room_name;
+
+-- name: GetWall :one
+SELECT a, b FROM wall WHERE id = $1;
+
+-- name: UpdateWall :execrows
+UPDATE wall SET a = $2, b = $3, thickness = $4 WHERE id = $1;
+
+-- name: DeleteOrphanCorners :exec
+DELETE FROM corner c
+WHERE NOT EXISTS (SELECT 1 FROM wall w WHERE w.a = c.id OR w.b = c.id);

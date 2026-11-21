@@ -113,6 +113,12 @@ export const getPlan = () => request<Plan>('/api/plan')
 export const createWall = (input: { ax: number; ay: number; bx: number; by: number; thickness?: number }) =>
   request<Plan>('/api/walls', { method: 'POST', body: JSON.stringify(input) })
 
+/** 改一面墙的端点或厚度（拖端点微调长度与角度走这条）。 */
+export const updateWall = (
+  id: string,
+  input: { ax: number; ay: number; bx: number; by: number; thickness?: number },
+) => request<Plan>(`/api/walls/${id}`, { method: 'PATCH', body: JSON.stringify(input) })
+
 /** 删一面墙。 */
 export const deleteWall = (id: string) => request<void>(`/api/walls/${id}`, { method: 'DELETE' })
 
