@@ -1,0 +1,17 @@
+# 统一行尾：仓库内一律 LF，Windows 检出也保持 LF。
+# 原因：scripts/*.sh 带 CRLF 会在 bash 里报 $'\r': command not found；
+#      sql/*.sql 带 CRLF 进 docker-entrypoint-initdb.d 时同样容易出问题。
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.sql  text eol=lf
+*.puml text eol=lf
+*.dot  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+
+*.png  binary
+*.jpg  binary
+*.gif  binary
+*.ico  binary
