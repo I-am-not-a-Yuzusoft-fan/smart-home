@@ -11,14 +11,25 @@
   评审记录计入过程考核 —— 所以评审要留在 GitHub 上，不要只在本地口头过一遍）。
   仓库已把 `required_approving_review_count` 设为 **`1`**，且开启
   `dismiss_stale_reviews_on_push`（approve 之后又推了新提交，旧 approve 作废，
-  防止"批完又改"）。所以从现在起，**包括组长在内谁都不能自合**，
-  提 PR 的人必须找另一个人点 Approve。
+  防止"批完又改"）。
+
+  实际执行口径：
+
+  | who | 需要几次 approve | 说明 |
+  |---|---|---|
+  | 组员（仓库 `write` 权限） | **1 次，且必须是组长** | 没有 bypass，凑不够就合不了 |
+  | 组长（仓库管理员） | 0（走 bypass） | 见下 |
+
+  组长账号在 ruleset 的 `bypass_actors` 里（`RepositoryRole:5:always`），
+  所以自己的 PR 可以直接合。**但课程 1.3 要求"评审记录计入过程考核"**，
+  自己合等于没有记录；建议组长的 PR 也照样找一名组员点一次 Approve，
+  只是在赶进度时保留"没人可批也能合"的余地。
 - **`main` 只接受 Pull Request，不接受任何直接推送**。仓库的 ruleset
   `main-protected` 对 `refs/heads/main` 生效四条规则：禁止删除、禁止强推
   （`non_fast_forward`）、**必须经由 PR 合并**（`pull_request`）、
   **CI 必须全绿**（`required_status_checks`，两项：`backend（vet、测试、生成物无漂移）`
-  与 `frontend（类型检查与构建）`）。规则没有绕过名单（`bypass_actors` 为空，
-  `current_user_can_bypass: never`）——包括仓库管理员在内，谁也推不上去。
+  与 `frontend（类型检查与构建）`）。绕过名单只有仓库管理员角色（`RepositoryRole:5`），也就是组长本人；
+  组员没有 bypass，必须走 PR + 组长 approve + CI 全绿。
 - 合并方式用 **squash**，一个 PR 对应 `main` 上一条提交；合并后删掉源分支。
   这样 `git log` 一行一件事，回滚以 PR 为单位。
 - PR 正文要写清楚三件事：**做了什么、为什么、怎么验**；能对应到 issue 的，
