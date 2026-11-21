@@ -507,7 +507,7 @@ components:
           type: boolean
           description: 用户是否可以下发命令修改
         default:
-          description: 默认值；类型必须与 type 一致，枚举必须命中 options
+          description: 默认值；JSON 标量（boolean/number/string），类型必须与 type 一致，枚举必须命中 options
         history:
           type: boolean
           description: 值变化时是否写 state_history
@@ -582,6 +582,10 @@ components:
       type: object
       additionalProperties: false
       description: 所有字段可选；capabilities 省略表示不修改能力结构。
+      if:
+        required: [capabilities]
+      then:
+        required: [capabilitiesVersion]
       properties:
         name:
           type: string

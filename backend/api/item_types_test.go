@@ -355,6 +355,19 @@ func TestDeleteItemTypeRejectsReferencedType(t *testing.T) {
 	}
 }
 
+func TestCreateItemTypeRejectsTrailingJSON(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	body := validItemTypeBody("test_trailing") + `{}`
+	w := do(t, h, http.MethodPost, "/api/item-types", body, admin)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("尾随第二个 JSON 值应 400，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if code := errorCode(t, w); code != "VALIDATION_FAILED" {
+		t.Fatalf("错误码应为 VALIDATION_FAILED，实际 %q", code)
+	}
+}
+
 func TestItemTypesRequireSession(t *testing.T) {
 	h := newTestServer(t)
 	w := do(t, h, http.MethodGet, "/api/item-types", "", nil)

@@ -165,7 +165,7 @@ export type ItemTypeUpdate = {
   defaultWidth?: number
   defaultDepth?: number
   capabilities?: Capability[]
-  /** 可选乐观锁：保存时带上读到的版本，过期返回 409 */
+  /** 乐观锁：修改 capabilities 时必填（否则 400），过期返回 409 */
   capabilitiesVersion?: number
   /** 省略表示不变；空字符串表示清除 */
   driver?: string

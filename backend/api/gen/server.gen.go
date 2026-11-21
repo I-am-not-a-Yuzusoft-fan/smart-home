@@ -185,7 +185,7 @@ func (e Healthz200JSONResponseBodyStatus) Valid() bool {
 
 // Capability 能力项是类型级定义，不是实例值。值域校验读这里，不写数据库 CHECK。
 type Capability struct {
-	// Default 默认值；类型必须与 type 一致，枚举必须命中 options
+	// Default 默认值；JSON 标量（boolean/number/string），类型必须与 type 一致，枚举必须命中 options
 	Default interface{} `json:"default,omitempty"`
 
 	// History 值变化时是否写 state_history

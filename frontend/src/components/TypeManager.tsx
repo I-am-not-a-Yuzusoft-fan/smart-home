@@ -312,7 +312,7 @@ export default function TypeManager({ onClose }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={startCreate} className="px-3 py-1 text-xs" style={buttonStyle}>
+            <button onClick={startCreate} disabled={saving} className="px-3 py-1 text-xs" style={buttonStyle}>
               新建类型
             </button>
             <button onClick={onClose} className="px-3 py-1 text-xs" style={buttonStyle}>
@@ -337,6 +337,7 @@ export default function TypeManager({ onClose }: Props) {
                   <li key={typ.key}>
                     <button
                       onClick={() => selectType(typ)}
+                      disabled={saving}
                       className="w-full px-2 py-1 text-left text-xs"
                       style={{
                         ...buttonStyle,
@@ -356,7 +357,11 @@ export default function TypeManager({ onClose }: Props) {
           </aside>
 
           <div className="min-h-0 min-w-0 overflow-auto p-4">
-            <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+            <fieldset
+              disabled={saving}
+              className="grid min-w-0 gap-4 lg:grid-cols-2"
+              style={{ border: 0, margin: 0, padding: 0 }}
+            >
               <section className="grid min-w-0 gap-3">
                 <h3 className="text-sm font-semibold">{creating ? '新建类型' : `编辑 ${draft.key}`}</h3>
                 <div className="grid grid-cols-2 gap-3">
@@ -486,7 +491,7 @@ export default function TypeManager({ onClose }: Props) {
                   />
                 </div>
               </section>
-            </div>
+            </fieldset>
           </div>
         </div>
 
@@ -529,7 +534,7 @@ function CapabilityEditor({
 }: CapabilityEditorProps) {
   const keyLocked = original !== undefined
   const typeLocked = original !== undefined
-  const existingOptionValues = new Set((original?.options ?? []).map((option) => option.value))
+  const originalOptionCount = original?.options?.length ?? 0
   return (
     <div className="grid min-w-0 gap-2 p-2" style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}>
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_110px_auto] gap-2">
@@ -680,8 +685,8 @@ function CapabilityEditor({
             <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-1">
               <input
                 value={option.value}
-                disabled={existingOptionValues.has(option.value)}
-                title={existingOptionValues.has(option.value) ? '已发布的枚举 value 不能删除或改名；可以改 label' : undefined}
+                disabled={index < originalOptionCount}
+                title={index < originalOptionCount ? '已发布的枚举 value 不能删除或改名；可以改 label' : undefined}
                 onChange={(e) => onChangeOption(index, { value: e.target.value })}
                 placeholder="value"
                 style={inputStyle}
@@ -696,10 +701,10 @@ function CapabilityEditor({
               />
               <button
                 onClick={() => onRemoveOption(index)}
-                disabled={existingOptionValues.has(option.value)}
-                title={existingOptionValues.has(option.value) ? '已发布的枚举 value 不能删除' : undefined}
+                disabled={index < originalOptionCount}
+                title={index < originalOptionCount ? '已发布的枚举 value 不能删除' : undefined}
                 className="px-1 py-0.5 text-xs"
-                style={{ ...buttonStyle, color: 'var(--color-danger)', opacity: existingOptionValues.has(option.value) ? 0.45 : 1 }}
+                style={{ ...buttonStyle, color: 'var(--color-danger)', opacity: index < originalOptionCount ? 0.45 : 1 }}
               >
                 删
               </button>

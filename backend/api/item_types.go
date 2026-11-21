@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"regexp"
@@ -264,6 +265,12 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "请求体不是合法的 JSON")
+		return false
+	}
+	// 一个请求只能有一个 JSON 值；`{...}{}` 这种尾巴不能静默放过。
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "请求体只能包含一个 JSON 值")
 		return false
 	}
 	return true
