@@ -7,6 +7,7 @@ import {
   deleteWall,
   getPlan,
   logout,
+  updateWall,
   type Corner,
   type Plan,
   type Room,
@@ -42,6 +43,8 @@ type Draft = {
   by: number
 }
 
+type Edit = { wallId: string; end: 'a' | 'b'; ax: number; ay: number; bx: number; by: number }
+
 type Guide =
   | { kind: 'none' }
   | { kind: 'point'; x: number; y: number }
@@ -73,6 +76,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [guide, setGuide] = useState<Guide>({ kind: 'none' })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showTypes, setShowTypes] = useState(false)
+  // 正在拖的端点：整段坐标都存下来，渲染预览时直接用，不必回头找 wall。
+  const [editing, setEditing] = useState<Edit | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [viewport, setViewport] = useState<Viewport>({ scale: 1, x: 0, y: 0 })
   const [spaceDown, setSpaceDown] = useState(false)
@@ -98,6 +103,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   useEffect(() => {
     void load()
   }, [load])
+
 
   // 首帧先量一次：ResizeObserver 的首次回调在某些环境（无头浏览器、隐藏标签页）
   // 要等到真正绘制才来，而 fit 必须拿到真实尺寸，否则内容会按 800×600 摆偏。
@@ -171,6 +177,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       if (isTyping(e.target)) return
       if (e.key === 'Escape') {
         setDraft(null)
+        setEditing(null)
         setGuide({ kind: 'none' })
         return
       }
@@ -220,6 +227,34 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   })()
 
   /**
+   * 指针是否按在了「选中墙」的端点手柄上。
+   *
+   * 和 wallAt 一样走几何判定：端点手柄比墙线更"精确"，所以先判它，
+   * 否则用户想拖端点时会变成又画出一条新墙。
+   */
+  function handleAt(
+    x: number,
+    y: number,
+    tolPx = 10,
+  ): { wallId: string; end: 'a' | 'b'; ax: number; ay: number; bx: number; by: number } | null {
+    const wall = editing
+      ? { id: editing.wallId, ax: editing.ax, ay: editing.ay, bx: editing.bx, by: editing.by }
+      : selectedId
+        ? plan.walls.find((w) => w.id === selectedId)
+        : undefined
+    if (!wall) return null
+    const tol = tolPx / viewport.scale
+    const near = (px: number, py: number) => Math.hypot(px - x, py - y) <= tol
+    if (near(wall.ax, wall.ay)) {
+      return { wallId: wall.id, end: 'a', ax: wall.ax, ay: wall.ay, bx: wall.bx, by: wall.by }
+    }
+    if (near(wall.bx, wall.by)) {
+      return { wallId: wall.id, end: 'b', ax: wall.ax, ay: wall.ay, bx: wall.bx, by: wall.by }
+    }
+    return null
+  }
+
+  /**
    * 指针落在哪面墙上；没落在任何墙上返回 null。
    *
    * 自己算点到线段的距离，不依赖 Konva 的 hit graph：在自定义 Stage 变换下
@@ -245,11 +280,11 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }
 
   /**
-   * 吸附，按"越具体越优先"排序：
-   * 端点 → 墙线投影 → 正交约束（0°/90°）→ 1 cm 取整。
+   * 吸附：端点 → （正交 ∧ 墙线）交点 → 墙线投影 → 正交 → 1 cm 取整。
    *
-   * 正交放在墙线之后：用户把鼠标挪到另一面墙附近，意思就是"接在这面墙上"，
-   * 这时再强行掰成横平竖直反而接不上。
+   * 正交与墙线同时开时不能只做投影：贴着别人墙中段画时，投影会给出一个
+   * 斜点，正交就"消失"了。正确的是求「过锚点的水平/竖直线」与目标墙的交点，
+   * 既落在墙上、又保持 0°/90°。交点够不着（平行或落在段外）才退回自由拉。
    */
   function snap(
     x: number,
@@ -268,12 +303,32 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     }
     if (best) return { x: best.x, y: best.y, guide: { kind: 'point', x: best.x, y: best.y } }
 
+    const anchor = opts.anchor
+    const axis: 'h' | 'v' | null =
+      anchor && opts.orthogonal
+        ? Math.abs(x - anchor.x) >= Math.abs(y - anchor.y)
+          ? 'h'
+          : 'v'
+        : null
+
     let hitWall: Wall | null = null
     let hitX = 0
     let hitY = 0
     let wallDist = radius
     for (const w of plan.walls) {
       if (w.id === opts.ignoreWallId) continue
+      if (axis && anchor) {
+        const cross = axisCross(anchor, axis, w)
+        if (!cross) continue
+        const d = axis === 'h' ? Math.abs(cross.x - x) : Math.abs(cross.y - y)
+        if (d < wallDist) {
+          wallDist = d
+          hitWall = w
+          hitX = cross.x
+          hitY = cross.y
+        }
+        continue
+      }
       const foot = projectOnSegment(x, y, w)
       if (!foot) continue
       const d = Math.hypot(foot.x - x, foot.y - y)
@@ -288,15 +343,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       return { x: hitX, y: hitY, guide: { kind: 'segment', wall: hitWall } }
     }
 
-    if (opts.anchor && opts.orthogonal) {
-      // 谁偏离得多就锁另一个轴，得到 0° 或 90° 的墙。
-      const dx = x - opts.anchor.x
-      const dy = y - opts.anchor.y
-      if (Math.abs(dx) >= Math.abs(dy)) {
-        return { x: Math.round(x), y: opts.anchor.y, guide: { kind: 'none' } }
-      }
-      return { x: opts.anchor.x, y: Math.round(y), guide: { kind: 'none' } }
-    }
+    if (anchor && axis === 'h') return { x: Math.round(x), y: anchor.y, guide: { kind: 'none' } }
+    if (anchor && axis === 'v') return { x: anchor.x, y: Math.round(y), guide: { kind: 'none' } }
 
     return { x: Math.round(x), y: Math.round(y), guide: { kind: 'none' } }
   }
@@ -314,9 +362,18 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       return
     }
     if (e.evt.button === 2) {
-      // 右键取消进行中的画线。
+      // 右键取消进行中的画线或拖动。
       setDraft(null)
+      setEditing(null)
       setGuide({ kind: 'none' })
+      return
+    }
+
+    // 先看有没有按在选中墙的端点上——那是拖动改墙，不是画新墙。
+    const grabbed = handleAt(p.x, p.y)
+    if (grabbed) {
+      pressRef.current = { x: p.x, y: p.y, wallId: null }
+      setEditing({ wallId: grabbed.wallId, end: grabbed.end, ax: grabbed.ax, ay: grabbed.ay, bx: grabbed.bx, by: grabbed.by })
       return
     }
 
@@ -341,6 +398,34 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     }
 
     const p = toWorld(raw)
+    if (editing) {
+      const anchor = editing.end === 'a' ? { x: editing.bx, y: editing.by } : { x: editing.ax, y: editing.ay }
+      // 拖动端点和画新墙不一样：画墙时正交是默认，拖端点时用户多半是想改角度。
+      // 所以默认自由旋转，只在线段接近水平/垂直时轻轻吸一下；按住 Shift 才强制正交。
+      const strict = e.evt.shiftKey
+      let sn = snap(p.x, p.y, {
+        anchor: strict ? anchor : undefined,
+        orthogonal: strict,
+        ignoreWallId: editing.wallId,
+      })
+      if (!strict) {
+        const tol = 8 / viewport.scale
+        if (Math.abs(sn.y - anchor.y) <= tol) {
+          sn = { ...sn, y: anchor.y }
+        } else if (Math.abs(sn.x - anchor.x) <= tol) {
+          sn = { ...sn, x: anchor.x }
+        }
+      }
+      setEditing((cur) =>
+        cur
+          ? cur.end === 'a'
+            ? { ...cur, ax: sn.x, ay: sn.y }
+            : { ...cur, bx: sn.x, by: sn.y }
+          : cur,
+      )
+      setGuide(sn.guide)
+      return
+    }
     if (!draft) {
       setHoverId(wallAt(p.x, p.y))
       return
@@ -363,6 +448,16 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     const raw = stage.getPointerPosition()
     const press = pressRef.current
     pressRef.current = null
+
+    if (editing) {
+      const cur = editing
+      setEditing(null)
+      setGuide({ kind: 'none' })
+      if (Math.hypot(cur.bx - cur.ax, cur.by - cur.ay) < 1) return
+      await submitEdit(cur)
+      return
+    }
+
     const d = draft
     setDraft(null)
     setGuide({ kind: 'none' })
@@ -380,7 +475,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
     // 终点要用松手那一刻的指针，不能用最后一次 mousemove 的位置：
     // 浏览器可能在松手前不再发 mousemove，那样墙会短一截、四个角对不上。
-    const end = snap(p.x, p.y, { orthogonal: !e.evt.shiftKey })
+    // 必须带上 anchor，否则松手这一下会退化成「只吸附墙线、不做正交」，
+    // 预览是直的、落库却是斜的。
+    const end = snap(p.x, p.y, {
+      anchor: { x: d.ax, y: d.ay },
+      orthogonal: !e.evt.shiftKey,
+    })
     const wall = { ax: d.ax, ay: d.ay, bx: end.x, by: end.y }
     if (Math.hypot(wall.bx - wall.ax, wall.by - wall.ay) < MIN_DRAG_PX / viewport.scale) return
     await submitWall(wall)
@@ -405,6 +505,23 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       const next = await createWall({ ax: d.ax, ay: d.ay, bx: d.bx, by: d.by })
       if (seq === writeSeq.current) {
         setPlan(next)
+        setError(null)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function submitEdit(cur: Edit) {
+    const seq = ++writeSeq.current
+    setSaving(true)
+    try {
+      const next = await updateWall(cur.wallId, { ax: cur.ax, ay: cur.ay, bx: cur.bx, by: cur.by })
+      if (seq === writeSeq.current) {
+        setPlan(next)
+        setSelectedId(cur.wallId)
         setError(null)
       }
     } catch (e) {
@@ -477,7 +594,26 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     return lines
   }, [size.height, size.width, viewport])
 
+  // 拖动中的那面墙按编辑后的坐标画，其余原样——这份派生数据同时喂给渲染与手柄。
+  const renderWalls = editing
+    ? plan.walls.map((w) =>
+        w.id === editing.wallId ? { ...w, ax: editing.ax, ay: editing.ay, bx: editing.bx, by: editing.by } : w,
+      )
+    : plan.walls
+
   const selected = plan.walls.find((w) => w.id === selectedId) ?? null
+
+  const handles = editing
+    ? [
+        { x: editing.ax, y: editing.ay },
+        { x: editing.bx, y: editing.by },
+      ]
+    : selected
+      ? [
+          { x: selected.ax, y: selected.ay },
+          { x: selected.bx, y: selected.by },
+        ]
+      : []
   const labelSize = 12 / viewport.scale
 
   // 有墙但推不出房间时的提示文案：空户型和"画了墙但没围上"要说不同的话，
@@ -604,7 +740,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           </Layer>
 
           <Layer>
-            {plan.walls.map((w) => (
+            {renderWalls.map((w) => (
               <WallLine
                 key={`line-${w.id}`}
                 wall={w}
@@ -613,7 +749,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 scale={viewport.scale}
               />
             ))}
-            {plan.walls.map((w) => (
+            {renderWalls.map((w) => (
               <WallLabel
                 key={`label-${w.id}`}
                 wall={w}
@@ -623,6 +759,17 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 labelSize={labelSize}
                 centerX={center.x}
                 centerY={center.y}
+              />
+            ))}
+            {handles.map((h, i) => (
+              <Circle
+                key={`handle-${i}`}
+                x={h.x}
+                y={h.y}
+                radius={6 / viewport.scale}
+                fill="#ffffff"
+                stroke="#4f6bed"
+                strokeWidth={2 / viewport.scale}
               />
             ))}
             {draft && (
@@ -770,6 +917,30 @@ function formatLength(w: Wall): string {
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(v, min), max)
+}
+
+/**
+ * 「过 anchor 的水平/竖直线」与这面墙的交点；平行或交点落在段外返回 null。
+ *
+ * 正交约束与墙线吸附同时开时用它：既吸到墙上，又保持 0°/90°。
+ */
+function axisCross(
+  anchor: { x: number; y: number },
+  axis: 'h' | 'v',
+  w: Wall,
+): { x: number; y: number } | null {
+  if (axis === 'h') {
+    const dy = w.by - w.ay
+    if (Math.abs(dy) < 1e-6) return null
+    const t = (anchor.y - w.ay) / dy
+    if (t < -1e-6 || t > 1 + 1e-6) return null
+    return { x: w.ax + t * (w.bx - w.ax), y: anchor.y }
+  }
+  const dx = w.bx - w.ax
+  if (Math.abs(dx) < 1e-6) return null
+  const t = (anchor.x - w.ax) / dx
+  if (t < -1e-6 || t > 1 + 1e-6) return null
+  return { x: anchor.x, y: w.ay + t * (w.by - w.ay) }
 }
 
 /** 点到线段的最短距离（世界单位）。 */

@@ -297,3 +297,103 @@ func inRect(ax, ay, bx, by float64) bool {
 func ftoa(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
+
+// 拖端点改墙：长度与角度都要能改，旧端点若没人用就清掉。
+func TestUpdateWallMovesEndpoint(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+
+	res := do(t, h, http.MethodPost, "/api/walls", `{"ax":3000,"ay":3000,"bx":3400,"by":3000}`, cookie)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("画墙应 201，实际 %d：%s", res.Code, res.Body.String())
+	}
+	plan := decodePlan(t, res.Body.Bytes())
+	var wallID string
+	for _, w := range plan.Walls {
+		if w.AY == 3000 && w.BY == 3000 && w.AX == 3000 {
+			wallID = w.ID
+		}
+	}
+	if wallID == "" {
+		t.Fatalf("没找到刚画的墙")
+	}
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/walls/"+wallID, "", cookie) })
+
+	// 端点从 (3000,3000) 拖到 (3000,3100)：长度 400 → 斜边 sqrt(400²+100²)
+	res = do(t, h, http.MethodPatch, "/api/walls/"+wallID,
+		`{"ax":3000,"ay":3100,"bx":3400,"by":3000}`, cookie)
+	if res.Code != http.StatusOK {
+		t.Fatalf("改墙应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+	after := decodePlan(t, res.Body.Bytes())
+
+	var got *struct{ ax, ay, bx, by float64 }
+	for _, w := range after.Walls {
+		if w.ID == wallID {
+			got = &struct{ ax, ay, bx, by float64 }{w.AX, w.AY, w.BX, w.BY}
+		}
+	}
+	if got == nil {
+		t.Fatalf("墙 %s 改完消失了", wallID)
+	}
+	if got.ax != 3000 || got.ay != 3100 || got.bx != 3400 || got.by != 3000 {
+		t.Fatalf("端点没改对：%+v", got)
+	}
+
+	// 旧端点 (3000,3000) 已经没人引用，不该再出现在户型里
+	if _, ok := after.cornerAt(3000, 3000); ok {
+		t.Fatalf("旧端点 (3000,3000) 应被清理，实际还在")
+	}
+	if _, ok := after.cornerAt(3000, 3100); !ok {
+		t.Fatalf("新端点 (3000,3100) 应该存在")
+	}
+}
+
+func TestUpdateWallRejectsCollisionWithOtherWall(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+
+	a := do(t, h, http.MethodPost, "/api/walls", `{"ax":3000,"ay":3200,"bx":3400,"by":3200}`, cookie)
+	b := do(t, h, http.MethodPost, "/api/walls", `{"ax":3000,"ay":3300,"bx":3400,"by":3300}`, cookie)
+	if a.Code != http.StatusCreated || b.Code != http.StatusCreated {
+		t.Fatalf("准备两面墙失败：%d %d", a.Code, b.Code)
+	}
+	idA := wallInRect(t, decodePlan(t, a.Body.Bytes()), 3200)
+	idB := wallInRect(t, decodePlan(t, b.Body.Bytes()), 3300)
+	t.Cleanup(func() {
+		do(t, h, http.MethodDelete, "/api/walls/"+idA, "", cookie)
+		do(t, h, http.MethodDelete, "/api/walls/"+idB, "", cookie)
+	})
+
+	// 把第二面墙挪成和第一面完全重合 → 409，不许悄悄合并
+	res := do(t, h, http.MethodPatch, "/api/walls/"+idB, `{"ax":3000,"ay":3200,"bx":3400,"by":3200}`, cookie)
+	if res.Code != http.StatusConflict {
+		t.Fatalf("重合应 409，实际 %d：%s", res.Code, res.Body.String())
+	}
+}
+
+func TestUpdateWallNotFound(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+
+	res := do(t, h, http.MethodPatch, "/api/walls/00000000-0000-4000-8000-00000000dead",
+		`{"ax":0,"ay":0,"bx":100,"by":0}`, cookie)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("不存在的墙应 404，实际 %d：%s", res.Code, res.Body.String())
+	}
+}
+
+// wallInRect 取 y 落在指定水平线上、且起点 x=3000 的那面墙。
+func wallInRect(t *testing.T, p planBody, y float64) string {
+	t.Helper()
+	for _, w := range p.Walls {
+		if w.AY == y && w.BY == y && w.AX == 3000 {
+			return w.ID
+		}
+	}
+	t.Fatalf("没找到 y=%v 的墙", y)
+	return ""
+}
