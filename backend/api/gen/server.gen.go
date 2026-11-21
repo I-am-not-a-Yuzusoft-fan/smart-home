@@ -266,7 +266,7 @@ type ItemType struct {
 	// Driver 仅 device 可填；指向设备层适配器
 	Driver *string `json:"driver,omitempty"`
 
-	// Icons 图标名（Lucide 命名空间内）
+	// Icons 图标名（Lucide 命名空间内）；没有图标时该字段不出现（null）
 	Icons *string `json:"icons,omitempty"`
 
 	// Key 稳定标识，创建后不可重命名
@@ -280,14 +280,16 @@ type ItemTypeKind string
 
 // ItemTypeInput defines model for ItemTypeInput.
 type ItemTypeInput struct {
-	Capabilities []Capability      `json:"capabilities"`
-	DefaultDepth *float64          `json:"defaultDepth,omitempty"`
-	DefaultWidth *float64          `json:"defaultWidth,omitempty"`
-	Driver       *string           `json:"driver,omitempty"`
-	Icons        *string           `json:"icons,omitempty"`
-	Key          string            `json:"key"`
-	Kind         ItemTypeInputKind `json:"kind"`
-	Name         string            `json:"name"`
+	Capabilities []Capability `json:"capabilities"`
+	DefaultDepth *float64     `json:"defaultDepth,omitempty"`
+	DefaultWidth *float64     `json:"defaultWidth,omitempty"`
+	Driver       *string      `json:"driver,omitempty"`
+
+	// Icons 图标名（Lucide 命名空间内）；空串与不填等价，表示没有图标
+	Icons *string           `json:"icons,omitempty"`
+	Key   string            `json:"key"`
+	Kind  ItemTypeInputKind `json:"kind"`
+	Name  string            `json:"name"`
 }
 
 // ItemTypeInputKind defines model for ItemTypeInput.Kind.
@@ -305,8 +307,10 @@ type ItemTypeUpdate struct {
 
 	// Driver 省略表示不变；空字符串表示清除
 	Driver *string `json:"driver,omitempty"`
-	Icons  *string `json:"icons,omitempty"`
-	Name   *string `json:"name,omitempty"`
+
+	// Icons 图标名（Lucide 命名空间内）；空串与不填等价，表示没有图标
+	Icons *string `json:"icons,omitempty"`
+	Name  *string `json:"name,omitempty"`
 }
 
 // LoginRequest defines model for LoginRequest.

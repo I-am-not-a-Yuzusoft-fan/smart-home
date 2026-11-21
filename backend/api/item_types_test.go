@@ -1,19 +1,23 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api"
 )
 
 type itemTypeResponse struct {
-	Key                 string `json:"key"`
-	Kind                string `json:"kind"`
-	Name                string `json:"name"`
+	Key                 string  `json:"key"`
+	Kind                string  `json:"kind"`
+	Name                string  `json:"name"`
 	DefaultWidth        float64 `json:"defaultWidth"`
 	DefaultDepth        float64 `json:"defaultDepth"`
 	CapabilitiesVersion int     `json:"capabilitiesVersion"`
@@ -491,5 +495,99 @@ func TestListItemTypesShowsSeededTypes(t *testing.T) {
 	}
 	if !modeFound {
 		t.Fatal("ac 的能力项里没有 mode")
+	}
+}
+
+// testPool 给需要直接造数据的用例用（物品与状态还没接进 HTTP 接口，
+// 但能力项 key 复用的守卫恰好要用它们做前置条件）。
+func testPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("CI 上必须设置 TEST_DATABASE_URL")
+		}
+		t.Skip("未设置 TEST_DATABASE_URL，跳过需要数据库的测试")
+	}
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("连接数据库失败：%v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// 删掉的能力项如果库里还留着状态行，换一种语义加回来必须被拒——
+// 否则 bool 的 true 会被当成 number 的 1 渲染出去。
+func TestUpdateItemTypeRejectsReusingRetiredCapabilityKeyWithState(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	const key = "test_reuse_guard"
+	cleanupItemType(t, h, admin, key)
+	t.Cleanup(func() { cleanupItemType(t, h, admin, key) })
+
+	createBody := `{"key":"test_reuse_guard","kind":"device","name":"复用守卫测试","capabilities":[
+	  {"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false}
+	]}`
+	if resp := do(t, h, http.MethodPost, "/api/item-types", createBody, admin); resp.Code != http.StatusCreated {
+		t.Fatalf("创建应 201，实际 %d：%s", resp.Code, resp.Body.String())
+	}
+
+	pool := testPool(t)
+	ctx := context.Background()
+	var itemID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO item (type_key, name) VALUES ($1, $2) RETURNING id::text`,
+		key, "被引用的灯").Scan(&itemID); err != nil {
+		t.Fatalf("插入物品失败：%v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO capability_state (item_id, capability_key, value, source, updated_at)
+		 VALUES ($1, 'on', 'true'::jsonb, 'device', now())`, itemID); err != nil {
+		t.Fatalf("插入状态失败：%v", err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(context.Background(), `DELETE FROM capability_state WHERE item_id = $1`, itemID)
+		pool.Exec(context.Background(), `DELETE FROM item WHERE id = $1`, itemID)
+	})
+
+	removeBody := `{"capabilities":[],"capabilitiesVersion":1}`
+	if resp := do(t, h, http.MethodPatch, "/api/item-types/"+key, removeBody, admin); resp.Code != http.StatusOK {
+		t.Fatalf("删除能力项应 200，实际 %d：%s", resp.Code, resp.Body.String())
+	}
+
+	readdBody := `{"capabilities":[
+	  {"key":"on","name":"开关","type":"number","min":0,"max":100,"writable":true,"history":true}
+	],"capabilitiesVersion":2}`
+	resp := do(t, h, http.MethodPatch, "/api/item-types/"+key, readdBody, admin)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("复用 key 应 400，实际 %d：%s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "历史状态里还有 1 条值") {
+		t.Fatalf("错误消息应说明历史值仍在，实际：%s", resp.Body.String())
+	}
+}
+
+// 没有历史值的 key 被删掉再加回来是允许的——守卫不能误伤正常的改型。
+func TestUpdateItemTypeAllowsReaddingKeyWithoutState(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	const key = "test_reuse_clean"
+	cleanupItemType(t, h, admin, key)
+	t.Cleanup(func() { cleanupItemType(t, h, admin, key) })
+
+	createBody := `{"key":"test_reuse_clean","kind":"device","name":"无状态复用","capabilities":[
+	  {"key":"extra","name":"附加","type":"string","writable":true,"history":true}
+	]}`
+	if resp := do(t, h, http.MethodPost, "/api/item-types", createBody, admin); resp.Code != http.StatusCreated {
+		t.Fatalf("创建应 201，实际 %d：%s", resp.Code, resp.Body.String())
+	}
+	if resp := do(t, h, http.MethodPatch, "/api/item-types/"+key,
+		`{"capabilities":[],"capabilitiesVersion":1}`, admin); resp.Code != http.StatusOK {
+		t.Fatalf("删除能力项应 200，实际 %d：%s", resp.Code, resp.Body.String())
+	}
+	readd := `{"capabilities":[{"key":"extra","name":"附加","type":"number","min":0,"max":10,"writable":true,"history":true}],"capabilitiesVersion":2}`
+	if resp := do(t, h, http.MethodPatch, "/api/item-types/"+key, readd, admin); resp.Code != http.StatusOK {
+		t.Fatalf("没有历史值时复用 key 应 200，实际 %d：%s", resp.Code, resp.Body.String())
 	}
 }

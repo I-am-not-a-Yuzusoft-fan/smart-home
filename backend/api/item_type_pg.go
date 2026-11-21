@@ -161,3 +161,11 @@ func fromPGText(v pgtype.Text) *string {
 	s := v.String
 	return &s
 }
+
+// CountStateRowsForKey 统计某个类型下、某个能力 key 已有的状态行数。
+func (p *PGItemTypes) CountStateRowsForKey(ctx context.Context, typeKey, capabilityKey string) (int64, error) {
+	return p.queries.CountStateRowsForKey(ctx, storegen.CountStateRowsForKeyParams{
+		TypeKey:       typeKey,
+		CapabilityKey: capabilityKey,
+	})
+}

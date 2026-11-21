@@ -48,3 +48,11 @@ DELETE FROM item_type WHERE key = $1;
 
 -- name: CountItemsByType :one
 SELECT count(*) FROM item WHERE type_key = $1;
+
+-- name: CountStateRowsForKey :one
+-- 某个类型下、某个能力 key 已经有多少条状态行。用来阻止「删掉的能力项换种语义加回来」。
+SELECT count(*)
+FROM capability_state cs
+JOIN item i ON i.id = cs.item_id
+WHERE i.type_key = $1
+  AND cs.capability_key = $2;
