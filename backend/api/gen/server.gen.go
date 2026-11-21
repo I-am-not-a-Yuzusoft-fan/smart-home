@@ -12,6 +12,30 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for CapabilityType.
+const (
+	Bool   CapabilityType = "bool"
+	Enum   CapabilityType = "enum"
+	Number CapabilityType = "number"
+	String CapabilityType = "string"
+)
+
+// Valid indicates whether the value is a known member of the CapabilityType enum.
+func (e CapabilityType) Valid() bool {
+	switch e {
+	case Bool:
+		return true
+	case Enum:
+		return true
+	case Number:
+		return true
+	case String:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorErrorCode.
 const (
 	CONFIRMATIONREQUIRED   ErrorErrorCode = "CONFIRMATION_REQUIRED"
@@ -54,6 +78,42 @@ func (e ErrorErrorCode) Valid() bool {
 	case UNAUTHENTICATED:
 		return true
 	case VALIDATIONFAILED:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ItemTypeKind.
+const (
+	ItemTypeKindDevice    ItemTypeKind = "device"
+	ItemTypeKindFurniture ItemTypeKind = "furniture"
+)
+
+// Valid indicates whether the value is a known member of the ItemTypeKind enum.
+func (e ItemTypeKind) Valid() bool {
+	switch e {
+	case ItemTypeKindDevice:
+		return true
+	case ItemTypeKindFurniture:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ItemTypeInputKind.
+const (
+	ItemTypeInputKindDevice    ItemTypeInputKind = "device"
+	ItemTypeInputKindFurniture ItemTypeInputKind = "furniture"
+)
+
+// Valid indicates whether the value is a known member of the ItemTypeInputKind enum.
+func (e ItemTypeInputKind) Valid() bool {
+	switch e {
+	case ItemTypeInputKindDevice:
+		return true
+	case ItemTypeInputKindFurniture:
 		return true
 	default:
 		return false
@@ -123,6 +183,46 @@ func (e Healthz200JSONResponseBodyStatus) Valid() bool {
 	}
 }
 
+// Capability 能力项是类型级定义，不是实例值。值域校验读这里，不写数据库 CHECK。
+type Capability struct {
+	// Default 默认值；JSON 标量（boolean/number/string），类型必须与 type 一致，枚举必须命中 options
+	Default interface{} `json:"default,omitempty"`
+
+	// History 值变化时是否写 state_history
+	History bool `json:"history"`
+
+	// Key 稳定标识，发布后不得重命名
+	Key  string   `json:"key"`
+	Max  *float64 `json:"max,omitempty"`
+	Min  *float64 `json:"min,omitempty"`
+	Name string   `json:"name"`
+
+	// Options type=enum 时必填，且不能为空
+	Options *[]CapabilityOption `json:"options,omitempty"`
+
+	// Step 数值步长；省略表示不限制
+	Step *float64       `json:"step,omitempty"`
+	Type CapabilityType `json:"type"`
+
+	// Unit 单位，如 %、℃、K
+	Unit *string `json:"unit,omitempty"`
+
+	// Writable 用户是否可以下发命令修改
+	Writable bool `json:"writable"`
+}
+
+// CapabilityType defines model for Capability.Type.
+type CapabilityType string
+
+// CapabilityOption defines model for CapabilityOption.
+type CapabilityOption struct {
+	// Label 界面显示的中文名，如 制冷
+	Label string `json:"label"`
+
+	// Value 存进能力值里的机器标识，如 cool
+	Value string `json:"value"`
+}
+
 // Corner defines model for Corner.
 type Corner struct {
 	Id openapi_types.UUID `json:"id"`
@@ -149,6 +249,65 @@ type Error struct {
 // CONFLICT、ROOM_NOT_CLOSED、DEVICE_UNAVAILABLE、DEVICE_TIMEOUT、
 // IMPORT_VALIDATION_FAILED
 type ErrorErrorCode string
+
+// ItemType defines model for ItemType.
+type ItemType struct {
+	Capabilities []Capability `json:"capabilities"`
+
+	// CapabilitiesVersion 能力结构版本；capabilities 结构变化时由服务端递增
+	CapabilitiesVersion int `json:"capabilitiesVersion"`
+
+	// DefaultDepth 平面图默认深度（厘米）
+	DefaultDepth float64 `json:"defaultDepth"`
+
+	// DefaultWidth 平面图默认宽度（厘米）
+	DefaultWidth float64 `json:"defaultWidth"`
+
+	// Driver 仅 device 可填；指向设备层适配器
+	Driver *string `json:"driver,omitempty"`
+
+	// Icons 图标名（Lucide 命名空间内）
+	Icons *string `json:"icons,omitempty"`
+
+	// Key 稳定标识，创建后不可重命名
+	Key  string       `json:"key"`
+	Kind ItemTypeKind `json:"kind"`
+	Name string       `json:"name"`
+}
+
+// ItemTypeKind defines model for ItemType.Kind.
+type ItemTypeKind string
+
+// ItemTypeInput defines model for ItemTypeInput.
+type ItemTypeInput struct {
+	Capabilities []Capability      `json:"capabilities"`
+	DefaultDepth *float64          `json:"defaultDepth,omitempty"`
+	DefaultWidth *float64          `json:"defaultWidth,omitempty"`
+	Driver       *string           `json:"driver,omitempty"`
+	Icons        *string           `json:"icons,omitempty"`
+	Key          string            `json:"key"`
+	Kind         ItemTypeInputKind `json:"kind"`
+	Name         string            `json:"name"`
+}
+
+// ItemTypeInputKind defines model for ItemTypeInput.Kind.
+type ItemTypeInputKind string
+
+// ItemTypeUpdate 所有字段可选；capabilities 省略表示不修改能力结构。
+type ItemTypeUpdate struct {
+	Capabilities *[]Capability `json:"capabilities,omitempty"`
+
+	// CapabilitiesVersion 乐观锁版本。修改 `capabilities` 时**必填**（否则 400）；服务端发现已被他人修改时返回 409。
+	// UI 保存时总是带上，避免用陈旧的能力数组覆盖别人刚加的能力项。
+	CapabilitiesVersion *int     `json:"capabilitiesVersion,omitempty"`
+	DefaultDepth        *float64 `json:"defaultDepth,omitempty"`
+	DefaultWidth        *float64 `json:"defaultWidth,omitempty"`
+
+	// Driver 省略表示不变；空字符串表示清除
+	Driver *string `json:"driver,omitempty"`
+	Icons  *string `json:"icons,omitempty"`
+	Name   *string `json:"name,omitempty"`
+}
 
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
@@ -237,8 +396,17 @@ type WallInput struct {
 	Thickness *float64 `json:"thickness,omitempty"`
 }
 
+// Conflict defines model for Conflict.
+type Conflict = Error
+
+// Forbidden defines model for Forbidden.
+type Forbidden = Error
+
 // InvalidRequest defines model for InvalidRequest.
 type InvalidRequest = Error
+
+// NotFound defines model for NotFound.
+type NotFound = Error
 
 // Unauthenticated defines model for Unauthenticated.
 type Unauthenticated = Error
@@ -248,6 +416,12 @@ type Healthz200JSONResponseBodyStatus string
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
+
+// CreateItemTypeJSONRequestBody defines body for CreateItemType for application/json ContentType.
+type CreateItemTypeJSONRequestBody = ItemTypeInput
+
+// UpdateItemTypeJSONRequestBody defines body for UpdateItemType for application/json ContentType.
+type UpdateItemTypeJSONRequestBody = ItemTypeUpdate
 
 // CreateWallJSONRequestBody defines body for CreateWall for application/json ContentType.
 type CreateWallJSONRequestBody = WallInput
@@ -266,6 +440,18 @@ type ServerInterface interface {
 	// Healthz 健康检查
 	// (GET /api/healthz)
 	Healthz(w http.ResponseWriter, r *http.Request)
+	// ListItemTypes 列出全部类型模板
+	// (GET /api/item-types)
+	ListItemTypes(w http.ResponseWriter, r *http.Request)
+	// CreateItemType 新建类型模板（仅管理员）
+	// (POST /api/item-types)
+	CreateItemType(w http.ResponseWriter, r *http.Request)
+	// DeleteItemType 删除类型模板（仅管理员）
+	// (DELETE /api/item-types/{key})
+	DeleteItemType(w http.ResponseWriter, r *http.Request, key string)
+	// UpdateItemType 修改类型模板（仅管理员）
+	// (PATCH /api/item-types/{key})
+	UpdateItemType(w http.ResponseWriter, r *http.Request, key string)
 	// GetPlan 取当前户型（端点与墙）
 	// (GET /api/plan)
 	GetPlan(w http.ResponseWriter, r *http.Request)
@@ -302,6 +488,30 @@ func (_ Unimplemented) Me(w http.ResponseWriter, r *http.Request) {
 // Healthz 健康检查
 // (GET /api/healthz)
 func (_ Unimplemented) Healthz(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ListItemTypes 列出全部类型模板
+// (GET /api/item-types)
+func (_ Unimplemented) ListItemTypes(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// CreateItemType 新建类型模板（仅管理员）
+// (POST /api/item-types)
+func (_ Unimplemented) CreateItemType(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// DeleteItemType 删除类型模板（仅管理员）
+// (DELETE /api/item-types/{key})
+func (_ Unimplemented) DeleteItemType(w http.ResponseWriter, r *http.Request, key string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateItemType 修改类型模板（仅管理员）
+// (PATCH /api/item-types/{key})
+func (_ Unimplemented) UpdateItemType(w http.ResponseWriter, r *http.Request, key string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -379,6 +589,86 @@ func (siw *ServerInterfaceWrapper) Healthz(w http.ResponseWriter, r *http.Reques
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Healthz(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListItemTypes operation middleware
+func (siw *ServerInterfaceWrapper) ListItemTypes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListItemTypes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateItemType operation middleware
+func (siw *ServerInterfaceWrapper) CreateItemType(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateItemType(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteItemType operation middleware
+func (siw *ServerInterfaceWrapper) DeleteItemType(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "key" -------------
+	var key string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteItemType(w, r, key)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateItemType operation middleware
+func (siw *ServerInterfaceWrapper) UpdateItemType(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "key" -------------
+	var key string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "key", chi.URLParam(r, "key"), &key, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateItemType(w, r, key)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -575,6 +865,18 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/api/walls/{wallId}", wrapper.DeleteWall)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/item-types", wrapper.ListItemTypes)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/item-types", wrapper.CreateItemType)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/api/item-types/{key}", wrapper.DeleteItemType)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/api/item-types/{key}", wrapper.UpdateItemType)
 	})
 
 	return r

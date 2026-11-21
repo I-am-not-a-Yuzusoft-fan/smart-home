@@ -41,6 +41,7 @@ func newTestServer(t *testing.T) http.Handler {
 	srv := api.New(
 		api.NewPGAccounts(storegen.New(pool)),
 		api.NewPGPlan(pool),
+		api.NewPGItemTypes(pool),
 		api.NewSessionCodec("test-secret", time.Hour),
 		false,
 		"test",

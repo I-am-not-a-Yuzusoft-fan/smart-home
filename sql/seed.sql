@@ -9,40 +9,41 @@ INSERT INTO app_user (id, username, display_name, password_hash, role) VALUES
   ('00000000-0000-4000-8000-000000000001', 'zhang', '张先生', '$2a$12$vCKdg0kYy.teFm0UFH6GIux0GDDz3tGuGNg2P8MI29OXdZq4ErO/O', 'admin'),
   ('00000000-0000-4000-8000-000000000002', 'li',    '李女士', '$2a$12$vCKdg0kYy.teFm0UFH6GIux0GDDz3tGuGNg2P8MI29OXdZq4ErO/O', 'member');
 
--- 类型模板（家具 2 个 + 设备 8 个）
+-- 类型模板（家具 2 个 + 设备 10 个）
+-- capabilities 的 options 一律是 {value,label} 对象：value 入库，label 给人看。
 INSERT INTO item_type (key, kind, name, icons, default_width, default_depth, capabilities, driver) VALUES
   ('sofa', 'furniture', '沙发', 'sofa', 180, 80, '[]'::jsonb, NULL),
   ('table', 'furniture', '茶几', 'table', 90, 50, '[]'::jsonb, NULL),
   ('ceiling_light', 'device', '吸顶灯', 'light', 40, 40,
-   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true},
-     {"key":"brightness","name":"亮度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true},
-     {"key":"color_temp","name":"色温","type":"number","unit":"K","min":2700,"max":6500,"step":100,"writable":true,"history":true}]'::jsonb, 'simulator'),
+   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
+     {"key":"brightness","name":"亮度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true,"default":0},
+     {"key":"color_temp","name":"色温","type":"number","unit":"K","min":2700,"max":6500,"step":100,"writable":true,"history":true,"default":4000}]'::jsonb, 'simulator'),
   ('lamp', 'device', '床头灯', 'lamp', 20, 20,
-   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true},
-     {"key":"brightness","name":"亮度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true},
-     {"key":"color_temp","name":"色温","type":"number","unit":"K","min":2700,"max":6500,"step":100,"writable":true,"history":true}]'::jsonb, 'simulator'),
+   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
+     {"key":"brightness","name":"亮度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true,"default":0},
+     {"key":"color_temp","name":"色温","type":"number","unit":"K","min":2700,"max":6500,"step":100,"writable":true,"history":true,"default":4000}]'::jsonb, 'simulator'),
   ('ac', 'device', '空调', 'ac', 60, 25,
-   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true},
-     {"key":"mode","name":"模式","type":"enum","options":["cool","heat","fan"],"writable":true,"history":true},
-     {"key":"target_temp","name":"目标温度","type":"number","unit":"℃","min":16,"max":30,"step":0.5,"writable":true,"history":true},
-     {"key":"fan_speed","name":"风速","type":"enum","options":["low","mid","high","auto"],"writable":true,"history":true}]'::jsonb, 'simulator'),
+   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
+     {"key":"mode","name":"模式","type":"enum","options":[{"value":"cool","label":"制冷"},{"value":"heat","label":"制热"},{"value":"fan","label":"送风"}],"writable":true,"history":true,"default":"cool"},
+     {"key":"target_temp","name":"目标温度","type":"number","unit":"℃","min":16,"max":30,"step":0.5,"writable":true,"history":true,"default":26},
+     {"key":"fan_speed","name":"风速","type":"enum","options":[{"value":"low","label":"低"},{"value":"mid","label":"中"},{"value":"high","label":"高"},{"value":"auto","label":"自动"}],"writable":true,"history":true,"default":"auto"}]'::jsonb, 'simulator'),
   ('curtain', 'device', '窗帘', 'curtain', 200, 10,
-   '[{"key":"position","name":"开合度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true}]'::jsonb, 'simulator'),
+   '[{"key":"position","name":"开合度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true,"default":0}]'::jsonb, 'simulator'),
   ('humidifier', 'device', '加湿器', 'humidifier', 25, 25,
-   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true},
-     {"key":"level","name":"档位","type":"enum","options":["low","mid","high"],"writable":true,"history":true}]'::jsonb, 'simulator'),
+   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
+     {"key":"level","name":"档位","type":"enum","options":[{"value":"low","label":"低"},{"value":"mid","label":"中"},{"value":"high","label":"高"}],"writable":true,"history":true,"default":"low"}]'::jsonb, 'simulator'),
   ('purifier', 'device', '空气净化器', 'purifier', 30, 30,
-   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true},
-     {"key":"level","name":"档位","type":"enum","options":["low","mid","high","auto"],"writable":true,"history":true}]'::jsonb, 'simulator'),
+   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
+     {"key":"level","name":"档位","type":"enum","options":[{"value":"low","label":"低"},{"value":"mid","label":"中"},{"value":"high","label":"高"},{"value":"auto","label":"自动"}],"writable":true,"history":true,"default":"low"}]'::jsonb, 'simulator'),
   ('sensor_th', 'device', '温湿度传感器', 'sensor', 8, 8,
-   '[{"key":"temperature","name":"温度","type":"number","unit":"℃","min":-10,"max":50,"writable":false,"history":true},
-     {"key":"humidity","name":"湿度","type":"number","unit":"%RH","min":0,"max":100,"writable":false,"history":true}]'::jsonb, 'simulator'),
+   '[{"key":"temperature","name":"温度","type":"number","unit":"℃","min":-10,"max":50,"writable":false,"history":true,"default":25},
+     {"key":"humidity","name":"湿度","type":"number","unit":"%RH","min":0,"max":100,"writable":false,"history":true,"default":50}]'::jsonb, 'simulator'),
   ('sensor_lux', 'device', '光照传感器', 'sensor', 8, 8,
-   '[{"key":"illuminance","name":"照度","type":"number","unit":"lux","min":0,"max":2000,"writable":false,"history":true}]'::jsonb, 'simulator'),
+   '[{"key":"illuminance","name":"照度","type":"number","unit":"lux","min":0,"max":2000,"writable":false,"history":true,"default":0}]'::jsonb, 'simulator'),
   ('sensor_pir', 'device', '人体存在传感器', 'sensor', 8, 8,
-   '[{"key":"occupied","name":"有人","type":"bool","writable":false,"history":true}]'::jsonb, 'simulator'),
+   '[{"key":"occupied","name":"有人","type":"bool","writable":false,"history":true,"default":false}]'::jsonb, 'simulator'),
   ('door_sensor', 'device', '门磁', 'sensor', 6, 6,
-   '[{"key":"open","name":"开合","type":"bool","writable":false,"history":true}]'::jsonb, 'simulator');
+   '[{"key":"open","name":"开合","type":"bool","writable":false,"history":true,"default":false}]'::jsonb, 'simulator');
 
 -- 平面图：一个 400×300 cm 的闭合矩形（客厅），墙端点被相邻墙共享
 INSERT INTO corner (id, x, y) VALUES
@@ -89,7 +90,7 @@ INSERT INTO capability_state (item_id, capability_key, value, source, updated_at
   ('00000000-0000-4000-8000-000000000303', 'position',    '0'::jsonb,      'device', now()),
   ('00000000-0000-4000-8000-000000000304', 'temperature', '31.5'::jsonb,   'device', now()),
   ('00000000-0000-4000-8000-000000000304', 'humidity',    '68'::jsonb,     'device', now()),
-  ('00000000-0000-4000-8000-000000000305', 'illuminance', '12000'::jsonb,  'device', now()),
+  ('00000000-0000-4000-8000-000000000305', 'illuminance', '1200'::jsonb,   'device', now()),
   ('00000000-0000-4000-8000-000000000306', 'occupied',    'true'::jsonb,   'device', now())
 ON CONFLICT (item_id, capability_key) DO UPDATE
 SET value = EXCLUDED.value, source = EXCLUDED.source, updated_at = EXCLUDED.updated_at;
