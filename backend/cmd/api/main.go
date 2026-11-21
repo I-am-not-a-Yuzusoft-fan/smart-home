@@ -17,12 +17,18 @@ import (
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
 
-const version = "0.1.0"
+const (
+	version              = "0.1.0"
+	defaultSessionSecret = "dev-only-session-secret-change-me"
+)
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfg := loadConfig()
+	if cfg.sessionSecret == defaultSessionSecret {
+		log.Warn("正在使用默认会话密钥，仅限本地开发；部署前必须设置 SESSION_SECRET")
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -84,7 +90,7 @@ func loadConfig() config {
 	return config{
 		addr:          env("ADDR", ":8081"),
 		databaseURL:   env("DATABASE_URL", "postgres://postgres:spike@127.0.0.1:5433/smarthome?sslmode=disable"),
-		sessionSecret: env("SESSION_SECRET", "dev-only-session-secret-change-me"),
+		sessionSecret: env("SESSION_SECRET", defaultSessionSecret),
 		sessionTTL:    12 * time.Hour,
 		cookieSecure:  os.Getenv("COOKIE_SECURE") == "true",
 	}

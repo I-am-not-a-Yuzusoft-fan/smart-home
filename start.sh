@@ -59,4 +59,9 @@ echo "前端： http://localhost:$WEB_PORT"
 echo "接口： http://localhost:$API_PORT/api/healthz"
 echo "演示账号：zhang / demo1234（管理员）、li / demo1234（家庭成员）"
 echo "按 Ctrl-C 退出（数据库容器保留，可 docker compose down 清理）"
-wait -n "$API_PID" "$WEB_PID"
+
+# macOS 自带 bash 3.2 没有 `wait -n`，所以自己轮询两个子进程：
+# 任意一个退出就收工，避免脚本在前端崩掉后还挂在那里。
+while kill -0 "$API_PID" 2>/dev/null && kill -0 "$WEB_PID" 2>/dev/null; do
+  sleep 1
+done
