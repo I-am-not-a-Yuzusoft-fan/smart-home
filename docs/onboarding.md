@@ -157,6 +157,18 @@ git push -u origin feature/t6-item-types
 冲突预警：`#5`（画墙）也会改 `openapi.yaml` 和 `sql/seed.sql`。约定是 **#5 先合，你 rebase 后再合**；
 真冲突了以 `main` 为准，把你这边的接口重新加回 `openapi.yaml` 再生成一次。
 
+## 5.1 用 curl 调接口时
+
+写请求（POST / PUT / PATCH / DELETE）必须带 `X-Requested-With: fetch` 头，否则后端返回 403。这是 CSRF 防护：跨站表单带不了自定义头，同源页面能带。漏了这个头，浏览器里的页面一切正常，只有手写脚本会撞上。
+
+```bash
+curl -X POST http://127.0.0.1:8081/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -H 'X-Requested-With: fetch' \
+  -c /tmp/c.txt -d '{"username":"zhang","password":"demo1234"}'
+curl -b /tmp/c.txt http://127.0.0.1:8081/api/plan
+```
+
 ## 6. 文档在哪
 
 | 想知道什么 | 看哪 |

@@ -29,6 +29,9 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 
+	// 先挡跨站写请求，再谈有没有会话：否则攻击者能从 401/403 的差异里
+	// 探出"这个会话是不是还有效"。
+	r.Use(requireCsrfHeader)
 	r.Use(s.requireSession)
 
 	// 默认的 ErrorHandlerFunc 会 http.Error 出纯文本，前端 JSON.parse 直接抛

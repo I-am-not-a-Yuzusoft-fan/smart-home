@@ -25,10 +25,15 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // 写请求必须带这个头：后端拿它区分"同源页面发的"和"别的站点发起的"。
+  // 跨站表单带不了自定义头，所以它挡得住 CSRF；同源 fetch 能原样带上。
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const unsafe = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS'
   const res = await fetch(path, {
     credentials: 'same-origin',
     ...init,
     headers: {
+      ...(unsafe ? { 'X-Requested-With': 'fetch' } : {}),
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       ...init?.headers,
     },

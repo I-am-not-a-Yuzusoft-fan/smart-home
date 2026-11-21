@@ -58,6 +58,13 @@ func do(t *testing.T, h http.Handler, method, path string, body string, cookie *
 		r = httptest.NewRequest(method, path, bytes.NewBufferString(body))
 		r.Header.Set("Content-Type", "application/json")
 	}
+	// 写方法默认带 CSRF 头：绝大多数用例关心的是业务语义，不是这道门。
+	// 专门验这道门的用例用 doH 显式构造"不带"的情况。
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+	default:
+		r.Header.Set("X-Requested-With", "fetch")
+	}
 	if cookie != nil {
 		r.AddCookie(cookie)
 	}
