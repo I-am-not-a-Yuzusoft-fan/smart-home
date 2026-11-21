@@ -57,3 +57,12 @@ logs/
 
 # 验证 spike（丢弃式，不入库）
 spikes/
+
+# 代码生成产物（第 12 周建好 go.mod 后再决定是否入库）
+backend/store/gen/
+
+# 外部 skills 源码克隆（不属于本仓库）
+mattpocock-skills-zh/
+
+# 课程课件（外部资料，不入库）
+软件工程课程内容/
