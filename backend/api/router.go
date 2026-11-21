@@ -31,7 +31,14 @@ func (s *Server) Router() http.Handler {
 
 	r.Use(s.requireSession)
 
-	gen.HandlerFromMux(s, r)
+	// 默认的 ErrorHandlerFunc 会 http.Error 出纯文本，前端 JSON.parse 直接抛
+	// SyntaxError（例如 /api/walls/not-a-uuid）。统一成契约里的错误封套。
+	gen.HandlerWithOptions(s, gen.ChiServerOptions{
+		BaseRouter: r,
+		ErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "请求参数不合法")
+		},
+	})
 	return r
 }
 

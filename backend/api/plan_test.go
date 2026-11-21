@@ -3,6 +3,7 @@ package api_test
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +68,17 @@ func TestCreateWallDedupesCornersAndPairs(t *testing.T) {
 	if _, ok := afterCreate.cornerAt(bx, by); !ok {
 		t.Errorf("终点端点应存在")
 	}
+
+	// 立刻登记清理：后面任何一条 t.Fatalf 都会提前返回，脏数据留下会让下次本地跑必挂。
+	t.Cleanup(func() {
+		for _, w := range afterCreate.Walls {
+			if (w.AX == ax && w.AY == ay && w.BX == bx && w.BY == by) ||
+				(w.AX == bx && w.AY == by && w.BX == ax && w.BY == ay) {
+				do(t, h, http.MethodDelete, "/api/walls/"+w.ID, "", cookie)
+				return
+			}
+		}
+	})
 
 	// 反着画同一面墙：不应新增
 	reversed := do(t, h, http.MethodPost, "/api/walls",
@@ -144,5 +156,40 @@ func TestPlanRequiresSession(t *testing.T) {
 	}
 	if w := do(t, h, http.MethodPost, "/api/walls", `{"ax":0,"ay":0,"bx":100,"by":0}`, nil); w.Code != http.StatusUnauthorized {
 		t.Fatalf("未登录画墙应 401，实际 %d", w.Code)
+	}
+}
+
+// 路径参数不是合法 uuid 时，必须仍返回契约里的 JSON 封套——
+// 默认的 oapi-codegen 错误处理会输出纯文本，前端 JSON.parse 直接抛 SyntaxError。
+func TestInvalidWallIDReturnsJSONEnvelope(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+
+	res := do(t, h, http.MethodDelete, "/api/walls/not-a-uuid", "", cookie)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("非法 uuid 应 400，实际 %d：%s", res.Code, res.Body.String())
+	}
+	if ct := res.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("Content-Type 应为 application/json，实际 %q", ct)
+	}
+	if code := errorCode(t, res); code != "VALIDATION_FAILED" {
+		t.Errorf("错误码应为 VALIDATION_FAILED，实际 %s", code)
+	}
+}
+
+// 契约写 thickness minimum 1，实现必须同样拒绝 0.5——否则契约与行为两张皮。
+func TestCreateWallRejectsSubCentimetreThickness(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+
+	res := do(t, h, http.MethodPost, "/api/walls",
+		`{"ax":3100,"ay":3100,"bx":3700,"by":3100,"thickness":0.5}`, cookie)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("墙厚 0.5 应 400，实际 %d：%s", res.Code, res.Body.String())
+	}
+	if code := errorCode(t, res); code != "VALIDATION_FAILED" {
+		t.Errorf("错误码应为 VALIDATION_FAILED，实际 %s", code)
 	}
 }

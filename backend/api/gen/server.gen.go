@@ -160,11 +160,11 @@ type Wall struct {
 
 // WallInput defines model for WallInput.
 type WallInput struct {
-	// Ax 起点 x，单位厘米，原点在平面图左上角
+	// Ax 起点 x，单位厘米，原点在平面图左上角（0–5000，超出会被拒）
 	Ax float64 `json:"ax"`
 	Ay float64 `json:"ay"`
 
-	// Bx 终点 x
+	// Bx 终点 x（0–5000，超出会被拒）
 	Bx float64 `json:"bx"`
 	By float64 `json:"by"`
 

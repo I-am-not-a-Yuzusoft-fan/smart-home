@@ -165,7 +165,7 @@ func validateWall(in WallInput) (string, bool) {
 	if math.Hypot(in.BX-in.AX, in.BY-in.AY) < minWallLength {
 		return "墙的两个端点重合了", false
 	}
-	if in.Thickness <= 0 || in.Thickness > maxWallThick {
+	if in.Thickness < 1 || in.Thickness > maxWallThick {
 		return "墙厚必须在 1–100 厘米之间", false
 	}
 	return "", true

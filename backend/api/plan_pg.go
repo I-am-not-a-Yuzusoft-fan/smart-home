@@ -70,13 +70,26 @@ func (p *PGPlan) CreateWall(ctx context.Context, in WallInput) error {
 
 	q := p.queries.WithTx(tx)
 
-	a, err := q.UpsertCorner(ctx, storegen.UpsertCornerParams{X: in.AX, Y: in.AY})
+	// 两个端点固定按 (x, y) 顺序 upsert：两个人同时画"同一面墙的两个方向"时，
+	// 若顺序相反，各持一把锁再互等就会死锁（PG 40P01）。
+	first := storegen.UpsertCornerParams{X: in.AX, Y: in.AY}
+	second := storegen.UpsertCornerParams{X: in.BX, Y: in.BY}
+	aIsFirst := true
+	if first.X > second.X || (first.X == second.X && first.Y > second.Y) {
+		first, second = second, first
+		aIsFirst = false
+	}
+
+	a, err := q.UpsertCorner(ctx, first)
 	if err != nil {
 		return err
 	}
-	b, err := q.UpsertCorner(ctx, storegen.UpsertCornerParams{X: in.BX, Y: in.BY})
+	b, err := q.UpsertCorner(ctx, second)
 	if err != nil {
 		return err
+	}
+	if !aIsFirst {
+		a, b = b, a
 	}
 
 	_, err = q.GetWallByPair(ctx, storegen.GetWallByPairParams{A: a, B: b})

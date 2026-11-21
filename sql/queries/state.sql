@@ -34,7 +34,7 @@ WHERE request_id = $1;
 -- name: ListCorners :many
 SELECT id, x, y
 FROM corner
-ORDER BY created_at;
+ORDER BY created_at, id;
 
 -- name: UpsertCorner :one
 -- 端点按坐标去重：已存在就复用（只为了拿回 id，不做实质更新）。
@@ -49,7 +49,7 @@ SELECT w.id, w.a, w.b, w.thickness,
 FROM wall w
 JOIN corner ca ON ca.id = w.a
 JOIN corner cb ON cb.id = w.b
-ORDER BY w.created_at;
+ORDER BY w.created_at, w.id;
 
 -- name: GetWallByPair :one
 -- 反着画也是同一面墙，所以两种顺序都查

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Circle, Layer, Line, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
 import {
+  ApiError,
   createWall,
   deleteWall,
   getPlan,
@@ -42,6 +43,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [saving, setSaving] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // 只接受"最后一次请求"的响应：连拖两面墙时，先发的请求可能后到，
+  // 若整份覆盖就会把后画的墙抹掉（刷新才回来，用户以为丢了）。
+  const writeSeq = useRef(0)
 
   const load = useCallback(async () => {
     try {
@@ -143,10 +147,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }
 
   async function submitWall(d: Draft) {
+    const seq = ++writeSeq.current
     setSaving(true)
     try {
-      setPlan(await createWall({ ax: d.ax, ay: d.ay, bx: d.bx, by: d.by }))
-      setError(null)
+      const next = await createWall({ ax: d.ax, ay: d.ay, bx: d.bx, by: d.by })
+      if (seq === writeSeq.current) {
+        setPlan(next)
+        setError(null)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存失败')
     } finally {
@@ -155,18 +163,27 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }
 
   async function removeWall(id: string) {
+    const seq = ++writeSeq.current
     setSaving(true)
     try {
       await deleteWall(id)
+    } catch (e) {
+      // 404 说明库里本来就没有（双击、连按 Delete、别人先删了）：
+      // 当作成功继续本地清理，否则会出现"库里没了、画布还在"。
+      if (!(e instanceof ApiError && e.status === 404)) {
+        setError(e instanceof Error ? e.message : '删除失败')
+        setSaving(false)
+        return
+      }
+    }
+    if (seq === writeSeq.current) {
       setPlan((prev) => ({ ...prev, walls: prev.walls.filter((w) => w.id !== id) }))
       setSelectedId(null)
       setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '删除失败')
-    } finally {
-      setSaving(false)
     }
+    setSaving(false)
   }
+
 
   async function onLogout() {
     try {
