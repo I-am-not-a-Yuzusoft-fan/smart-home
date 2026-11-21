@@ -23,4 +23,4 @@ Issues 存放在 `I-am-not-a-Yuzusoft-fan/smart-home` 的 GitHub Issues；在仓
 
 ## Git 规范
 
-主分支 `main` 保持可运行；功能在 `feature/<模块>` 分支开发，经 PR 合并且合并前需他人评审；提交信息用 `feat` / `fix` / `docs` / `refactor` / `test` 前缀；禁止向 `main` 强推；禁止提交密钥、数据库密码与 `node_modules`。详见 `docs/agents/git-workflow.md`。
+主分支 `main` 保持可运行且**只接受 PR**（ruleset `main-protected` 禁止直接推送与强推，无绕过名单，squash 合并）；功能在 `feature/<模块>` 分支开发，合并前需他人评审；提交信息用 `feat` / `fix` / `docs` / `refactor` / `test` 前缀；禁止提交密钥、数据库密码与 `node_modules`。详见 `docs/agents/git-workflow.md`。
