@@ -114,6 +114,19 @@ func (p *PGPlan) CreateWall(ctx context.Context, in WallInput) error {
 	return tx.Commit(ctx)
 }
 
+// LoadRoomNames 读全部房间命名。房间本身不落库，这里只有"名字"。
+func (p *PGPlan) LoadRoomNames(ctx context.Context) ([]RoomName, error) {
+	rows, err := p.queries.ListRoomNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RoomName, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, RoomName{Hash: r.PolygonHash, Name: r.Name, Kind: r.Kind})
+	}
+	return out, nil
+}
+
 // DeleteWall 删墙并返回受影响行数；0 表示没有这面墙。
 func (p *PGPlan) DeleteWall(ctx context.Context, id openapi_types.UUID) (int64, error) {
 	return p.queries.DeleteWall(ctx, pgUUID(id))

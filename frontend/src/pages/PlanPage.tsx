@@ -9,6 +9,7 @@ import {
   logout,
   type Corner,
   type Plan,
+  type Room,
   type SessionUser,
   type Wall,
 } from '../api/client.ts'
@@ -37,7 +38,7 @@ type Draft = { ax: number; ay: number; bx: number; by: number }
 export default function PlanPage({ user, onSignedOut }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ width: 800, height: 600 })
-  const [plan, setPlan] = useState<Plan>({ corners: [], walls: [] })
+  const [plan, setPlan] = useState<Plan>({ corners: [], walls: [], rooms: [], openWalls: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -204,6 +205,17 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
   const selected = plan.walls.find((w) => w.id === selectedId) ?? null
 
+  // 有墙但推不出房间时的提示文案：空户型和"画了墙但没围上"要说不同的话，
+  // 否则用户画了三面墙回到刷新，会以为房间功能坏了。
+  const hint =
+    plan.walls.length === 0
+      ? null
+      : plan.rooms.length === 0
+        ? `还没围成闭合区域：${plan.openWalls} 面墙没有形成闭环`
+        : plan.openWalls > 0
+          ? `已识别 ${plan.rooms.length} 个房间；另有 ${plan.openWalls} 面墙没围上`
+          : null
+
   return (
     <div className="flex h-full flex-col">
       <header
@@ -271,6 +283,13 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         >
           <Layer>{gridLines}</Layer>
 
+          {/* 房间画在墙下面：半透明填充，墙压在上面边界才清楚 */}
+          <Layer listening={false}>
+            {plan.rooms.map((room) => (
+              <RoomShape key={room.hash} room={room} />
+            ))}
+          </Layer>
+
           <Layer>
             {plan.walls.map((w) => (
               <WallShape
@@ -308,6 +327,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 fontSize={12}
                 fill="#4f6bed"
               />
+            )}
+            {!loading && hint && (
+              <Text x={32} y={32} text={hint} fontSize={14} fill="#b06a00" />
             )}
             {!loading && plan.walls.length === 0 && (
               <Text
@@ -373,4 +395,24 @@ function formatCm(cm: number): string {
 
 function formatLength(w: Wall): string {
   return formatCm(Math.hypot(w.bx - w.ax, w.by - w.ay))
+}
+
+/**
+ * 一个房间：半透明多边形 + 面积标签。
+ *
+ * 面积与顶点都来自后端，这里只画——前端若自己也推导一遍，两套实现迟早分叉，
+ * 就会出现「画布上是一间、列表里是两间」。
+ */
+function RoomShape({ room }: { room: Room }) {
+  const points = room.ring.flatMap((p) => [p.x * PX_PER_CM, p.y * PX_PER_CM])
+  const cx = (room.ring.reduce((sum, p) => sum + p.x, 0) / room.ring.length) * PX_PER_CM
+  const cy = (room.ring.reduce((sum, p) => sum + p.y, 0) / room.ring.length) * PX_PER_CM
+  const label = room.name ? `${room.name}　${room.areaM2.toFixed(1)} ㎡` : `${room.areaM2.toFixed(1)} ㎡`
+
+  return (
+    <>
+      <Line points={points} closed fill="rgba(79,107,237,0.10)" stroke="rgba(79,107,237,0.35)" strokeWidth={1} />
+      <Text x={cx} y={cy} text={label} fontSize={13} fill="#3a4a8f" offsetX={18} />
+    </>
+  )
 }

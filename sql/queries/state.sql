@@ -64,3 +64,8 @@ RETURNING id;
 
 -- name: DeleteWall :execrows
 DELETE FROM wall WHERE id = $1;
+
+-- name: ListRoomNames :many
+-- 房间只存名字：几何由墙推导，哈希变了旧名字自然失配。
+SELECT polygon_hash, name, kind
+FROM room_name;

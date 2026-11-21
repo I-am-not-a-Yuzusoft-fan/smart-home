@@ -279,7 +279,7 @@ components:
           format: double
     Plan:
       type: object
-      required: [corners, walls]
+      required: [corners, walls, rooms, openWalls]
       properties:
         corners:
           type: array
@@ -289,6 +289,54 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Wall"
+        rooms:
+          type: array
+          description: |
+            由墙的闭环推导出来的房间。前端只渲染，不自己推导。
+            墙没围成闭环时这里是空数组，`openWalls` 会给出提示依据。
+          items:
+            $ref: "#/components/schemas/Room"
+        openWalls:
+          type: integer
+          description: 没有参与任何闭合区域的墙数；大于 0 时前端提示「还有墙没围上」
+    PlanPoint:
+      type: object
+      required: [x, y]
+      additionalProperties: false
+      properties:
+        x:
+          type: number
+          format: double
+        y:
+          type: number
+          format: double
+    Room:
+      type: object
+      required: [hash, ring, areaM2]
+      additionalProperties: false
+      description: |
+        由墙的闭环推导出来的房间。几何不落库，只把多边形的哈希当作身份：
+        墙一改，哈希就变，挂在旧哈希上的名字自然失配（不会把「客厅」挂到卫生间上）。
+      properties:
+        hash:
+          type: string
+          description: 多边形顶点规范化后的哈希，房间命名的键
+        ring:
+          type: array
+          description: 闭合多边形的顶点，首尾不重复
+          items:
+            $ref: "#/components/schemas/PlanPoint"
+        areaM2:
+          type: number
+          format: double
+          description: 面积（平方米，两位小数）
+        name:
+          type: string
+          description: 用户起的名字；还没起名时为空
+        kind:
+          type: string
+          enum: [living, bedroom, kitchen, bathroom, study, hallway]
+          description: 房间用途；还没指定时为空
     Error:
       type: object
       required: [error]

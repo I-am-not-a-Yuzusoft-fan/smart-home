@@ -198,6 +198,38 @@ func (q *Queries) ListCorners(ctx context.Context) ([]ListCornersRow, error) {
 	return items, nil
 }
 
+const listRoomNames = `-- name: ListRoomNames :many
+SELECT polygon_hash, name, kind
+FROM room_name
+`
+
+type ListRoomNamesRow struct {
+	PolygonHash string `json:"polygon_hash"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+}
+
+// 房间只存名字：几何由墙推导，哈希变了旧名字自然失配。
+func (q *Queries) ListRoomNames(ctx context.Context) ([]ListRoomNamesRow, error) {
+	rows, err := q.db.Query(ctx, listRoomNames)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRoomNamesRow
+	for rows.Next() {
+		var i ListRoomNamesRow
+		if err := rows.Scan(&i.PolygonHash, &i.Name, &i.Kind); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStatesByItem = `-- name: ListStatesByItem :many
 SELECT item_id, capability_key, value, source, updated_at
 FROM capability_state
