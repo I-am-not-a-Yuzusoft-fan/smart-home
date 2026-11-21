@@ -7,8 +7,10 @@
 - `main` 必须始终保持可运行（随时能按 `start.sh` 起来）。
 - 新功能一律在 `feature/<模块>` 分支开发，例如 `feature/furniture-library`、
   `feature/scene-engine`、`feature/floorplan-editor`。
-- 合并走 Pull Request，**合并前需他人评审**。组内至少每周一次代码互评，
-  评审记录计入过程考核 —— 所以评审要留在 GitHub 上，不要只在本地口头过一遍。
+- 合并走 Pull Request，**合并前需他人评审**（指导书 1.3/5.3 的硬性要求，
+  评审记录计入过程考核 —— 所以评审要留在 GitHub 上，不要只在本地口头过一遍）。
+  注意：仓库当前 `required_approving_review_count` 是 `0`，因为现阶段只有一人提交；
+  组员接入后把它改成 `1`，让评审从"应该做"变成"做不到就合不了"。
 - **`main` 只接受 Pull Request，不接受任何直接推送**。仓库的 ruleset
   `main-protected` 对 `refs/heads/main` 生效四条规则：禁止删除、禁止强推
   （`non_fast_forward`）、**必须经由 PR 合并**（`pull_request`）、
