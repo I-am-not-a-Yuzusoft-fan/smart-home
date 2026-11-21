@@ -8,7 +8,8 @@ type Props = {
 
 /**
  * 登录页。错误提示分两种：口令错（401，后端统一说「用户名或口令错误」）
- * 与其他失败（网络、500）。密码框不自动填充，避免演示机上残留口令。
+ * 与其他失败（网络、500）。口令框声明 current-password，让密码管理器正常填充；
+ * 用完退出会清掉会话 Cookie，但浏览器里保存的口令需要演示机自行处理。
  */
 export default function LoginPage({ onSignedIn, notice }: Props) {
   const [username, setUsername] = useState('')
