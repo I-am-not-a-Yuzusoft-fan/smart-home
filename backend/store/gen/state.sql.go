@@ -37,6 +37,16 @@ func (q *Queries) CompleteCommand(ctx context.Context, arg CompleteCommandParams
 	return err
 }
 
+const deleteOrphanCorners = `-- name: DeleteOrphanCorners :exec
+DELETE FROM corner c
+WHERE NOT EXISTS (SELECT 1 FROM wall w WHERE w.a = c.id OR w.b = c.id)
+`
+
+func (q *Queries) DeleteOrphanCorners(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteOrphanCorners)
+	return err
+}
+
 const deleteWall = `-- name: DeleteWall :execrows
 DELETE FROM wall WHERE id = $1
 `
@@ -70,6 +80,22 @@ func (q *Queries) GetState(ctx context.Context, arg GetStateParams) (CapabilityS
 		&i.Source,
 		&i.UpdatedAt,
 	)
+	return i, err
+}
+
+const getWall = `-- name: GetWall :one
+SELECT a, b FROM wall WHERE id = $1
+`
+
+type GetWallRow struct {
+	A pgtype.UUID `json:"a"`
+	B pgtype.UUID `json:"b"`
+}
+
+func (q *Queries) GetWall(ctx context.Context, id pgtype.UUID) (GetWallRow, error) {
+	row := q.db.QueryRow(ctx, getWall, id)
+	var i GetWallRow
+	err := row.Scan(&i.A, &i.B)
 	return i, err
 }
 
@@ -310,6 +336,30 @@ func (q *Queries) ListWalls(ctx context.Context) ([]ListWallsRow, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateWall = `-- name: UpdateWall :execrows
+UPDATE wall SET a = $2, b = $3, thickness = $4 WHERE id = $1
+`
+
+type UpdateWallParams struct {
+	ID        pgtype.UUID `json:"id"`
+	A         pgtype.UUID `json:"a"`
+	B         pgtype.UUID `json:"b"`
+	Thickness float64     `json:"thickness"`
+}
+
+func (q *Queries) UpdateWall(ctx context.Context, arg UpdateWallParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateWall,
+		arg.ID,
+		arg.A,
+		arg.B,
+		arg.Thickness,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertCorner = `-- name: UpsertCorner :one
