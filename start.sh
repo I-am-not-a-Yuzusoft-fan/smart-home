@@ -12,7 +12,8 @@ WEB_PORT="${WEB_PORT:-5173}"
 command -v docker >/dev/null || { echo "需要 docker" >&2; exit 1; }
 command -v go >/dev/null || { echo "需要 go 1.27+" >&2; exit 1; }
 command -v npm >/dev/null || { echo "需要 npm" >&2; exit 1; }
-command -v psql >/dev/null || { echo "需要 psql 客户端（建表与灌 seed 用它）" >&2; exit 1; }
+command -v node >/dev/null || { echo "需要 Node 20+" >&2; exit 1; }
+# psql 不是硬依赖：没有它会自动走容器内的 psql（见 scripts/reset.sh）
 
 echo "==> 启动数据库（postgres:17，端口 5433）"
 docker compose up -d db
@@ -44,14 +45,19 @@ export SESSION_SECRET="${SESSION_SECRET:-dev-$(date +%s)-$RANDOM}"
 
 echo "==> 编译并启动后端（:${API_PORT}）"
 # 直接跑编译产物而不是 go run：go run 不转发信号，Ctrl-C 后子进程会留着占端口
-( cd backend && go build -o /tmp/smarthome-api ./cmd/api )
-ADDR=":$API_PORT" /tmp/smarthome-api &
+# 产物落仓库内 .cache/：Windows 上 Go 会补 .exe，写死 /tmp 的名字会找不到文件
+mkdir -p "$ROOT/.cache"
+API_BIN="$ROOT/.cache/smarthome-api"
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) API_BIN="$API_BIN.exe" ;; esac
+( cd backend && go build -o "$API_BIN" ./cmd/api )
+ADDR=":$API_PORT" "$API_BIN" &
 API_PID=$!
 
 echo "==> 启动前端（:${WEB_PORT}）"
 (
   cd frontend
-  API_PORT="$API_PORT" ./node_modules/.bin/vite --port "$WEB_PORT" --strictPort
+  # 用 node 直接跑入口而不是 .bin 里的包装脚本：Windows 上那是 .cmd，bash 调不动
+  API_PORT="$API_PORT" node node_modules/vite/bin/vite.js --port "$WEB_PORT" --strictPort
 ) &
 WEB_PID=$!
 

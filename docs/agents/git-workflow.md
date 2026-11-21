@@ -9,8 +9,10 @@
   `feature/scene-engine`、`feature/floorplan-editor`。
 - 合并走 Pull Request，**合并前需他人评审**（指导书 1.3/5.3 的硬性要求，
   评审记录计入过程考核 —— 所以评审要留在 GitHub 上，不要只在本地口头过一遍）。
-  注意：仓库当前 `required_approving_review_count` 是 `0`，因为现阶段只有一人提交；
-  组员接入后把它改成 `1`，让评审从"应该做"变成"做不到就合不了"。
+  仓库已把 `required_approving_review_count` 设为 **`1`**，且开启
+  `dismiss_stale_reviews_on_push`（approve 之后又推了新提交，旧 approve 作废，
+  防止"批完又改"）。所以从现在起，**包括组长在内谁都不能自合**，
+  提 PR 的人必须找另一个人点 Approve。
 - **`main` 只接受 Pull Request，不接受任何直接推送**。仓库的 ruleset
   `main-protected` 对 `refs/heads/main` 生效四条规则：禁止删除、禁止强推
   （`non_fast_forward`）、**必须经由 PR 合并**（`pull_request`）、
@@ -23,6 +25,20 @@
   在正文里写 `Closes #<编号>`，合并时自动关闭。
 - 分支从最新 `main` 切出，命名 `feature/<模块>` 或 `<类型>/<主题>`
   （`docs/pr-required`、`fix/room-hash-drift`）。
+
+## 跨平台（Windows 队友必读）
+
+三个人不一定用同一个系统，仓库按"**任何平台克隆下来都能跑**"准备，代价是两条纪律：
+
+- **行尾一律 LF**。仓库根有 `.gitattributes`（`* text=auto eol=lf`，脚本与 SQL 显式 `eol=lf`），
+  但前提是本地别开 `core.autocrlf=true`。检查：`git config --get core.autocrlf` 应为空或 `false`。
+  如果已经用 CRLF 检出过，执行 `git rm --cached -r . && git reset --hard` 重新落盘。
+  症状：`bash: $'\r': command not found`，或容器初始化 SQL 报语法错。
+- **`start.sh` 是 bash 脚本**。Windows 上用 Git Bash 或 WSL2 跑 `bash start.sh`；
+  PowerShell / cmd 直接双击是不行的。没有 `psql` 也没关系，`scripts/reset.sh`
+  会自动改用容器内的 psql（`docker compose exec -T db psql`）；有 `psql` 就用本地客户端连 5433。
+- Docker Desktop 建议开 WSL2 后端；仓库路径尽量放在纯 ASCII 目录下
+  （中文路径在个别工具与卷挂载上会出问题，本项目没为此做兼容）。
 
 ## 提交信息
 
