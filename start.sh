@@ -12,6 +12,7 @@ WEB_PORT="${WEB_PORT:-5173}"
 command -v docker >/dev/null || { echo "需要 docker" >&2; exit 1; }
 command -v go >/dev/null || { echo "需要 go 1.27+" >&2; exit 1; }
 command -v npm >/dev/null || { echo "需要 npm" >&2; exit 1; }
+command -v psql >/dev/null || { echo "需要 psql 客户端（建表与灌 seed 用它）" >&2; exit 1; }
 
 echo "==> 启动数据库（postgres:17，端口 5433）"
 docker compose up -d db
@@ -32,21 +33,33 @@ if ! docker exec smarthome-db psql -U postgres -d smarthome -tAc \
   bash scripts/reset.sh
 fi
 
-echo "==> 启动后端（:$API_PORT）"
-(
-  cd backend
-  ADDR=":$API_PORT" go run ./cmd/api
-) &
+# 先装前端依赖：node_modules 不入库，干净克隆上没有它
+if [ ! -d frontend/node_modules ]; then
+  echo "==> 安装前端依赖（首次启动需要几分钟）"
+  ( cd frontend && npm ci )
+fi
+
+# 会话密钥每次启动随机生成：默认常量写在源码里，等于谁都能伪造 Cookie
+export SESSION_SECRET="${SESSION_SECRET:-dev-$(date +%s)-$RANDOM}"
+
+echo "==> 编译并启动后端（:${API_PORT}）"
+# 直接跑编译产物而不是 go run：go run 不转发信号，Ctrl-C 后子进程会留着占端口
+( cd backend && go build -o /tmp/smarthome-api ./cmd/api )
+ADDR=":$API_PORT" /tmp/smarthome-api &
 API_PID=$!
 
-echo "==> 启动前端（:$WEB_PORT）"
+echo "==> 启动前端（:${WEB_PORT}）"
 (
   cd frontend
-  npm run dev -- --port "$WEB_PORT"
+  API_PORT="$API_PORT" ./node_modules/.bin/vite --port "$WEB_PORT" --strictPort
 ) &
 WEB_PID=$!
 
+STOPPED=0
 cleanup() {
+  # INT/TERM 与 EXIT 都会触发，只做一次
+  [ "$STOPPED" = "1" ] && return
+  STOPPED=1
   echo
   echo "==> 停止"
   kill "$API_PID" "$WEB_PID" 2>/dev/null || true

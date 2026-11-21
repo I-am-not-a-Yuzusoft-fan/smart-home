@@ -5,10 +5,19 @@ on:
     branches: [main]
   pull_request:
 
+# 同一分支只保留最新一次运行，避免排队
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: backend（vet、测试、生成物无漂移）
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17-alpine
@@ -42,14 +51,18 @@ jobs:
           go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
           (cd backend && go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.2 \
             --config=api/oapi-codegen.yaml ../openapi.yaml)
-          if ! git diff --exit-code; then
-            echo "::error::生成代码与提交的不一致，请在本地重跑 sqlc generate 与 oapi-codegen 后提交"
+          # git diff 只看已跟踪文件；新增查询忘记提交生成物时它是瞎的，
+          # 所以再查一次工作区是否变脏（含未跟踪文件）。
+          if ! git diff --exit-code || [ -n "$(git status --porcelain)" ]; then
+            echo "::error::生成代码与提交的不一致（或新增了未提交的生成文件），请在本地重跑 sqlc generate 与 oapi-codegen 后提交"
+            git status --porcelain
             exit 1
           fi
 
   frontend:
     name: frontend（类型检查与构建）
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: frontend

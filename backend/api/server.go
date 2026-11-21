@@ -54,6 +54,9 @@ func New(accounts AccountStore, session *SessionCodec, secure bool, version stri
 	return &Server{accounts: accounts, session: session, secure: secure, version: version, log: log}
 }
 
+// dummyHash 是固定口令 "dummy-password" 的 bcrypt 结果，只用来抹平时间差。
+var dummyHash = []byte("$2a$12$7rJGAyaJnlHTZ9qVnGoJ9ekDVRyCFU0PeLS4uHMNhhny5gT9R8ukK")
+
 // Healthz 不鉴权、不读库，只证明进程在跑。
 func (s *Server) Healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": s.version})
@@ -62,7 +65,9 @@ func (s *Server) Healthz(w http.ResponseWriter, _ *http.Request) {
 // Login 校验口令并设置会话 Cookie。用户不存在与口令错误返回同一个 401，避免枚举账号。
 func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	var req gen.LoginRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "请求体解析失败")
 		return
 	}
@@ -73,6 +78,9 @@ func (s *Server) Login(w http.ResponseWriter, r *http.Request) {
 	acct, err := s.accounts.AccountByUsername(r.Context(), req.Username)
 	if err != nil {
 		if errors.Is(err, ErrAccountNotFound) {
+			// 账号不存在时也做一次等价开销的哈希比对：否则响应时间
+			// 会明显短于「账号存在但口令错」，等于把账号是否存在说出去。
+			_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(req.Password))
 			writeError(w, http.StatusUnauthorized, gen.UNAUTHENTICATED, "用户名或口令错误")
 			return
 		}

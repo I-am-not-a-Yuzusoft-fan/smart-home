@@ -57,6 +57,8 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
   /api/auth/logout:
     post:
+      # 退出不需要已有会话：浏览器丢了 Cookie 时也应能清干净
+      security: []
       operationId: logout
       summary: 清除会话
       description: 服务端把 Cookie 置空并立即过期；重复调用无副作用。

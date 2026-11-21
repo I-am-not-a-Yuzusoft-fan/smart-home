@@ -27,6 +27,9 @@ func newTestServer(t *testing.T) http.Handler {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("CI 上必须设置 TEST_DATABASE_URL：静默跳过会让数据库接缝假装通过")
+		}
 		t.Skip("未设置 TEST_DATABASE_URL，跳过需要数据库的测试")
 	}
 	pool, err := pgxpool.New(context.Background(), dsn)
