@@ -54,7 +54,7 @@ func Derive(corners []Point, walls []Wall) Result {
 	}
 
 	// 只保留两端都存在的墙（脏数据不该让推导崩掉）。
-	edges := make([]Wall, 0, len(walls))
+	valid := make([]Wall, 0, len(walls))
 	for _, w := range walls {
 		if _, ok := byID[w.A]; !ok {
 			continue
@@ -65,19 +65,111 @@ func Derive(corners []Point, walls []Wall) Result {
 		if w.A == w.B {
 			continue // 自环不是墙
 		}
-		edges = append(edges, w)
+		valid = append(valid, w)
 	}
 
-	kept, pruned := pruneDangling(edges)
+	// 平面化：一面墙的中间可能落着别的墙的端点（用户画内墙时接在外墙上）。
+	// 这类端点不切分就与那面墙没有拓扑关系，内墙等于悬空，房间推不出来。
+	// 切分只发生在这里——库里的墙、前端的墙、墙的 id 都不变。
+	edges := nodeEdges(byID, valid)
+	kept := pruneDangling(edges)
 
-	rings := deriveFaces(byID, kept)
-	// 剪枝只处理悬空墙；连接两间房子的「桥」不是悬空的，却也围不出房间，
-	// 用「没出现在任何环上」补上这一类，否则 openWalls 会漏报。
-	return Result{Rings: rings, OpenWalls: pruned + unusedEdges(kept, rings)}
+	rings, used := deriveFaces(byID, kept)
+
+	// 一面用户画的墙算不算「围不上」，看它切出来的任意一段有没有进环；
+	// 一段都没进，说明这面墙整体是悬空的（或只是连接两处的桥）。
+	usedOrigin := make([]bool, len(valid))
+	for pair := range used {
+		if o, ok := originOfEdge(kept, pair); ok {
+			usedOrigin[o] = true
+		}
+	}
+	open := 0
+	for _, ok := range usedOrigin {
+		if !ok {
+			open++
+		}
+	}
+	return Result{Rings: rings, OpenWalls: open}
+}
+
+// edge 是平面化之后的一条线段，origin 指向它来自哪一面用户画的墙。
+type edge struct {
+	A      string
+	B      string
+	origin int
+}
+
+// nodeEdges 把落在墙内部的端点插进去，把一面墙切成若干段。
+// 端点落在墙的延长线上但不在墙内（t∉(0,1)）不算接上。
+func nodeEdges(byID map[string]Point, walls []Wall) []edge {
+	out := make([]edge, 0, len(walls))
+	type hit struct {
+		t  float64
+		id string
+	}
+	for i, w := range walls {
+		a, b := byID[w.A], byID[w.B]
+		hits := make([]hit, 0, 4)
+		for id, c := range byID {
+			if id == w.A || id == w.B {
+				continue
+			}
+			if t, ok := projectOnSegment(a, b, c); ok {
+				hits = append(hits, hit{t: t, id: id})
+			}
+		}
+		sort.Slice(hits, func(x, y int) bool {
+			if hits[x].t != hits[y].t {
+				return hits[x].t < hits[y].t
+			}
+			return hits[x].id < hits[y].id
+		})
+
+		prev := w.A
+		for _, h := range hits {
+			if h.id == prev {
+				continue
+			}
+			out = append(out, edge{A: prev, B: h.id, origin: i})
+			prev = h.id
+		}
+		out = append(out, edge{A: prev, B: w.B, origin: i})
+	}
+	return out
+}
+
+// projectOnSegment 判断 c 是否落在 a→b 的内部，返回参数 t。
+// 容差用 1e-6 厘米：坐标由前端按 1 cm 取整，这个量级不会误判。
+func projectOnSegment(a, b, c Point) (t float64, ok bool) {
+	dx, dy := b.X-a.X, b.Y-a.Y
+	len2 := dx*dx + dy*dy
+	if len2 == 0 {
+		return 0, false
+	}
+	t = ((c.X-a.X)*dx + (c.Y-a.Y)*dy) / len2
+	if t <= 1e-6 || t >= 1-1e-6 {
+		return 0, false
+	}
+	// 点到直线的垂距
+	cross := dx*(c.Y-a.Y) - dy*(c.X-a.X)
+	if math.Abs(cross)/math.Sqrt(len2) > 1e-6 {
+		return 0, false
+	}
+	return t, true
+}
+
+func originOfEdge(edges []edge, pair [2]string) (int, bool) {
+	for _, e := range edges {
+		if keyPair(e.A, e.B) == pair {
+			return e.origin, true
+		}
+	}
+	return 0, false
 }
 
 // pruneDangling 反复删掉一端只接一条墙的墙，返回剩下的墙与被删掉的数量。
-func pruneDangling(edges []Wall) ([]Wall, int) {
+func pruneDangling(edges []edge) []edge {
 	alive := make([]bool, len(edges))
 	for i := range alive {
 		alive[i] = true
@@ -108,16 +200,13 @@ func pruneDangling(edges []Wall) ([]Wall, int) {
 		}
 	}
 
-	kept := make([]Wall, 0, len(edges))
-	pruned := 0
+	kept := make([]edge, 0, len(edges))
 	for i, e := range edges {
 		if alive[i] {
 			kept = append(kept, e)
-		} else {
-			pruned++
 		}
 	}
-	return kept, pruned
+	return kept
 }
 
 type halfEdge struct {
@@ -130,9 +219,10 @@ type halfEdge struct {
 }
 
 // deriveFaces 返回所有内面（外环按面积符号剔除），并去掉重复面。
-func deriveFaces(byID map[string]Point, edges []Wall) []Ring {
+func deriveFaces(byID map[string]Point, edges []edge) ([]Ring, map[[2]string]bool) {
+	used := map[[2]string]bool{}
 	if len(edges) == 0 {
-		return nil
+		return nil, used
 	}
 
 	half := make([]halfEdge, 0, len(edges)*2)
@@ -184,6 +274,7 @@ func deriveFaces(byID map[string]Point, edges []Wall) []Ring {
 			continue
 		}
 		var pts []Point
+		pairs := make([][2]string, 0, 8)
 		cur := start
 		for {
 			if half[cur].used && cur != start {
@@ -191,6 +282,7 @@ func deriveFaces(byID map[string]Point, edges []Wall) []Ring {
 			}
 			half[cur].used = true
 			pts = append(pts, byID[half[cur].from])
+			pairs = append(pairs, keyPair(half[cur].from, half[cur].to))
 			cur = half[cur].next
 			if cur == start {
 				break
@@ -210,11 +302,17 @@ func deriveFaces(byID map[string]Point, edges []Wall) []Ring {
 			continue
 		}
 
+		// 折掉共线的中间点：平面化会在直墙里插入接点，如果照原样参与哈希，
+		// 同一间房的键会随「别人在旁边接了一面墙」而漂移，房间名字就丢了。
+		pts = collapseCollinear(pts)
 		hash := Hash(pts)
 		if seen[hash] {
 			continue
 		}
 		seen[hash] = true
+		for _, pair := range pairs {
+			used[pair] = true
+		}
 		rings = append(rings, Ring{
 			Points: pts,
 			Hash:   hash,
@@ -229,7 +327,32 @@ func deriveFaces(byID map[string]Point, edges []Wall) []Ring {
 		}
 		return rings[i].Hash < rings[j].Hash
 	})
-	return rings
+	return rings, used
+}
+
+// collapseCollinear 去掉位于两邻居连线上的中间点。
+// 顺序保持，点数不足 3 时原样返回（退化图形交给上层筛掉）。
+func collapseCollinear(pts []Point) []Point {
+	if len(pts) < 3 {
+		return pts
+	}
+	keep := make([]Point, 0, len(pts))
+	n := len(pts)
+	for i := 0; i < n; i++ {
+		prev := pts[(i-1+n)%n]
+		cur := pts[i]
+		next := pts[(i+1)%n]
+		ax, ay := cur.X-prev.X, cur.Y-prev.Y
+		bx, by := next.X-cur.X, next.Y-cur.Y
+		if math.Abs(ax*by-ay*bx) < 1e-6 && ax*bx+ay*by >= 0 {
+			continue // 共线且同向，中间点是多余的
+		}
+		keep = append(keep, cur)
+	}
+	if len(keep) < 3 {
+		return pts
+	}
+	return keep
 }
 
 func newHalfEdge(byID map[string]Point, from, to string) halfEdge {
@@ -252,8 +375,7 @@ func signedArea(pts []Point) float64 {
 // 这样同一间房无论从哪个端点开始画、按什么方向存，算出来的哈希都一样——
 // 房间命名就挂在这个哈希上，哈希一漂，名字就丢了。
 func Hash(pts []Point) string {
-	norm := make([]Point, len(pts))
-	copy(norm, pts)
+	norm := collapseCollinear(pts)
 	if signedArea(norm) < 0 {
 		for i, j := 0, len(norm)-1; i < j; i, j = i+1, j-1 {
 			norm[i], norm[j] = norm[j], norm[i]

@@ -181,3 +181,103 @@ func TestSeedUsesGoldenHash(t *testing.T) {
 		t.Fatalf("seed.sql 还留着占位哈希 demo-400x300，房间会没有名字")
 	}
 }
+
+// 在已有户型内部画两面墙，端点落在墙的中间：角落那间必须能被推出来。
+// 这正是「外墙中间接内墙」的场景，也是平面化（noding）存在的唯一理由。
+func TestTJunctionProducesCornerRoom(t *testing.T) {
+	corners := []control.Point{
+		{ID: "a", X: 0, Y: 0},
+		{ID: "b", X: 400, Y: 0},
+		{ID: "c", X: 400, Y: 300},
+		{ID: "d", X: 0, Y: 300},
+		{ID: "e", X: 0, Y: 150},   // 落在 d-a 中间
+		{ID: "f", X: 150, Y: 150}, // 内墙拐点
+		{ID: "g", X: 150, Y: 0},   // 落在 a-b 中间
+	}
+	walls := []control.Wall{
+		{A: "a", B: "b"}, {A: "b", B: "c"}, {A: "c", B: "d"}, {A: "d", B: "a"},
+		{A: "e", B: "f"}, {A: "f", B: "g"},
+	}
+
+	got := control.Derive(corners, walls)
+	if len(got.Rings) != 2 {
+		t.Fatalf("想要 2 间房（角落 2.25 + 余下 9.75），实际 %d 间：%+v", len(got.Rings), got.Rings)
+	}
+	areas := []float64{got.Rings[0].AreaM2, got.Rings[1].AreaM2}
+	if !(areas[0] == 9.75 && areas[1] == 2.25) {
+		t.Fatalf("面积不对，想要 [9.75 2.25]，实际 %v", areas)
+	}
+	if got.OpenWalls != 0 {
+		t.Fatalf("四面外墙加两面内墙都参与了闭合，OpenWalls 应为 0，实际 %d", got.OpenWalls)
+	}
+}
+
+// 平面化不能在直墙上留下痕迹：接点被折掉后，同一个房间的哈希必须和没接墙时一致，
+// 否则「别人在旁边接了一面墙」就会把房间名字弄丢。
+func TestHashStableWhenStubWallTouchesOutside(t *testing.T) {
+	corners := []control.Point{
+		{ID: "a", X: 0, Y: 0},
+		{ID: "b", X: 400, Y: 0},
+		{ID: "c", X: 400, Y: 300},
+		{ID: "d", X: 0, Y: 300},
+		{ID: "e", X: 200, Y: 0}, // 落在 a-b 中间
+		{ID: "h", X: 200, Y: -100},
+	}
+	rect := []control.Wall{{A: "a", B: "b"}, {A: "b", B: "c"}, {A: "c", B: "d"}, {A: "d", B: "a"}}
+
+	plain := control.Derive(corners[:4], rect)
+	withStub := control.Derive(corners, append(append([]control.Wall{}, rect...), control.Wall{A: "e", B: "h"}))
+
+	if len(withStub.Rings) != 1 {
+		t.Fatalf("伸到墙外的断墙不该造出新房间，实际 %d 间", len(withStub.Rings))
+	}
+	if withStub.Rings[0].Hash != plain.Rings[0].Hash {
+		t.Fatalf("哈希被墙外的接点带偏了：无接点 %s，有接点 %s",
+			plain.Rings[0].Hash, withStub.Rings[0].Hash)
+	}
+	if withStub.OpenWalls != 1 {
+		t.Fatalf("那面伸到墙外的断墙应计入 OpenWalls=1，实际 %d", withStub.OpenWalls)
+	}
+}
+
+// 端点正好落在别人的端点上时不该多切一刀（否则同一条边会被拆出零长度的段）。
+func TestEndpointOnExistingCornerIsNotSplit(t *testing.T) {
+	corners := []control.Point{
+		{ID: "a", X: 0, Y: 0}, {ID: "b", X: 400, Y: 0},
+		{ID: "c", X: 400, Y: 300}, {ID: "d", X: 0, Y: 300},
+		{ID: "e", X: 400, Y: 0}, // 与 b 同坐标，但 id 不同
+	}
+	walls := []control.Wall{
+		{A: "a", B: "b"}, {A: "b", B: "c"}, {A: "c", B: "d"}, {A: "d", B: "a"},
+		{A: "e", B: "a"},
+	}
+	got := control.Derive(corners, walls)
+	if len(got.Rings) != 1 {
+		t.Fatalf("想要 1 间房，实际 %d 间", len(got.Rings))
+	}
+}
+
+// 斜墙也要能在墙上接住：一条从底边斜切到顶边的墙应把矩形分成两间。
+func TestObliqueWallIsNoded(t *testing.T) {
+	corners := []control.Point{
+		{ID: "a", X: 0, Y: 0}, {ID: "b", X: 400, Y: 0},
+		{ID: "c", X: 400, Y: 300}, {ID: "d", X: 0, Y: 300},
+		{ID: "p", X: 100, Y: 0},   // 落在 a-b 中间
+		{ID: "q", X: 300, Y: 300}, // 落在 c-d 中间
+	}
+	walls := []control.Wall{
+		{A: "a", B: "b"}, {A: "b", B: "c"}, {A: "c", B: "d"}, {A: "d", B: "a"},
+		{A: "p", B: "q"},
+	}
+	got := control.Derive(corners, walls)
+	if len(got.Rings) != 2 {
+		t.Fatalf("斜墙应把矩形分成 2 间，实际 %d 间", len(got.Rings))
+	}
+	sum := got.Rings[0].AreaM2 + got.Rings[1].AreaM2
+	if math.Abs(sum-12) > 0.01 {
+		t.Fatalf("两间面积之和应等于 12 ㎡，实际 %.2f", sum)
+	}
+	if got.OpenWalls != 0 {
+		t.Fatalf("OpenWalls 应为 0，实际 %d", got.OpenWalls)
+	}
+}
