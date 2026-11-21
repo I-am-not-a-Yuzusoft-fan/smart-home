@@ -1,0 +1,163 @@
+openapi: 3.1.0
+info:
+  title: Smart Home API
+  version: 0.1.0
+  description: |
+    智能家居系统的 HTTP 契约。这是**唯一来源**：Go 服务端与 TypeScript 客户端都由它生成，
+    禁止手改生成物。契约随票增长——本版只覆盖 T1（骨架）用到的接口，后续票逐条补齐。
+servers:
+  - url: http://localhost:8081
+    description: 本机开发（前端经 Vite 代理访问）
+paths:
+  /api/healthz:
+    get:
+      operationId: healthz
+      summary: 健康检查
+      description: 供启动脚本与容器探活用，不鉴权、不读库。
+      security: []
+      responses:
+        "200":
+          description: 服务在跑
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, version]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+                  version:
+                    type: string
+                    example: 0.1.0
+  /api/auth/login:
+    post:
+      operationId: login
+      summary: 用账号密码换取会话 Cookie
+      description: |
+        成功后设置 `session` Cookie（httpOnly、SameSite=Lax）。口令错误与用户不存在返回同一个
+        401，避免枚举账号。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionUser"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+  /api/auth/logout:
+    post:
+      operationId: logout
+      summary: 清除会话
+      description: 服务端把 Cookie 置空并立即过期；重复调用无副作用。
+      responses:
+        "204":
+          description: 已退出
+  /api/auth/me:
+    get:
+      operationId: me
+      summary: 取当前会话的用户
+      description: 前端启动时用它判断是否已登录。
+      responses:
+        "200":
+          description: 已登录
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionUser"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: session
+      description: |
+        HMAC 签名的不透明会话 Cookie。`httpOnly` + `SameSite=Lax` + `Path=/`，
+        前端拿不到也不需要拿它的内容。实时通道复用同一个 Cookie。
+  responses:
+    Unauthenticated:
+      description: 未登录或会话无效
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InvalidRequest:
+      description: 请求体不合法
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+          examples: [zhang]
+        password:
+          type: string
+          minLength: 1
+          maxLength: 256
+    SessionUser:
+      type: object
+      required: [id, username, displayName, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        displayName:
+          type: string
+        role:
+          type: string
+          enum: [admin, member]
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: |
+                机器可读的错误码。本版只用到前三个，其余是后续票的预留：
+                UNAUTHENTICATED、VALIDATION_FAILED、INTERNAL、
+                FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、CONFIRMATION_REQUIRED、
+                CONFLICT、ROOM_NOT_CLOSED、DEVICE_UNAVAILABLE、DEVICE_TIMEOUT、
+                IMPORT_VALIDATION_FAILED
+              enum:
+                - UNAUTHENTICATED
+                - VALIDATION_FAILED
+                - INTERNAL
+                - FORBIDDEN
+                - NOT_FOUND
+                - RANGE_OUT_OF_BOUNDS
+                - CONFIRMATION_REQUIRED
+                - CONFLICT
+                - ROOM_NOT_CLOSED
+                - DEVICE_UNAVAILABLE
+                - DEVICE_TIMEOUT
+                - IMPORT_VALIDATION_FAILED
+            message:
+              type: string
+security:
+  - cookieAuth: []
