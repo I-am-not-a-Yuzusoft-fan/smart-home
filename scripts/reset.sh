@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # 一次性重建演示数据：drop schema → 建表 → seed
 # 用途：演示前恢复到已知状态；也用来验证「十秒重建」这条验收标准。
-# 前提：数据库可达（docker compose up -d postgres 之后）。
+# 前提：数据库可达（docker compose up -d db 之后）。
 set -euo pipefail
 
-DB_URL="${DB_URL:-postgres://smart:smart@localhost:5432/smart?sslmode=disable}"
+DB_URL="${DB_URL:-postgres://postgres:spike@127.0.0.1:5433/smarthome?sslmode=disable}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 start=$(date +%s)

@@ -1,0 +1,7 @@
+package: gen
+output: api/gen/server.gen.go
+generate:
+  chi-server: true
+  models: true
+output-options:
+  skip-prune: true

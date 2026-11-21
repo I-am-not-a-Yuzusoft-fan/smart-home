@@ -6,8 +6,8 @@ BEGIN;
 
 -- 账号：两种角色各一人（访客走只读大屏 /wall，不占账号）
 INSERT INTO app_user (id, username, display_name, password_hash, role) VALUES
-  ('00000000-0000-4000-8000-000000000001', 'zhang', '张先生', '$2a$12$demoplaceholderhashdemoplaceholderhashdemoplacehold', 'admin'),
-  ('00000000-0000-4000-8000-000000000002', 'li',    '李女士', '$2a$12$demoplaceholderhashdemoplaceholderhashdemoplacehold', 'member');
+  ('00000000-0000-4000-8000-000000000001', 'zhang', '张先生', '$2a$12$vCKdg0kYy.teFm0UFH6GIux0GDDz3tGuGNg2P8MI29OXdZq4ErO/O', 'admin'),
+  ('00000000-0000-4000-8000-000000000002', 'li',    '李女士', '$2a$12$vCKdg0kYy.teFm0UFH6GIux0GDDz3tGuGNg2P8MI29OXdZq4ErO/O', 'member');
 
 -- 类型模板（家具 2 个 + 设备 8 个）
 INSERT INTO item_type (key, kind, name, icons, default_width, default_depth, capabilities, driver) VALUES

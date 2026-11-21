@@ -1,0 +1,15 @@
+/* 主题层：配色与字体集中在这里，组件只引用变量，不写死颜色。
+   MVP 只建立骨架，二次元化的图标与看板娘在迭代三补。 */
+:root {
+  --color-bg: #f7f7fb;
+  --color-surface: #ffffff;
+  --color-border: #e3e3ef;
+  --color-text: #1d1d29;
+  --color-muted: #6b6b80;
+  --color-primary: #4f6bed;
+  --color-primary-weak: #e8ecff;
+  --color-danger: #d64545;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}

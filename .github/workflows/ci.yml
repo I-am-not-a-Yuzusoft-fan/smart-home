@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支只保留最新一次运行，避免排队
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend（vet、测试、生成物无漂移）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: spike
+          POSTGRES_DB: smarthome
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d smarthome"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgres://postgres:spike@127.0.0.1:5433/smarthome?sslmode=disable
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27'
+          cache-dependency-path: backend/go.sum
+      - name: 建表并写入演示数据
+        run: bash scripts/reset.sh
+      - name: go vet
+        working-directory: backend
+        run: go vet ./...
+      - name: go test（含对真库的 store 与 api 接缝）
+        working-directory: backend
+        run: go test ./... -count=1
+      - name: 生成物漂移检查
+        run: |
+          set -e
+          go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
+          (cd backend && go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.2 \
+            --config=api/oapi-codegen.yaml ../openapi.yaml)
+          # git diff 只看已跟踪文件；新增查询忘记提交生成物时它是瞎的，
+          # 所以再查一次工作区是否变脏（含未跟踪文件）。
+          if ! git diff --exit-code || [ -n "$(git status --porcelain)" ]; then
+            echo "::error::生成代码与提交的不一致（或新增了未提交的生成文件），请在本地重跑 sqlc generate 与 oapi-codegen 后提交"
+            git status --porcelain
+            exit 1
+          fi
+
+  frontend:
+    name: frontend（类型检查与构建）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx vite build
