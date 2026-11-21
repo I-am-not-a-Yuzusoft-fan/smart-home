@@ -10,10 +10,11 @@
 - 合并走 Pull Request，**合并前需他人评审**。组内至少每周一次代码互评，
   评审记录计入过程考核 —— 所以评审要留在 GitHub 上，不要只在本地口头过一遍。
 - **`main` 只接受 Pull Request，不接受任何直接推送**。仓库的 ruleset
-  `main-protected` 对 `refs/heads/main` 生效三条规则：禁止删除、禁止强推
-  （`non_fast_forward`）、**必须经由 PR 合并**（`pull_request`）。规则没有
-  绕过名单（`bypass_actors` 为空，`current_user_can_bypass: never`）——
-  包括仓库管理员在内，谁也推不上去。
+  `main-protected` 对 `refs/heads/main` 生效四条规则：禁止删除、禁止强推
+  （`non_fast_forward`）、**必须经由 PR 合并**（`pull_request`）、
+  **CI 必须全绿**（`required_status_checks`，两项：`backend（vet、测试、生成物无漂移）`
+  与 `frontend（类型检查与构建）`）。规则没有绕过名单（`bypass_actors` 为空，
+  `current_user_can_bypass: never`）——包括仓库管理员在内，谁也推不上去。
 - 合并方式用 **squash**，一个 PR 对应 `main` 上一条提交；合并后删掉源分支。
   这样 `git log` 一行一件事，回滚以 PR 为单位。
 - PR 正文要写清楚三件事：**做了什么、为什么、怎么验**；能对应到 issue 的，
