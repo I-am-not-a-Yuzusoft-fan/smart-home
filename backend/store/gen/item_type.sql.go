@@ -23,6 +23,27 @@ func (q *Queries) CountItemsByType(ctx context.Context, typeKey string) (int64, 
 	return count, err
 }
 
+const countStateRowsForKey = `-- name: CountStateRowsForKey :one
+SELECT count(*)
+FROM capability_state cs
+JOIN item i ON i.id = cs.item_id
+WHERE i.type_key = $1
+  AND cs.capability_key = $2
+`
+
+type CountStateRowsForKeyParams struct {
+	TypeKey       string `json:"type_key"`
+	CapabilityKey string `json:"capability_key"`
+}
+
+// 某个类型下、某个能力 key 已经有多少条状态行。用来阻止「删掉的能力项换种语义加回来」。
+func (q *Queries) CountStateRowsForKey(ctx context.Context, arg CountStateRowsForKeyParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countStateRowsForKey, arg.TypeKey, arg.CapabilityKey)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteItemType = `-- name: DeleteItemType :execrows
 DELETE FROM item_type WHERE key = $1
 `

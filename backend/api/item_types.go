@@ -111,6 +111,7 @@ type ItemTypeStore interface {
 	UpdateItemType(ctx context.Context, key string, patch ItemTypePatch) (ItemType, error)
 	DeleteItemType(ctx context.Context, key string) (int64, error)
 	CountItemsByType(ctx context.Context, key string) (int64, error)
+	CountStateRowsForKey(ctx context.Context, typeKey, capabilityKey string) (int64, error)
 }
 
 var capabilityKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
@@ -188,6 +189,17 @@ func (s *Server) UpdateItemType(w http.ResponseWriter, r *http.Request, key stri
 	}
 	in := applyItemTypeUpdate(existing, body)
 	if msg, ok := validateCapabilityKeysStable(existing.Capabilities, in.Capabilities); !ok {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
+		return
+	}
+	// 删掉的能力项换一种语义再加回来，是上面那条校验拦不住的：
+	// 那一步里 existing 已经不含这个 key，代码会把它当全新能力项，而 capability_state
+	// 里旧值还在——一个 bool 的 true 会被当成 number 的 1 渲染出去。
+	if msg, err := s.checkReusedCapabilityKeys(r.Context(), existing, in); err != nil {
+		s.log.ErrorContext(r.Context(), "校验能力项 key 失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "更新类型模板失败")
+		return
+	} else if msg != "" {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
 		return
 	}
@@ -602,4 +614,32 @@ func numberValue(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// checkReusedCapabilityKeys 拦住「能力项被删除后又以另一种语义加回来」。
+//
+// capability_state 的行不随类型元数据删除，所以一个已经退役的 key 在库里可能还留着历史值。
+// 若这时把它当作全新能力项加回来，旧值会被按新类型解释（bool 的 true 变成 number 的 1），
+// 前端渲染与历史曲线都会出错。历史值存在时只允许「保留 key、改 label 或关闭 writable」，
+// 不允许重新定义。
+func (s *Server) checkReusedCapabilityKeys(ctx context.Context, existing, next ItemType) (string, error) {
+	published := make(map[string]bool, len(existing.Capabilities))
+	for _, c := range existing.Capabilities {
+		published[c.Key] = true
+	}
+	for _, c := range next.Capabilities {
+		if published[c.Key] {
+			continue
+		}
+		n, err := s.itemTypes.CountStateRowsForKey(ctx, existing.Key, c.Key)
+		if err != nil {
+			return "", err
+		}
+		if n > 0 {
+			return fmt.Sprintf(
+				"能力项 %q 在历史状态里还有 %d 条值，不能作为新的能力项重新加入；要继续保留请把 key 加回去并沿用原类型，或改成只读",
+				c.Key, n), nil
+		}
+	}
+	return "", nil
 }

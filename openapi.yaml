@@ -526,7 +526,7 @@ components:
           type: string
         icons:
           type: string
-          description: 图标名（Lucide 命名空间内）
+          description: 图标名（Lucide 命名空间内）；没有图标时该字段不出现（null）
         defaultWidth:
           type: number
           format: double
@@ -562,6 +562,7 @@ components:
           maxLength: 64
         icons:
           type: string
+          description: 图标名（Lucide 命名空间内）；空串与不填等价，表示没有图标
         defaultWidth:
           type: number
           format: double
@@ -593,6 +594,7 @@ components:
           maxLength: 64
         icons:
           type: string
+          description: 图标名（Lucide 命名空间内）；空串与不填等价，表示没有图标
         defaultWidth:
           type: number
           format: double

@@ -79,6 +79,12 @@ for path in DELIVERABLES:
         report(FAIL, where, f"文件头写 v{hv}，但变更记录里最新是 v{versions[-1] if versions else '无'}")
     elif versions[-1] != hv:
         report(FAIL, where, f"文件头 v{hv} 与变更记录最后一条 v{versions[-1]} 不一致")
+    dups = sorted({v for v in versions if versions.count(v) > 1})
+    if dups:
+        report(FAIL, where,
+               "变更记录里版本号重复："
+               + "、".join("v" + v for v in dups)
+               + "（同一版本只能有一条；改了内容就升版本号，别复用旧号）")
 
 
 # ── 2. 条数属实 ────────────────────────────────────────────────
