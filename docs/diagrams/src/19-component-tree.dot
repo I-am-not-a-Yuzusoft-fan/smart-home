@@ -1,0 +1,61 @@
+// 图 19  前端组件层级与状态流（详细设计说明书 §6.2）
+digraph ComponentTree {
+  graph [rankdir=LR, fontname="PingFang SC", nodesep=0.45, ranksep=0.85, splines=polyline, bgcolor="white", pad="0.25"];
+  node  [fontname="PingFang SC", fontsize=10, shape=box, style="rounded,filled", fillcolor="#FFFFFF", color="#333333", margin="0.12,0.06"];
+  edge  [fontname="PingFang SC", fontsize=9, color="#444444", arrowsize=0.65];
+
+  App [label="App\n（根容器）", fillcolor="#EFEFEF", style="rounded,filled,bold"];
+
+  SessionGate [label="SessionGate\n登录态与角色守卫"];
+  WSBridge    [label="WSBridge\n唯一 WS 连接 / seq 断号重取"];
+  Router      [label="路由页面容器"];
+
+  PlanPage       [label="PlanPage\n平面图主页"];
+  Canvas2D       [label="Canvas2D\n墙/端点/房间/物品编辑"];
+  Canvas3D       [label="Canvas3D\n只读三维投影"];
+  Inspector      [label="Inspector\n选中项属性面板"];
+  DeviceListPage [label="DeviceListPage\n设备列表与筛选"];
+  ControlPanel   [label="ControlPanel\n控制面板"];
+  CapabilityForm [label="CapabilityForm\n能力元数据动态表单", fillcolor="#F5F8FF"];
+  ModeEditor     [label="ModeEditor\n步骤树编排器"];
+  WallPage       [label="WallPage\n免登录只读大屏"];
+
+  subgraph cluster_stores {
+    label="前端状态存储（Zustand）";
+    fontname="PingFang SC";
+    fontsize=10;
+    style="dashed,rounded";
+    color="#888888";
+    useSession    [label="useSession\n登录态 / 角色", fillcolor="#FFF9E6"];
+    useGraphStore [label="useGraphStore\n编辑态（墙/物品/场景）", fillcolor="#FFF9E6"];
+    useLiveStore  [label="useLiveStore\n直播态（仅 WS 写入）", fillcolor="#E8F5E9"];
+  }
+
+  App -> SessionGate;
+  App -> WSBridge;
+  App -> Router;
+
+  Router -> PlanPage;
+  Router -> DeviceListPage;
+  Router -> ControlPanel;
+  Router -> ModeEditor;
+  Router -> WallPage;
+
+  PlanPage -> Canvas2D;
+  PlanPage -> Canvas3D;
+  PlanPage -> Inspector;
+  Inspector -> CapabilityForm;
+  ControlPanel -> CapabilityForm;
+
+  // 状态流依赖
+  edge [style=dashed, color="#2B6CB0"];
+  useSession -> SessionGate [label="鉴权"];
+  WSBridge -> useLiveStore [label="唯一写入"];
+  useGraphStore -> PlanPage [label="同源数据"];
+  useLiveStore -> PlanPage;
+  useGraphStore -> DeviceListPage;
+  useLiveStore -> DeviceListPage;
+  useLiveStore -> ControlPanel;
+  useGraphStore -> ModeEditor;
+  useLiveStore -> WallPage [label="只读"];
+}

@@ -1,14 +1,15 @@
 // 图 5  分层数据流图（DFD 第 1 层）
+// 外部实体与输入/输出流与顶层 DFD（00-dfd-top.dot）严格保持父子平衡。
 digraph DFD {
-  graph [rankdir=TB, fontname="PingFang SC", nodesep=0.6, ranksep=1.1, splines=spline, bgcolor="white"];
+  graph [rankdir=TB, fontname="PingFang SC", nodesep=1.0, ranksep=1.5, splines=spline, bgcolor="white"];
   node  [fontname="PingFang SC", fontsize=11, margin="0.12,0.06"];
   edge  [fontname="PingFang SC", fontsize=9, color="#444444", arrowsize=0.6, penwidth=0.9];
 
-  // 第一列：外部实体
+  // 第一行：外部实体
   node [shape=box, style="filled", fillcolor="#E8E8E8"];
   用户; 环境传感器; 设备执行器;
 
-  // 第二列：加工
+  // 第二行：加工
   node [shape=ellipse, style="filled", fillcolor="#FFFFFF"];
   P1 [label="1\n物品与平面图管理"];
   P2 [label="2\n类型模板管理"];
@@ -16,7 +17,7 @@ digraph DFD {
   P4 [label="4\n场景编排与执行"];
   P5 [label="5\n环境自适应调控"];
 
-  // 第三列：数据存储
+  // 第三行：数据存储
   node [shape=box, style="filled", fillcolor="#F7F7F7"];
   D1 [label="D1 物品与平面图"];
   D2 [label="D2 类型模板"];
@@ -48,10 +49,12 @@ digraph DFD {
 
   P3 -> 设备执行器 [label="设备指令"];
   设备执行器 -> P3 [label="回显值/结果"];
-  P4 -> P3 [label="指令序列"];
+  P4 -> P3 [label="指令"];
   环境传感器 -> P5 [label="温湿度/光照/人体"];
-  P5 -> P3 [label="自动指令"];
-  P3 -> P5 [label="当前状态"];
-  P3 -> 用户 [label="状态推送"];
+  P5 -> P3 [headlabel="自动指令"];
+  P3 -> P5 [headlabel="当前状态"];
 
+  P3 -> 用户 [label="状态推送 / 历史曲线", style=dashed];
+  P4 -> 用户 [label="执行反馈", style=dashed];
+  P5 -> 用户 [label="调节依据说明", style=dashed];
 }

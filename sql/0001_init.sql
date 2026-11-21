@@ -135,7 +135,7 @@ CREATE TABLE command_log (
     item_id         uuid,
     capability_key  text,
     target          jsonb,
-    status          text NOT NULL CHECK (status IN ('ok', 'failed', 'timeout')),
+    status          text NOT NULL CHECK (status IN ('ok', 'failed', 'timeout', 'rejected')),
     error           text,
     source          text NOT NULL CHECK (source IN ('manual', 'automation', 'device', 'timeout')),
     created_by      uuid REFERENCES app_user (id) ON DELETE SET NULL,
