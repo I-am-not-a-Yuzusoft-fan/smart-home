@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
@@ -92,6 +93,13 @@ func (e Healthz200JSONResponseBodyStatus) Valid() bool {
 	}
 }
 
+// Corner defines model for Corner.
+type Corner struct {
+	Id openapi_types.UUID `json:"id"`
+	X  float64            `json:"x"`
+	Y  float64            `json:"y"`
+}
+
 // Error defines model for Error.
 type Error struct {
 	Error struct {
@@ -120,6 +128,12 @@ type LoginRequest struct {
 	Username string `json:"username"`
 }
 
+// Plan defines model for Plan.
+type Plan struct {
+	Corners []Corner `json:"corners"`
+	Walls   []Wall   `json:"walls"`
+}
+
 // SessionUser defines model for SessionUser.
 type SessionUser struct {
 	DisplayName string             `json:"displayName"`
@@ -130,6 +144,33 @@ type SessionUser struct {
 
 // SessionUserRole defines model for SessionUser.Role.
 type SessionUserRole string
+
+// Wall defines model for Wall.
+type Wall struct {
+	// AId 起点端点 id
+	AId       openapi_types.UUID `json:"aId"`
+	Ax        float64            `json:"ax"`
+	Ay        float64            `json:"ay"`
+	BId       openapi_types.UUID `json:"bId"`
+	Bx        float64            `json:"bx"`
+	By        float64            `json:"by"`
+	Id        openapi_types.UUID `json:"id"`
+	Thickness float64            `json:"thickness"`
+}
+
+// WallInput defines model for WallInput.
+type WallInput struct {
+	// Ax 起点 x，单位厘米，原点在平面图左上角（0–5000，超出会被拒）
+	Ax float64 `json:"ax"`
+	Ay float64 `json:"ay"`
+
+	// Bx 终点 x（0–5000，超出会被拒）
+	Bx float64 `json:"bx"`
+	By float64 `json:"by"`
+
+	// Thickness 墙厚（厘米），省略时为 10
+	Thickness *float64 `json:"thickness,omitempty"`
+}
 
 // InvalidRequest defines model for InvalidRequest.
 type InvalidRequest = Error
@@ -142,6 +183,9 @@ type Healthz200JSONResponseBodyStatus string
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
+
+// CreateWallJSONRequestBody defines body for CreateWall for application/json ContentType.
+type CreateWallJSONRequestBody = WallInput
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -157,6 +201,15 @@ type ServerInterface interface {
 	// Healthz 健康检查
 	// (GET /api/healthz)
 	Healthz(w http.ResponseWriter, r *http.Request)
+	// GetPlan 取当前户型（端点与墙）
+	// (GET /api/plan)
+	GetPlan(w http.ResponseWriter, r *http.Request)
+	// CreateWall 画一面墙
+	// (POST /api/walls)
+	CreateWall(w http.ResponseWriter, r *http.Request)
+	// DeleteWall 删除一面墙
+	// (DELETE /api/walls/{wallId})
+	DeleteWall(w http.ResponseWriter, r *http.Request, wallId openapi_types.UUID)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -184,6 +237,24 @@ func (_ Unimplemented) Me(w http.ResponseWriter, r *http.Request) {
 // Healthz 健康检查
 // (GET /api/healthz)
 func (_ Unimplemented) Healthz(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetPlan 取当前户型（端点与墙）
+// (GET /api/plan)
+func (_ Unimplemented) GetPlan(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// CreateWall 画一面墙
+// (POST /api/walls)
+func (_ Unimplemented) CreateWall(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// DeleteWall 删除一面墙
+// (DELETE /api/walls/{wallId})
+func (_ Unimplemented) DeleteWall(w http.ResponseWriter, r *http.Request, wallId openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -243,6 +314,60 @@ func (siw *ServerInterfaceWrapper) Healthz(w http.ResponseWriter, r *http.Reques
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Healthz(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetPlan operation middleware
+func (siw *ServerInterfaceWrapper) GetPlan(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPlan(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateWall operation middleware
+func (siw *ServerInterfaceWrapper) CreateWall(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateWall(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteWall operation middleware
+func (siw *ServerInterfaceWrapper) DeleteWall(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "wallId" -------------
+	var wallId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "wallId", chi.URLParam(r, "wallId"), &wallId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "wallId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteWall(w, r, wallId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -376,6 +501,15 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/auth/me", wrapper.Me)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/plan", wrapper.GetPlan)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/walls", wrapper.CreateWall)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/api/walls/{wallId}", wrapper.DeleteWall)
 	})
 
 	return r

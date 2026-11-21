@@ -1,7 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Circle, Layer, Line, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
-import { logout, type SessionUser } from '../api/client.ts'
+import {
+  ApiError,
+  createWall,
+  deleteWall,
+  getPlan,
+  logout,
+  type Corner,
+  type Plan,
+  type SessionUser,
+  type Wall,
+} from '../api/client.ts'
 
 type Props = {
   user: SessionUser
@@ -9,28 +19,48 @@ type Props = {
 }
 
 const GRID = 20
+/** 1 厘米 = 1 像素。户型按厘米存，画布也按厘米画，中间不做单位换算。 */
+const PX_PER_CM = 1
+/** 端点吸附半径（像素）。12 px 约等于"手指能对准"的宽度。 */
+const SNAP_PX = 12
+/** 短于这个长度的拖拽当成误触，不建墙。 */
+const MIN_DRAG_PX = 8
 
-type Marker = { x: number; y: number }
+type Draft = { ax: number; ay: number; bx: number; by: number }
 
 /**
  * 平面图主页（首屏）。
  *
- * T1 只承诺「能登录、能看到一个空平面图」。墙、房间、家具在 T2–T7 逐步长进来，
- * 所以这里先画一张栅格底图 + 一句下一步提示，避免假装已经有了功能。
+ * T2：拖出墙、端点吸附、长度显示、刷新后仍在、可删除。
+ * 坐标一律按厘米与后端对话；屏幕上 1 cm 画 1 px。
  */
 export default function PlanPage({ user, onSignedOut }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ width: 800, height: 600 })
+  const [plan, setPlan] = useState<Plan>({ corners: [], walls: [] })
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [markers, setMarkers] = useState<Marker[]>([])
+  const [saving, setSaving] = useState(false)
+  const [draft, setDraft] = useState<Draft | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // 只接受"最后一次请求"的响应：连拖两面墙时，先发的请求可能后到，
+  // 若整份覆盖就会把后画的墙抹掉（刷新才回来，用户以为丢了）。
+  const writeSeq = useRef(0)
 
-  // T1 的最小交互：点一下画布就在那里落一个标记，用来证明
-  // 画布真的接上了命中检测（也方便后面把"点"换成"画墙"的起点）。
-  function onStageClick(e: Konva.KonvaEventObject<MouseEvent>) {
-    const pointer = e.target.getStage()?.getPointerPosition()
-    if (!pointer) return
-    setMarkers((prev) => [...prev, { x: pointer.x, y: pointer.y }])
-  }
+  const load = useCallback(async () => {
+    try {
+      setPlan(await getPlan())
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '读取户型失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
 
   useEffect(() => {
     const host = hostRef.current
@@ -42,6 +72,118 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     observer.observe(host)
     return () => observer.disconnect()
   }, [])
+
+  // 删墙也支持键盘：选中后按 Delete / Backspace
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (selectedId) void removeWall(selectedId)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // removeWall 每次渲染都是新函数，但内部只用 setState 与 props，闭包安全
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId])
+
+  // 只认"被墙引用"的端点：删墙后留下的孤立端点既不该画出来，也不该被吸附——
+  // 否则用户会吸到一个看不见的点上，还以为是 bug。
+  const liveCorners = plan.corners.filter((c) =>
+    plan.walls.some((w) => w.aId === c.id || w.bId === c.id),
+  )
+
+  /** 把屏幕坐标吸附到最近的端点；没有就四舍五入到 1 cm。 */
+  function snap(x: number, y: number): { x: number; y: number } {
+    let best = null as { x: number; y: number } | null
+    let bestDist = SNAP_PX
+    for (const c of liveCorners) {
+      const d = Math.hypot(c.x - x, c.y - y)
+      if (d <= bestDist) {
+        bestDist = d
+        best = { x: c.x, y: c.y }
+      }
+    }
+    if (best) return best
+    return { x: Math.round(x), y: Math.round(y) }
+  }
+
+  function pointer(): { x: number; y: number } | null {
+    const stage = stageRef.current
+    const p = stage?.getPointerPosition()
+    if (!p) return null
+    return { x: p.x / PX_PER_CM, y: p.y / PX_PER_CM }
+  }
+
+  const stageRef = useRef<Konva.Stage>(null)
+
+  function onMouseDown() {
+    const p = pointer()
+    if (!p) return
+    const s = snap(p.x, p.y)
+    setDraft({ ax: s.x, ay: s.y, bx: s.x, by: s.y })
+    setSelectedId(null)
+  }
+
+  function onMouseMove() {
+    if (!draft) return
+    const p = pointer()
+    if (!p) return
+    const s = snap(p.x, p.y)
+    setDraft((d) => (d ? { ...d, bx: s.x, by: s.y } : d))
+  }
+
+  async function onMouseUp() {
+    const d = draft
+    setDraft(null)
+    if (!d) return
+    // 终点要用松手那一刻的指针，不能用最后一次 mousemove 的位置：
+    // 浏览器可能在松手前不再发 mousemove，那样墙会短一截、四个角对不上。
+    const p = pointer()
+    const end = p ? snap(p.x, p.y) : { x: d.bx, y: d.by }
+    const wall = { ax: d.ax, ay: d.ay, bx: end.x, by: end.y }
+    if (Math.hypot(wall.bx - wall.ax, wall.by - wall.ay) < MIN_DRAG_PX / PX_PER_CM) return
+    await submitWall(wall)
+  }
+
+  async function submitWall(d: Draft) {
+    const seq = ++writeSeq.current
+    setSaving(true)
+    try {
+      const next = await createWall({ ax: d.ax, ay: d.ay, bx: d.bx, by: d.by })
+      if (seq === writeSeq.current) {
+        setPlan(next)
+        setError(null)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function removeWall(id: string) {
+    const seq = ++writeSeq.current
+    setSaving(true)
+    try {
+      await deleteWall(id)
+    } catch (e) {
+      // 404 说明库里本来就没有（双击、连按 Delete、别人先删了）：
+      // 当作成功继续本地清理，否则会出现"库里没了、画布还在"。
+      if (!(e instanceof ApiError && e.status === 404)) {
+        setError(e instanceof Error ? e.message : '删除失败')
+        setSaving(false)
+        return
+      }
+    }
+    if (seq === writeSeq.current) {
+      setPlan((prev) => ({ ...prev, walls: prev.walls.filter((w) => w.id !== id) }))
+      setSelectedId(null)
+      setError(null)
+    }
+    setSaving(false)
+  }
+
 
   async function onLogout() {
     try {
@@ -60,6 +202,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     gridLines.push(<Line key={`h${y}`} points={[0, y, size.width, y]} stroke="#e8e8f2" strokeWidth={1} />)
   }
 
+  const selected = plan.walls.find((w) => w.id === selectedId) ?? null
+
   return (
     <div className="flex h-full flex-col">
       <header
@@ -69,19 +213,21 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         <div className="flex items-baseline gap-3">
           <h1 className="text-base font-semibold">平面图</h1>
           <span className="text-xs" style={{ color: 'var(--color-muted)' }}>
-            点画布可落标记；画墙、房间与布放将在后续版本补齐
+            {loading ? '读取中…' : `按住并拖动可画墙（${plan.walls.length} 面）；点墙选中后按 Delete 删除`}
           </span>
-          {markers.length > 0 && (
+          {selected && (
             <button
-              onClick={() => setMarkers([])}
+              onClick={() => void removeWall(selected.id)}
+              disabled={saving}
               className="px-2 py-1 text-xs"
               style={{
-                border: '1px solid var(--color-border)',
+                border: '1px solid var(--color-danger)',
                 borderRadius: 'var(--radius-sm)',
-                background: 'var(--color-bg)',
+                color: 'var(--color-danger)',
+                background: 'transparent',
               }}
             >
-              清除标记
+              删除这面墙（{formatLength(selected)}）
             </button>
           )}
         </div>
@@ -113,28 +259,118 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       )}
 
       <main ref={hostRef} className="relative flex-1 overflow-hidden">
-        <Stage width={size.width} height={size.height} onClick={onStageClick}>
+        <Stage
+          ref={stageRef}
+          width={size.width}
+          height={size.height}
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={() => void onMouseUp()}
+          onMouseLeave={() => setDraft(null)}
+          style={{ cursor: 'crosshair' }}
+        >
           <Layer>{gridLines}</Layer>
+
           <Layer>
-            {markers.map((m, i) => (
-              <Circle key={i} x={m.x} y={m.y} radius={5} fill="#4f6bed" opacity={0.85} />
+            {plan.walls.map((w) => (
+              <WallShape
+                key={w.id}
+                wall={w}
+                selected={w.id === selectedId}
+                onSelect={() => setSelectedId(w.id)}
+              />
             ))}
+            {draft && (
+              <Line
+                points={[
+                  draft.ax * PX_PER_CM,
+                  draft.ay * PX_PER_CM,
+                  draft.bx * PX_PER_CM,
+                  draft.by * PX_PER_CM,
+                ]}
+                stroke="#4f6bed"
+                strokeWidth={10}
+                opacity={0.4}
+                lineCap="round"
+              />
+            )}
           </Layer>
-          <Layer>
-            <Text
-              x={32}
-              y={32}
-              text={
-                markers.length === 0
-                  ? '空地。点一下画布可落标记；T2 起在这里拖出墙线，闭合后自动生成房间。'
-                  : `已落 ${markers.length} 个标记（最近一个在 ${Math.round(markers[markers.length - 1].x)}, ${Math.round(markers[markers.length - 1].y)}）。T2 起这里改成画墙。`
-              }
-              fontSize={14}
-              fill="#6b6b80"
-            />
+
+          <Layer listening={false}>
+            {liveCorners.map((c) => (
+              <Circle key={c.id} x={c.x * PX_PER_CM} y={c.y * PX_PER_CM} radius={3} fill="#8b8b9e" />
+            ))}
+            {draft && (
+              <Text
+                x={((draft.ax + draft.bx) / 2) * PX_PER_CM + 8}
+                y={((draft.ay + draft.by) / 2) * PX_PER_CM - 8}
+                text={formatCm(Math.hypot(draft.bx - draft.ax, draft.by - draft.ay))}
+                fontSize={12}
+                fill="#4f6bed"
+              />
+            )}
+            {!loading && plan.walls.length === 0 && (
+              <Text
+                x={32}
+                y={32}
+                text="空地。在画布上按住并拖动，画下第一面墙；端点会自动吸附到附近的墙端。"
+                fontSize={14}
+                fill="#6b6b80"
+              />
+            )}
           </Layer>
         </Stage>
+
+        {saving && (
+          <div
+            className="absolute right-4 bottom-4 px-3 py-1 text-xs"
+            style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 6 }}
+          >
+            保存中…
+          </div>
+        )}
       </main>
     </div>
   )
+}
+
+function WallShape({ wall, selected, onSelect }: { wall: Wall; selected: boolean; onSelect: () => void }) {
+  const midX = ((wall.ax + wall.bx) / 2) * PX_PER_CM
+  const midY = ((wall.ay + wall.by) / 2) * PX_PER_CM
+  // 标签挪到墙的法线方向一点，避免压在墙线上
+  const dx = (wall.bx - wall.ax) * PX_PER_CM
+  const dy = (wall.by - wall.ay) * PX_PER_CM
+  const len = Math.hypot(dx, dy) || 1
+  const nx = (-dy / len) * 14
+  const ny = (dx / len) * 14
+
+  return (
+    <>
+      <Line
+        points={[wall.ax * PX_PER_CM, wall.ay * PX_PER_CM, wall.bx * PX_PER_CM, wall.by * PX_PER_CM]}
+        stroke={selected ? '#4f6bed' : '#3a3a4d'}
+        strokeWidth={Math.max(wall.thickness, 4) * PX_PER_CM}
+        lineCap="round"
+        onClick={(e) => {
+          e.cancelBubble = true
+          onSelect()
+        }}
+        onTap={(e) => {
+          e.cancelBubble = true
+          onSelect()
+        }}
+      />
+      <Text x={midX + nx} y={midY + ny - 6} text={formatCm(len)} fontSize={12} fill="#5a5a70" />
+    </>
+  )
+}
+
+/** 长度显示：小于 1 m 用厘米，否则用米（两位小数），都带单位。 */
+function formatCm(cm: number): string {
+  if (cm < 100) return `${Math.round(cm)} cm`
+  return `${(cm / 100).toFixed(2)} m`
+}
+
+function formatLength(w: Wall): string {
+  return formatCm(Math.hypot(w.bx - w.ax, w.by - w.ay))
 }
