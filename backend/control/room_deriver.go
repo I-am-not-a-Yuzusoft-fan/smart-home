@@ -41,7 +41,8 @@ type Result struct {
 // Derive 从端点与墙推房间。
 //
 // 做法是平面图上的半边遍历：每条墙拆成两条有向半边，在每个端点按极角排序；
-// 从一条未访问的半边出发，每步都取「最右转」的后继，绕回起点就是一个面。
+// 从一条未访问的半边出发，每步取反向半边的顺时针前驱（内部恒在左侧），
+// 绕回起点就是一个面。
 // 面积符号把外环（无穷面）与内面区分开，只留内面。
 //
 // 先用「剪枝」去掉悬空墙：一端没有别的墙接续的墙围不出任何东西，
@@ -70,7 +71,9 @@ func Derive(corners []Point, walls []Wall) Result {
 	kept, pruned := pruneDangling(edges)
 
 	rings := deriveFaces(byID, kept)
-	return Result{Rings: rings, OpenWalls: pruned}
+	// 剪枝只处理悬空墙；连接两间房子的「桥」不是悬空的，却也围不出房间，
+	// 用「没出现在任何环上」补上这一类，否则 openWalls 会漏报。
+	return Result{Rings: rings, OpenWalls: pruned + unusedEdges(kept, rings)}
 }
 
 // pruneDangling 反复删掉一端只接一条墙的墙，返回剩下的墙与被删掉的数量。
@@ -155,8 +158,9 @@ func deriveFaces(byID map[string]Point, edges []Wall) []Ring {
 		})
 	}
 
-	// 每条半边 i 的后继：先找它的反向半边 rev，再取 rev 在 outbound 里的
-	// 前一条（即顺时针方向的下一条）。这条规则保证绕出的面把内部留在同一侧。
+	// 每条半边 i 的后继：先找它的反向半边 rev，再取 rev 在 outbound（按极角升序）
+	// 里的前一条——也就是顺时针方向的下一条。这条规则保证绕出的面把内部留在左侧，
+	// 于是有界内面的有符号面积为正（见下方 deriveFaces 的筛环）。
 	position := map[[2]string]int{}
 	for v, idx := range outbound {
 		for pos, i := range idx {
@@ -200,7 +204,7 @@ func deriveFaces(byID map[string]Point, edges []Wall) []Ring {
 		}
 
 		signed := signedArea(pts)
-		// 「最右转」遍历下，有界内面的有符号面积为正，绕外圈的那个面为负。
+		// 沿「内部在左」的方向绕行时，有界内面的有符号面积为正，绕外圈的那个面为负。
 		// 只留有界面；外环丢了正是我们想要的（它不是房间）。
 		if signed <= 0 {
 			continue
@@ -279,4 +283,29 @@ func less(a, b Point) bool {
 		return a.X < b.X
 	}
 	return a.Y < b.Y
+}
+
+// unusedEdges 数出没有落在任何一个环边上的墙。
+func unusedEdges(edges []Wall, rings []Ring) int {
+	used := make(map[[2]string]bool, len(edges)*2)
+	for _, ring := range rings {
+		for i, p := range ring.Points {
+			q := ring.Points[(i+1)%len(ring.Points)]
+			used[keyPair(p.ID, q.ID)] = true
+		}
+	}
+	n := 0
+	for _, e := range edges {
+		if !used[keyPair(e.A, e.B)] {
+			n++
+		}
+	}
+	return n
+}
+
+func keyPair(a, b string) [2]string {
+	if a < b {
+		return [2]string{a, b}
+	}
+	return [2]string{b, a}
 }

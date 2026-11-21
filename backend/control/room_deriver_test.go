@@ -2,6 +2,8 @@ package control_test
 
 import (
 	"math"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
@@ -130,5 +132,52 @@ func TestDeriveDisconnectedRooms(t *testing.T) {
 	got := control.Derive(corners, walls)
 	if len(got.Rings) != 2 {
 		t.Fatalf("两个独立矩形应推出 2 个房间，实际 %d", len(got.Rings))
+	}
+}
+
+// 哈希是 room_name 的主键：算法或坐标格式一变，所有房间命名会静默失效。
+// 这个用例把「400×300 矩形 = 这个哈希」钉死，seed.sql 里的 room_name 用的就是它。
+func TestHashGolden(t *testing.T) {
+	ring := []control.Point{{X: 0, Y: 0}, {X: 400, Y: 0}, {X: 400, Y: 300}, {X: 0, Y: 300}}
+	const want = "2a6c15cc655eea79"
+	if got := control.Hash(ring); got != want {
+		t.Fatalf("哈希变了（%s != %s）。room_name 的键是这个值，改了就要同步迁移数据", got, want)
+	}
+}
+
+// 两间房之间用一面墙连起来（桥）：房间照旧两个，但那面墙没有参与任何闭合区域，
+// 必须计进 openWalls —— 否则前端会显示「房间都好了」，而实际上有一条墙是画废的。
+func TestDeriveBridgeWallIsCountedAsOpen(t *testing.T) {
+	corners := []control.Point{
+		pt("a", 0, 0), pt("b", 100, 0), pt("c", 100, 100), pt("d", 0, 100),
+		pt("e", 300, 0), pt("f", 400, 0), pt("g", 400, 100), pt("h", 300, 100),
+	}
+	walls := []control.Wall{
+		{A: "a", B: "b"}, {A: "b", B: "c"}, {A: "c", B: "d"}, {A: "d", B: "a"},
+		{A: "e", B: "f"}, {A: "f", B: "g"}, {A: "g", B: "h"}, {A: "h", B: "e"},
+		{A: "c", B: "e"}, // 桥：两端度数都是 3，剪枝动不了它
+	}
+	got := control.Derive(corners, walls)
+	if len(got.Rings) != 2 {
+		t.Fatalf("两个房间应推出 2 个环，实际 %d", len(got.Rings))
+	}
+	if got.OpenWalls != 1 {
+		t.Errorf("桥应计入未围合的墙，实际 %d", got.OpenWalls)
+	}
+}
+
+// seed 里的 room_name 用字面量哈希挂名字。哈希一改，演示房间就没名字了，
+// 而且这种回归只有真的打开页面才看得见——所以在这里对文件本身做一次比对。
+func TestSeedUsesGoldenHash(t *testing.T) {
+	raw, err := os.ReadFile("../../sql/seed.sql")
+	if err != nil {
+		t.Fatalf("读不到 sql/seed.sql：%v", err)
+	}
+	const want = "2a6c15cc655eea79"
+	if !strings.Contains(string(raw), want) {
+		t.Fatalf("seed.sql 里没有 %s：房间命名会对不上推导出来的哈希", want)
+	}
+	if strings.Contains(string(raw), "demo-400x300") {
+		t.Fatalf("seed.sql 还留着占位哈希 demo-400x300，房间会没有名字")
 	}
 }

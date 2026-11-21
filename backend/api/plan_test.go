@@ -9,22 +9,25 @@ import (
 )
 
 // planBody 只取测试要用的字段，避免和生成的模型耦合。
+type planRoom struct {
+	Hash   string  `json:"hash"`
+	AreaM2 float64 `json:"areaM2"`
+	Ring   []struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	} `json:"ring"`
+	Name *string `json:"name"`
+	Kind *string `json:"kind"`
+}
+
 type planBody struct {
 	Corners []struct {
 		ID string  `json:"id"`
 		X  float64 `json:"x"`
 		Y  float64 `json:"y"`
 	} `json:"corners"`
-	Rooms []struct {
-		Hash   string  `json:"hash"`
-		AreaM2 float64 `json:"areaM2"`
-		Ring   []struct {
-			X float64 `json:"x"`
-			Y float64 `json:"y"`
-		} `json:"ring"`
-		Name *string `json:"name"`
-	} `json:"rooms"`
-	OpenWalls int `json:"openWalls"`
+	Rooms     []planRoom `json:"rooms"`
+	OpenWalls int        `json:"openWalls"`
 	Walls     []struct {
 		ID  string  `json:"id"`
 		AID string  `json:"aId"`
@@ -219,7 +222,23 @@ func TestPlanDerivesRoomsFromWalls(t *testing.T) {
 	corners := []pt{{2000, 2000}, {2200, 2000}, {2200, 2200}, {2000, 2200}}
 	walls := [][2]int{{0, 1}, {1, 2}, {2, 3}, {3, 0}}
 
-	created := make([]string, 0, 4)
+	// 先登记清理：中间任何一条 t.Fatalf 都会提前返回，遗留的墙会让下次运行
+	// 的 before.Rooms / before.OpenWalls 全变，本地和 CI 都会莫名其妙地挂。
+	var created []string
+	t.Cleanup(func() {
+		for _, id := range created {
+			do(t, h, http.MethodDelete, "/api/walls/"+id, "", cookie)
+		}
+		// POST 失败时 created 可能不全，按区域兜底再删一遍
+		if resp := do(t, h, http.MethodGet, "/api/plan", "", cookie); resp.Code == http.StatusOK {
+			for _, w := range decodePlan(t, resp.Body.Bytes()).Walls {
+				if inRect(w.AX, w.AY, w.BX, w.BY) {
+					do(t, h, http.MethodDelete, "/api/walls/"+w.ID, "", cookie)
+				}
+			}
+		}
+	})
+
 	var last planBody
 	for _, w := range walls {
 		a, b := corners[w[0]], corners[w[1]]
@@ -239,11 +258,6 @@ func TestPlanDerivesRoomsFromWalls(t *testing.T) {
 	if len(created) != 4 {
 		t.Fatalf("应建出 4 面墙，实际 %d", len(created))
 	}
-	t.Cleanup(func() {
-		for _, id := range created {
-			do(t, h, http.MethodDelete, "/api/walls/"+id, "", cookie)
-		}
-	})
 
 	if got, want := len(last.Rooms), len(before.Rooms)+1; got != want {
 		t.Fatalf("闭合后房间数应 %d，实际 %d", want, got)

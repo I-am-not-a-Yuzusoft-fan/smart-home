@@ -177,10 +177,19 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         return
       }
     }
+    // 房间是后端每次读时重算的，本地只删一面墙的话 rooms/openWalls 会停在旧值：
+    // 删掉矩形的一条边，房间填充还在、提示也不出现。所以删完重新取一次整份户型。
     if (seq === writeSeq.current) {
-      setPlan((prev) => ({ ...prev, walls: prev.walls.filter((w) => w.id !== id) }))
-      setSelectedId(null)
-      setError(null)
+      try {
+        const next = await getPlan()
+        if (seq === writeSeq.current) {
+          setPlan(next)
+          setSelectedId(null)
+          setError(null)
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '刷新户型失败')
+      }
     }
     setSaving(false)
   }
