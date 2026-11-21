@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   description: |
     智能家居系统的 HTTP 契约。这是**唯一来源**：Go 服务端与 TypeScript 客户端都由它生成，
-    禁止手改生成物。契约随票增长——本版只覆盖 T1（骨架）用到的接口，后续票逐条补齐。
+    禁止手改生成物。契约随票增长——本版覆盖 T1–T3 与 T6 用到的接口，后续票逐条补齐。
 servers:
   - url: http://localhost:8081
     description: 本机开发（前端经 Vite 代理访问）
@@ -150,6 +150,107 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/item-types:
+    get:
+      operationId: listItemTypes
+      summary: 列出全部类型模板
+      description: |
+        返回内置类型与用户新建的类型。能力元数据（`capabilities`）是前端动态表单、
+        后端校验、模拟器行为与图标映射的唯一来源。
+      responses:
+        "200":
+          description: 类型模板列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ItemType"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+    post:
+      operationId: createItemType
+      summary: 新建类型模板（仅管理员）
+      description: |
+        `key` 是类型的稳定身份，创建后不得重命名。能力项的值域在应用层按元数据校验，
+        不写入数据库 CHECK 约束——新增类型不应改表。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItemTypeInput"
+      responses:
+        "201":
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ItemType"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/item-types/{key}:
+    patch:
+      operationId: updateItemType
+      summary: 修改类型模板（仅管理员）
+      description: |
+        `key` 不可修改。只修改 `capabilities` 的结构时，服务端递增 `capabilitiesVersion`。
+        `driver` 传空字符串表示清除；省略表示保持不变。
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItemTypeUpdate"
+      responses:
+        "200":
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ItemType"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteItemType
+      summary: 删除类型模板（仅管理员）
+      description: 仍被物品引用的类型不允许删除，返回 409 并说明引用数量。
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: 已删除
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -168,6 +269,24 @@ components:
             $ref: "#/components/schemas/Error"
     InvalidRequest:
       description: 请求体不合法
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: 当前账号无此权限
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: 目标不存在
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: 与现有数据冲突（key 重复、类型仍被引用等）
       content:
         application/json:
           schema:
@@ -337,6 +456,161 @@ components:
           type: string
           enum: [living, bedroom, kitchen, bathroom, study, hallway]
           description: 房间用途；还没指定时为空
+    CapabilityOption:
+      type: object
+      required: [value, label]
+      additionalProperties: false
+      properties:
+        value:
+          type: string
+          description: 存进能力值里的机器标识，如 cool
+        label:
+          type: string
+          description: 界面显示的中文名，如 制冷
+    Capability:
+      type: object
+      required: [key, name, type, writable, history]
+      additionalProperties: false
+      description: |
+        能力项是类型级定义，不是实例值。值域校验读这里，不写数据库 CHECK。
+      properties:
+        key:
+          type: string
+          pattern: "^[a-z][a-z0-9_]{0,63}$"
+          description: 稳定标识，发布后不得重命名
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        type:
+          type: string
+          enum: [bool, number, enum, string]
+        unit:
+          type: string
+          description: 单位，如 %、℃、K
+        min:
+          type: number
+          format: double
+        max:
+          type: number
+          format: double
+        step:
+          type: number
+          format: double
+          description: 数值步长；省略表示不限制
+        options:
+          type: array
+          description: type=enum 时必填，且不能为空
+          items:
+            $ref: "#/components/schemas/CapabilityOption"
+        writable:
+          type: boolean
+          description: 用户是否可以下发命令修改
+        default:
+          description: 默认值；类型必须与 type 一致，枚举必须命中 options
+        history:
+          type: boolean
+          description: 值变化时是否写 state_history
+    ItemType:
+      type: object
+      required: [key, kind, name, defaultWidth, defaultDepth, capabilities, capabilitiesVersion]
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+          description: 稳定标识，创建后不可重命名
+        kind:
+          type: string
+          enum: [furniture, device]
+        name:
+          type: string
+        icons:
+          type: string
+          description: 图标名（Lucide 命名空间内）
+        defaultWidth:
+          type: number
+          format: double
+          description: 平面图默认宽度（厘米）
+        defaultDepth:
+          type: number
+          format: double
+          description: 平面图默认深度（厘米）
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Capability"
+        capabilitiesVersion:
+          type: integer
+          description: 能力结构版本；capabilities 结构变化时由服务端递增
+        driver:
+          type: string
+          description: 仅 device 可填；指向设备层适配器
+    ItemTypeInput:
+      type: object
+      required: [key, kind, name, capabilities]
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+          pattern: "^[a-z][a-z0-9_]{0,63}$"
+        kind:
+          type: string
+          enum: [furniture, device]
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        icons:
+          type: string
+        defaultWidth:
+          type: number
+          format: double
+          minimum: 1
+          maximum: 5000
+        defaultDepth:
+          type: number
+          format: double
+          minimum: 1
+          maximum: 5000
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Capability"
+        driver:
+          type: string
+    ItemTypeUpdate:
+      type: object
+      additionalProperties: false
+      description: 所有字段可选；capabilities 省略表示不修改能力结构。
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        icons:
+          type: string
+        defaultWidth:
+          type: number
+          format: double
+          minimum: 1
+          maximum: 5000
+        defaultDepth:
+          type: number
+          format: double
+          minimum: 1
+          maximum: 5000
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Capability"
+        driver:
+          type: string
+          description: 省略表示不变；空字符串表示清除
+        capabilitiesVersion:
+          type: integer
+          description: |
+            乐观锁版本。修改 `capabilities` 时**必填**（否则 400）；服务端发现已被他人修改时返回 409。
+            UI 保存时总是带上，避免用陈旧的能力数组覆盖别人刚加的能力项。
     Error:
       type: object
       required: [error]

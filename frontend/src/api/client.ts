@@ -115,3 +115,76 @@ export const createWall = (input: { ax: number; ay: number; bx: number; by: numb
 
 /** 删一面墙。 */
 export const deleteWall = (id: string) => request<void>(`/api/walls/${id}`, { method: 'DELETE' })
+
+/** 枚举能力的一个选项：value 入库，label 给人看。 */
+export type CapabilityOption = { value: string; label: string }
+
+export type CapabilityType = 'bool' | 'number' | 'enum' | 'string'
+
+/** 类型级能力定义；它没有值，值在 capability_state。 */
+export type Capability = {
+  key: string
+  name: string
+  type: CapabilityType
+  unit?: string
+  min?: number
+  max?: number
+  step?: number
+  options?: CapabilityOption[]
+  writable: boolean
+  history: boolean
+  default?: unknown
+}
+
+export type ItemType = {
+  key: string
+  kind: 'furniture' | 'device'
+  name: string
+  icons?: string
+  defaultWidth: number
+  defaultDepth: number
+  capabilities: Capability[]
+  capabilitiesVersion: number
+  driver?: string
+}
+
+export type ItemTypeInput = {
+  key: string
+  kind: 'furniture' | 'device'
+  name: string
+  icons?: string
+  defaultWidth?: number
+  defaultDepth?: number
+  capabilities: Capability[]
+  driver?: string
+}
+
+export type ItemTypeUpdate = {
+  name?: string
+  icons?: string
+  defaultWidth?: number
+  defaultDepth?: number
+  capabilities?: Capability[]
+  /** 可选乐观锁：保存时带上读到的版本，过期返回 409 */
+  capabilitiesVersion?: number
+  /** 省略表示不变；空字符串表示清除 */
+  driver?: string
+}
+
+/** 全部类型模板。成员也能读。 */
+export const listItemTypes = () => request<ItemType[]>('/api/item-types')
+
+/** 新建类型（仅管理员）。 */
+export const createItemType = (input: ItemTypeInput) =>
+  request<ItemType>('/api/item-types', { method: 'POST', body: JSON.stringify(input) })
+
+/** 修改类型（仅管理员）。key 不可改。 */
+export const updateItemType = (key: string, input: ItemTypeUpdate) =>
+  request<ItemType>(`/api/item-types/${encodeURIComponent(key)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+
+/** 删除类型（仅管理员）；仍被物品引用时返回 409。 */
+export const deleteItemType = (key: string) =>
+  request<void>(`/api/item-types/${encodeURIComponent(key)}`, { method: 'DELETE' })

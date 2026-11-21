@@ -98,7 +98,7 @@ TEST_DATABASE_URL='postgres://postgres:spike@127.0.0.1:5433/smarthome?sslmode=di
 - 表 `item_type` 已存在（`sql/0001_init.sql`），字段：
   `key`（主键，如 `ceiling_light`）、`kind`（`furniture` / `device`）、`name`、`icons`、
   `default_width`、`default_depth`、`capabilities`（jsonb 数组）、`capabilities_version`、`driver`。
-- `sql/seed.sql` 里已经有 11 个类型模板可直接对照着看，比如 `ceiling_light` 的
+- `sql/seed.sql` 里已经有 12 个类型模板可直接对照着看，比如 `ceiling_light` 的
   `capabilities` 长这样（**这就是你要驱动的那个结构**）：
 
   ```json

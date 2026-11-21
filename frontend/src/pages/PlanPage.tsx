@@ -13,6 +13,7 @@ import {
   type SessionUser,
   type Wall,
 } from '../api/client.ts'
+import TypeManager from '../components/TypeManager.tsx'
 
 type Props = {
   user: SessionUser
@@ -44,6 +45,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [saving, setSaving] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [showTypes, setShowTypes] = useState(false)
   // 只接受"最后一次请求"的响应：连拖两面墙时，先发的请求可能后到，
   // 若整份覆盖就会把后画的墙抹掉（刷新才回来，用户以为丢了）。
   const writeSeq = useRef(0)
@@ -253,6 +255,19 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           )}
         </div>
         <div className="flex items-center gap-3 text-sm">
+          {user.role === 'admin' ? (
+            <button
+              onClick={() => setShowTypes(true)}
+              className="px-2 py-1 text-xs"
+              style={{
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--color-bg)',
+              }}
+            >
+              类型管理
+            </button>
+          ) : null}
           <span>
             {user.displayName}
             <span className="ml-2 text-xs" style={{ color: 'var(--color-muted)' }}>
@@ -361,6 +376,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           </div>
         )}
       </main>
+
+      {showTypes ? <TypeManager onClose={() => setShowTypes(false)} /> : null}
     </div>
   )
 }

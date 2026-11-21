@@ -47,6 +47,7 @@ func main() {
 	srv := api.New(
 		api.NewPGAccounts(store.New(pool)),
 		api.NewPGPlan(pool),
+		api.NewPGItemTypes(pool),
 		api.NewSessionCodec(cfg.sessionSecret, cfg.sessionTTL),
 		cfg.cookieSecure,
 		version,
