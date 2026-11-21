@@ -79,6 +79,70 @@ paths:
                 $ref: "#/components/schemas/SessionUser"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+  /api/plan:
+    get:
+      operationId: getPlan
+      summary: 取当前户型（端点与墙）
+      description: |
+        平面图第一笔数据。端点单独返回而不是内嵌在墙里，是因为两面墙共用一个端点——
+        房间推导（T3）要靠这个共享关系绕环，坐标重复的话会变成两套端点。
+      responses:
+        "200":
+          description: 户型
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+  /api/walls:
+    post:
+      operationId: createWall
+      summary: 画一面墙
+      description: |
+        端点按坐标落库：已存在就复用（`corner` 上 `(x, y)` 唯一），不存在就新建。
+        同一对端点只允许一面墙，反着画（B→A）也是同一面墙，返回已有那面。
+        成功后返回**整个户型**，前端直接替换本地状态，不必再发一次 GET。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WallInput"
+      responses:
+        "201":
+          description: 已创建（或已存在同一面墙）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+  /api/walls/{wallId}:
+    delete:
+      operationId: deleteWall
+      summary: 删除一面墙
+      description: 只删墙，不删端点——端点可能被其他墙共用，成为孤立端点也是合法状态。
+      parameters:
+        - name: wallId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: 已删除
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: 没有这面墙
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   securitySchemes:
     cookieAuth:
@@ -130,6 +194,86 @@ components:
         role:
           type: string
           enum: [admin, member]
+    WallInput:
+      type: object
+      required: [ax, ay, bx, by]
+      additionalProperties: false
+      properties:
+        ax:
+          type: number
+          format: double
+          description: 起点 x，单位厘米，原点在平面图左上角
+        ay:
+          type: number
+          format: double
+        bx:
+          type: number
+          format: double
+          description: 终点 x
+        by:
+          type: number
+          format: double
+        thickness:
+          type: number
+          format: double
+          minimum: 1
+          maximum: 100
+          default: 10
+          description: 墙厚（厘米），省略时为 10
+    Corner:
+      type: object
+      required: [id, x, y]
+      properties:
+        id:
+          type: string
+          format: uuid
+        x:
+          type: number
+          format: double
+        y:
+          type: number
+          format: double
+    Wall:
+      type: object
+      required: [id, aId, bId, ax, ay, bx, by, thickness]
+      properties:
+        id:
+          type: string
+          format: uuid
+        aId:
+          type: string
+          format: uuid
+          description: 起点端点 id
+        bId:
+          type: string
+          format: uuid
+        ax:
+          type: number
+          format: double
+        ay:
+          type: number
+          format: double
+        bx:
+          type: number
+          format: double
+        by:
+          type: number
+          format: double
+        thickness:
+          type: number
+          format: double
+    Plan:
+      type: object
+      required: [corners, walls]
+      properties:
+        corners:
+          type: array
+          items:
+            $ref: "#/components/schemas/Corner"
+        walls:
+          type: array
+          items:
+            $ref: "#/components/schemas/Wall"
     Error:
       type: object
       required: [error]

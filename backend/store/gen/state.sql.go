@@ -37,6 +37,18 @@ func (q *Queries) CompleteCommand(ctx context.Context, arg CompleteCommandParams
 	return err
 }
 
+const deleteWall = `-- name: DeleteWall :execrows
+DELETE FROM wall WHERE id = $1
+`
+
+func (q *Queries) DeleteWall(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWall, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getState = `-- name: GetState :one
 SELECT item_id, capability_key, value, source, updated_at
 FROM capability_state
@@ -59,6 +71,25 @@ func (q *Queries) GetState(ctx context.Context, arg GetStateParams) (CapabilityS
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getWallByPair = `-- name: GetWallByPair :one
+SELECT id
+FROM wall
+WHERE (a = $1 AND b = $2) OR (a = $2 AND b = $1)
+`
+
+type GetWallByPairParams struct {
+	A pgtype.UUID `json:"a"`
+	B pgtype.UUID `json:"b"`
+}
+
+// 反着画也是同一面墙，所以两种顺序都查
+func (q *Queries) GetWallByPair(ctx context.Context, arg GetWallByPairParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getWallByPair, arg.A, arg.B)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const insertCommand = `-- name: InsertCommand :one
@@ -116,6 +147,57 @@ func (q *Queries) InsertHistory(ctx context.Context, arg InsertHistoryParams) er
 	return err
 }
 
+const insertWall = `-- name: InsertWall :one
+INSERT INTO wall (a, b, thickness)
+VALUES ($1, $2, $3)
+RETURNING id
+`
+
+type InsertWallParams struct {
+	A         pgtype.UUID `json:"a"`
+	B         pgtype.UUID `json:"b"`
+	Thickness float64     `json:"thickness"`
+}
+
+func (q *Queries) InsertWall(ctx context.Context, arg InsertWallParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, insertWall, arg.A, arg.B, arg.Thickness)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const listCorners = `-- name: ListCorners :many
+SELECT id, x, y
+FROM corner
+ORDER BY created_at
+`
+
+type ListCornersRow struct {
+	ID pgtype.UUID `json:"id"`
+	X  float64     `json:"x"`
+	Y  float64     `json:"y"`
+}
+
+func (q *Queries) ListCorners(ctx context.Context) ([]ListCornersRow, error) {
+	rows, err := q.db.Query(ctx, listCorners)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCornersRow
+	for rows.Next() {
+		var i ListCornersRow
+		if err := rows.Scan(&i.ID, &i.X, &i.Y); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStatesByItem = `-- name: ListStatesByItem :many
 SELECT item_id, capability_key, value, source, updated_at
 FROM capability_state
@@ -147,6 +229,75 @@ func (q *Queries) ListStatesByItem(ctx context.Context, itemID pgtype.UUID) ([]C
 		return nil, err
 	}
 	return items, nil
+}
+
+const listWalls = `-- name: ListWalls :many
+SELECT w.id, w.a, w.b, w.thickness,
+       ca.x AS ax, ca.y AS ay, cb.x AS bx, cb.y AS by
+FROM wall w
+JOIN corner ca ON ca.id = w.a
+JOIN corner cb ON cb.id = w.b
+ORDER BY w.created_at
+`
+
+type ListWallsRow struct {
+	ID        pgtype.UUID `json:"id"`
+	A         pgtype.UUID `json:"a"`
+	B         pgtype.UUID `json:"b"`
+	Thickness float64     `json:"thickness"`
+	Ax        float64     `json:"ax"`
+	Ay        float64     `json:"ay"`
+	Bx        float64     `json:"bx"`
+	By        float64     `json:"by"`
+}
+
+func (q *Queries) ListWalls(ctx context.Context) ([]ListWallsRow, error) {
+	rows, err := q.db.Query(ctx, listWalls)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWallsRow
+	for rows.Next() {
+		var i ListWallsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.A,
+			&i.B,
+			&i.Thickness,
+			&i.Ax,
+			&i.Ay,
+			&i.Bx,
+			&i.By,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertCorner = `-- name: UpsertCorner :one
+INSERT INTO corner (x, y)
+VALUES ($1, $2)
+ON CONFLICT (x, y) DO UPDATE SET x = EXCLUDED.x
+RETURNING id
+`
+
+type UpsertCornerParams struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+// 端点按坐标去重：已存在就复用（只为了拿回 id，不做实质更新）。
+func (q *Queries) UpsertCorner(ctx context.Context, arg UpsertCornerParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertCorner, arg.X, arg.Y)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const upsertState = `-- name: UpsertState :exec

@@ -43,6 +43,7 @@ type Server struct {
 	gen.Unimplemented
 
 	accounts AccountStore
+	plan     PlanStore
 	session  *SessionCodec
 	secure   bool
 	log      *slog.Logger
@@ -50,8 +51,8 @@ type Server struct {
 }
 
 // New 构造接口层。secure 为 true 时 Cookie 带 Secure（生产用）。
-func New(accounts AccountStore, session *SessionCodec, secure bool, version string, log *slog.Logger) *Server {
-	return &Server{accounts: accounts, session: session, secure: secure, version: version, log: log}
+func New(accounts AccountStore, plan PlanStore, session *SessionCodec, secure bool, version string, log *slog.Logger) *Server {
+	return &Server{accounts: accounts, plan: plan, session: session, secure: secure, version: version, log: log}
 }
 
 // dummyHash 是固定口令 "dummy-password" 的 bcrypt 结果，只用来抹平时间差。

@@ -61,3 +61,31 @@ export const login = (username: string, password: string) =>
 
 /** 清除会话。 */
 export const logout = () => request<void>('/api/auth/logout', { method: 'POST' })
+
+/** 户型里的一个端点（单位厘米，原点左上角）。 */
+export type Corner = { id: string; x: number; y: number }
+
+/** 一面墙，两端坐标已由服务端 join 好。 */
+export type Wall = {
+  id: string
+  aId: string
+  bId: string
+  ax: number
+  ay: number
+  bx: number
+  by: number
+  thickness: number
+}
+
+/** 整个户型。端点单列是因为两面墙共用一个端点。 */
+export type Plan = { corners: Corner[]; walls: Wall[] }
+
+/** 读当前户型。 */
+export const getPlan = () => request<Plan>('/api/plan')
+
+/** 画一面墙；返回保存后的整个户型。 */
+export const createWall = (input: { ax: number; ay: number; bx: number; by: number; thickness?: number }) =>
+  request<Plan>('/api/walls', { method: 'POST', body: JSON.stringify(input) })
+
+/** 删一面墙。 */
+export const deleteWall = (id: string) => request<void>(`/api/walls/${id}`, { method: 'DELETE' })
