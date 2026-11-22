@@ -58,28 +58,27 @@ describe('底图坐标变换', () => {
     expect(back.y).toBeCloseTo(5, 9)
   })
 
-  it('定标：两个像素点对上两个世界点', () => {
+  it('定标：按真实长度解出比例并把第一个点钉住', () => {
     const u1 = { x: 10, y: 10 }
     const u2 = { x: 90, y: 10 }
-    const p1 = { x: 0, y: 0 }
-    const p2 = { x: 320, y: 0 }
-    const patch = calibrate(u1, u2, p1, p2, base)
-    // 80 像素对 320 厘米 → 每像素 4 厘米，和原来一样
+    const anchor = { x: 0, y: 0 }
+    // 80 像素对应现实 320 厘米 → 每像素 4 厘米，和原来一样
+    const patch = calibrate(u1, u2, anchor, 320, base)
     expect(patch.cmPerPx).toBeCloseTo(4, 9)
 
     const next = { ...base, ...patch }
     const mapped1 = imageToPlan(u1, next)
+    expect(mapped1.x).toBeCloseTo(anchor.x, 9)
+    expect(mapped1.y).toBeCloseTo(anchor.y, 9)
+    // 第二个点沿同一方向拉开 320 厘米
     const mapped2 = imageToPlan(u2, next)
-    expect(mapped1.x).toBeCloseTo(p1.x, 9)
-    expect(mapped1.y).toBeCloseTo(p1.y, 9)
-    // 方向与距离都对上
     expect(mapped2.x - mapped1.x).toBeCloseTo(320, 9)
     expect(mapped2.y - mapped1.y).toBeCloseTo(0, 9)
   })
 
   it('定标改比例时同步修正偏移', () => {
-    const patch = calibrate({ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 10, y: 20 }, { x: 110, y: 20 }, base)
-    // 50 像素对 100 厘米 → 每像素 2 厘米
+    // 50 像素对应 100 厘米 → 每像素 2 厘米
+    const patch = calibrate({ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 10, y: 20 }, 100, base)
     expect(patch.cmPerPx).toBeCloseTo(2, 9)
     const next = { ...base, ...patch }
     const mapped = imageToPlan({ x: 0, y: 0 }, next)
@@ -87,9 +86,10 @@ describe('底图坐标变换', () => {
     expect(mapped.y).toBeCloseTo(20, 9)
   })
 
-  it('两点重合时拒绝定标而不是算出 Infinity', () => {
-    expect(() => calibrate({ x: 5, y: 5 }, { x: 5, y: 5 }, { x: 0, y: 0 }, { x: 1, y: 0 }, base)).toThrow()
-    expect(() => calibrate({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 3, y: 3 }, { x: 3, y: 3 }, base)).toThrow()
+  it('退化输入拒绝定标而不是算出 Infinity', () => {
+    expect(() => calibrate({ x: 5, y: 5 }, { x: 5, y: 5 }, { x: 0, y: 0 }, 100, base)).toThrow()
+    expect(() => calibrate({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 0 }, 0, base)).toThrow()
+    expect(() => calibrate({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 0 }, -5, base)).toThrow()
   })
 
   it('旋转按 90° 步进循环', () => {

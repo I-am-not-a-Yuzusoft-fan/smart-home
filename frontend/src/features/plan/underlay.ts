@@ -82,34 +82,32 @@ export function imageCorners(t: UnderlayTransform): Pt[] {
 }
 
 /**
- * 两点定标：用户在图上点了两个像素点，并给出它们在现实中的距离。
+ * 两点定标：用户在图上点了两个点，并给出这两点在现实中的距离。
  *
- * 只解比例与平移，不改旋转——旋转是独立的一步（#35），把两件事混在一个
- * 方程里，用户先转后定标就会得到反直觉的结果。
- *
- * 返回新的比例与偏移；`u1` 会被对齐到 `p1`，`u2` 落在 `p1` 指向 `p2` 的方向上。
+ * `u1`/`u2` 是点击位置换算出的图片像素，`anchor` 是点击位置的世界坐标（用来
+ * 钉住底图，让第一次点的那个点不动），`lengthCm` 是用户输入的真实长度。
+ * 只解比例与平移，不改旋转——旋转是独立的一步（#35），把两件事混在一个方程
+ * 里，用户先转后定标就会得到反直觉的结果。
  */
 export function calibrate(
   u1: Pt,
   u2: Pt,
-  p1: Pt,
-  p2: Pt,
+  anchor: Pt,
+  lengthCm: number,
   t: UnderlayTransform,
 ): { cmPerPx: number; offsetXCm: number; offsetYCm: number } {
   const pixelDist = Math.hypot(u2.x - u1.x, u2.y - u1.y)
-  const planDist = Math.hypot(p2.x - p1.x, p2.y - p1.y)
-  if (pixelDist <= 0 || planDist <= 0) {
-    throw new Error('定标的两点不能重合')
-  }
-  const cmPerPx = planDist / pixelDist
-  // 先按新比例算出 u1 现在落在哪，再平移「当前映射位置 → 期望位置」。
-  // 平移 offset 等价于平移中心，所以两点之差就是偏移修正量。
+  if (pixelDist <= 0) throw new Error('定标的两点不能重合')
+  if (!Number.isFinite(lengthCm) || lengthCm <= 0) throw new Error('真实长度必须大于 0')
+
+  const cmPerPx = lengthCm / pixelDist
+  // 比例变了以后，第一个点会跟着漂；把整张图平移回去，让它仍然落在 anchor 上。
   const next: UnderlayTransform = { ...t, cmPerPx }
   const mapped = imageToPlan(u1, next)
   return {
     cmPerPx,
-    offsetXCm: next.offsetXCm + (p1.x - mapped.x),
-    offsetYCm: next.offsetYCm + (p1.y - mapped.y),
+    offsetXCm: next.offsetXCm + (anchor.x - mapped.x),
+    offsetYCm: next.offsetYCm + (anchor.y - mapped.y),
   }
 }
 

@@ -42,11 +42,18 @@ import {
   distanceToSegment,
   nearestWallAnchor,
   pointInPolygon,
+  type Pt,
   type Seg,
 } from '../features/plan/geometry.ts'
 import { DEFAULT_RULES, snap as snapTo, type Guide as SnapGuide, type SnapRule } from '../features/plan/snap.ts'
 import { collinearRuns } from '../features/plan/dimensions.ts'
-import { imageCenter, imageRect, type UnderlayTransform } from '../features/plan/underlay.ts'
+import {
+  calibrate,
+  imageCenter,
+  imageRect,
+  planToImage,
+  type UnderlayTransform,
+} from '../features/plan/underlay.ts'
 import { replacePlan, type WallSnapshot } from '../api/client.ts'
 
 type Props = {
@@ -126,6 +133,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [showUnderlay, setShowUnderlay] = useState(false)
   const [underlayBusy, setUnderlayBusy] = useState(false)
   const [underlayImage, setUnderlayImage] = useState<HTMLImageElement | null>(null)
+  // 两点定标：进入后画布点击只标点，不画墙；点满两个再填真实长度。
+  const [calibrating, setCalibrating] = useState(false)
+  const [calibPoints, setCalibPoints] = useState<Pt[]>([])
   const [size, setSize] = useState({ width: 800, height: 600 })
   // 画布真实尺寸要等 ResizeObserver 报一次；在那之前 fit 会按 800×600 算，
   // 结果内容偏在左上角（第一次打开时尤其明显）。
@@ -206,6 +216,43 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       setUnderlayBusy(false)
     }
   }
+
+  const startCalibration = () => {
+    if (!plan.underlay) return
+    setCalibrating(true)
+    setCalibPoints([])
+    setError(null)
+  }
+
+  const cancelCalibration = () => {
+    setCalibrating(false)
+    setCalibPoints([])
+  }
+
+  const applyCalibration = async (lengthCm: number) => {
+    if (!underlayTransform || calibPoints.length !== 2) return
+    setUnderlayBusy(true)
+    try {
+      const [p1, p2] = calibPoints
+      // 用户点的是世界坐标；定标要在图片像素里量距离，所以反解回去。
+      const u1 = planToImage(p1, underlayTransform)
+      const u2 = planToImage(p2, underlayTransform)
+      setPlan(await updateUnderlay(calibrate(u1, u2, p1, lengthCm, underlayTransform)))
+      setCalibPoints([])
+      setCalibrating(false)
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '定标失败')
+    } finally {
+      setUnderlayBusy(false)
+    }
+  }
+
+  // 两个点在图上的当前距离：给用户一个「现在是多少」的参照，默认值也用它。
+  const calibMeasureCm =
+    calibPoints.length === 2
+      ? Math.round(Math.hypot(calibPoints[1].x - calibPoints[0].x, calibPoints[1].y - calibPoints[0].y))
+      : null
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -469,6 +516,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         return
       }
       if (e.key === 'Escape') {
+        setCalibrating(false)
+        setCalibPoints([])
         setDraft(null)
         setEditing(null)
         setGuide({ kind: 'none' })
@@ -642,6 +691,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       setDraft(null)
       setEditing(null)
       setGuide({ kind: 'none' })
+      return
+    }
+
+    // 定标模式下点击只落两个点，不画墙、不选中，第三个点重新开始。
+    if (calibrating) {
+      setCalibPoints((cur) => (cur.length >= 2 ? [p] : [...cur, p]))
       return
     }
 
@@ -1529,6 +1584,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             onUpload={(file) => void saveUnderlay(file)}
             onClear={() => void dropUnderlay()}
             onClose={() => setShowUnderlay(false)}
+            calibrating={calibrating}
+            calibCount={calibPoints.length}
+            calibMeasureCm={calibMeasureCm}
+            onStartCalibration={startCalibration}
+            onCancelCalibration={cancelCalibration}
+            onCalibrate={(lengthCm) => void applyCalibration(lengthCm)}
           />
         ) : null}
         <Stage
@@ -1566,6 +1627,36 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 rotation={plan.underlay.rotationDeg}
                 opacity={plan.underlay.opacity}
               />
+            </Layer>
+          ) : null}
+
+          {/* 定标的两个点和连线：只是一个指示器，不参与命中 */}
+          {calibrating && calibPoints.length > 0 ? (
+            <Layer listening={false}>
+              {calibPoints.length === 2 ? (
+                <Line
+                  points={[
+                    calibPoints[0].x,
+                    calibPoints[0].y,
+                    calibPoints[1].x,
+                    calibPoints[1].y,
+                  ]}
+                  stroke="#e8590c"
+                  strokeWidth={2 / viewport.scale}
+                  dash={[8 / viewport.scale, 6 / viewport.scale]}
+                />
+              ) : null}
+              {calibPoints.map((pt, index) => (
+                <Circle
+                  key={index}
+                  x={pt.x}
+                  y={pt.y}
+                  radius={5 / viewport.scale}
+                  fill="#e8590c"
+                  stroke="#ffffff"
+                  strokeWidth={2 / viewport.scale}
+                />
+              ))}
             </Layer>
           ) : null}
 
