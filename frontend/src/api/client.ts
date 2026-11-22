@@ -134,7 +134,6 @@ export const updateWall = (
 /** 删一面墙。 */
 export const deleteWall = (id: string) => request<void>(`/api/walls/${id}`, { method: 'DELETE' })
 
-<<<<<<< HEAD
 export type ItemKind = 'furniture' | 'device'
 export type ItemStatus = 'normal' | 'idle' | 'maintenance'
 

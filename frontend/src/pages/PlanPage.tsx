@@ -1,19 +1,28 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Circle, Layer, Line, Stage, Text } from 'react-konva'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
+import { Circle, Group, Layer, Line, Rect, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
 import {
   ApiError,
+  createItem,
   createWall,
+  deleteItem,
   deleteWall,
   getPlan,
+  listItems,
+  listItemTypes,
   logout,
+  updateItem,
   updateWall,
   type Corner,
+  type Item,
+  type ItemType,
   type Plan,
   type Room,
   type SessionUser,
   type Wall,
 } from '../api/client.ts'
+import ItemInspector from '../components/ItemInspector.tsx'
+import ItemSidebar, { type ItemFilters } from '../components/ItemSidebar.tsx'
 import TypeManager from '../components/TypeManager.tsx'
 import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from '../features/plan/edit.ts'
 import { distanceToSegment, type Seg } from '../features/plan/geometry.ts'
@@ -109,6 +118,11 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [guide, setGuide] = useState<Guide>({ kind: 'none' })
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // 物品与墙各自有选中态，但同一时刻只允许一个：点墙清物品，点物品清墙。
+  const [items, setItems] = useState<Item[]>([])
+  const [types, setTypes] = useState<ItemType[]>([])
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
+  const [filters, setFilters] = useState<ItemFilters>({ room: '', kind: '', q: '' })
   const [showTypes, setShowTypes] = useState(false)
   const [showDims, setShowDims] = useState(true)
   // 正在拖的端点：整段坐标都存下来，渲染预览时直接用，不必回头找 wall。
@@ -133,7 +147,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
   const load = useCallback(async () => {
     try {
-      setPlan(await getPlan())
+      const [nextPlan, nextItems, nextTypes] = await Promise.all([getPlan(), listItems(), listItemTypes()])
+      setPlan(nextPlan)
+      setItems(nextItems)
+      setTypes(nextTypes)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : '读取户型失败')
@@ -141,6 +158,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       setLoading(false)
     }
   }, [])
+
+  const typeByKey = useMemo(() => new Map(types.map((typ) => [typ.key, typ])), [types])
+  const selectedItem = items.find((item) => item.id === selectedItemId) ?? null
+  const selectedItemType = selectedItem ? typeByKey.get(selectedItem.typeKey) : undefined
 
   useEffect(() => {
     void load()
@@ -309,6 +330,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         return
       }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      if (selectedItemId) {
+        void removeItem(selectedItemId)
+        return
+      }
       if (selectedId) void removeWall(selectedId)
     }
     function onKeyUp(e: KeyboardEvent) {
@@ -327,7 +352,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     }
     // removeWall/undo/redo 每次渲染都是新函数，但内部只用 setState 与 props，闭包安全
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, history.past.length, history.future.length])
+  }, [selectedId, selectedItemId, history.past.length, history.future.length])
 
   // 只认"被墙引用"的端点：删墙后留下的孤立端点既不该画出来，也不该被吸附——
   // 否则用户会吸到一个看不见的点上，还以为是 bug。
@@ -480,6 +505,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
     const wallId = wallAt(p.x, p.y)
     pressRef.current = { x: p.x, y: p.y, wallId }
+    // 按在空白或墙上都算「离开物品」，否则点完物品再画墙，Delete 会删错东西。
+    setSelectedItemId(null)
 
     const s = snap(p.x, p.y)
     setDraft({ ax: s.x, ay: s.y, bx: s.x, by: s.y })
@@ -745,6 +772,73 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     setSaving(false)
   }
 
+  async function removeItem(id: string) {
+    setSaving(true)
+    try {
+      await deleteItem(id)
+      setItems((current) => current.filter((item) => item.id !== id))
+      if (selectedItemId === id) setSelectedItemId(null)
+      setError(null)
+    } catch (e) {
+      // 已经没了（别的标签页删的、双击 Delete）不该报错，本地跟着清掉即可。
+      if (!(e instanceof ApiError && e.status === 404)) {
+        setError(e instanceof Error ? e.message : '删除物品失败')
+      } else {
+        setItems((current) => current.filter((item) => item.id !== id))
+        if (selectedItemId === id) setSelectedItemId(null)
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function updateItemFields(
+    id: string,
+    patch: { name?: string; roomHash?: string; x?: number; y?: number; rotation?: number },
+  ) {
+    const saved = await updateItem(id, patch)
+    setItems((current) => current.map((item) => (item.id === saved.id ? saved : item)))
+    setError(null)
+  }
+
+  async function onItemDragEnd(item: Item, e: Konva.KonvaEventObject<Event>) {
+    const node = e.target
+    // Stage 已经应用了视口变换，子节点的 x/y 就是世界坐标（厘米），不用再换算。
+    const x = Math.round(node.x())
+    const y = Math.round(node.y())
+    setItems((current) => current.map((row) => (row.id === item.id ? { ...row, x, y } : row)))
+    try {
+      await updateItemFields(item.id, { x, y })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存物品位置失败')
+      void load()
+    }
+  }
+
+  async function onDropType(e: ReactDragEvent<HTMLElement>) {
+    e.preventDefault()
+    const typeKey = e.dataTransfer.getData('application/x-smart-home-type')
+    if (!typeKey) return
+    const typ = typeByKey.get(typeKey)
+    if (!typ) return
+    const host = hostRef.current
+    if (!host) return
+    const rect = host.getBoundingClientRect()
+    // 落点是屏幕坐标，必须先过视口变换，否则缩放/平移之后物品会落在别处。
+    const world = toWorld({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+    const x = Math.max(0, Math.min(5000, Math.round(world.x)))
+    const y = Math.max(0, Math.min(5000, Math.round(world.y)))
+    try {
+      const created = await createItem({ typeKey, name: typ.name, x, y, rotation: 0 })
+      setItems((current) => [...current, created])
+      setSelectedItemId(created.id)
+      setSelectedId(null)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '布放失败')
+    }
+  }
+
   async function onLogout() {
     try {
       await logout()
@@ -851,10 +945,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       >
         <div className="flex min-w-0 items-baseline gap-3">
           <h1 className="shrink-0 whitespace-nowrap text-base font-semibold">平面图</h1>
-          <span className="truncate text-xs" style={{ color: 'var(--color-muted)' }}>
-            {loading
-              ? '读取中…'
-              : `按住拖动画墙（${plan.walls.length} 面）· 点墙选中后按 Delete 删除 · 空格/中键平移 · 滚轮缩放 · Shift 自由角度`}
+          <span className="whitespace-nowrap text-xs" style={{ color: 'var(--color-muted)' }}>
+            {loading ? '读取中…' : `${plan.walls.length} 面墙 · ${items.length} 件物品`}
           </span>
           {selected && (
             <button
@@ -973,7 +1065,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
               类型管理
             </button>
           ) : null}
-          <span>
+          <span className="whitespace-nowrap">
             {user.displayName}
             <span className="ml-2 text-xs" style={{ color: 'var(--color-muted)' }}>
               {user.role === 'admin' ? '管理员' : '家庭成员'}
@@ -999,7 +1091,28 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         </p>
       )}
 
-      <main ref={hostRef} className="relative flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1">
+        <ItemSidebar
+          types={types}
+          items={items}
+          rooms={plan.rooms}
+          filters={filters}
+          selectedItemId={selectedItemId}
+          onFiltersChange={(patch) => setFilters((current) => ({ ...current, ...patch }))}
+          onSelectItem={(id) => {
+            setSelectedItemId(id)
+            setSelectedId(null)
+          }}
+        />
+        <main
+          ref={hostRef}
+          className="relative min-w-0 flex-1 overflow-hidden"
+          onDragOver={(e) => {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'copy'
+          }}
+          onDrop={(e) => void onDropType(e)}
+        >
         {selected && wallForm && (
           <div
             className="absolute right-3 top-3 z-10 w-56 rounded p-3 text-xs"
@@ -1052,6 +1165,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             </button>
           </div>
         )}
+        <div
+          className="pointer-events-none absolute bottom-2 left-3 text-xs"
+          style={{ color: 'var(--color-muted)' }}
+        >
+          拖拽画墙 · 点墙选中后 Delete 删除 · 空格/中键平移 · 滚轮缩放 · Shift 自由角度 · 拖端点改墙
+        </div>
         <Stage
           ref={stageRef}
           width={size.width}
@@ -1113,7 +1232,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 labelSize={labelSize}
                 centerX={center.x}
                 centerY={center.y}
-                onPick={setSelectedId}
+                onPick={(id) => {
+                  setSelectedId(id)
+                  setSelectedItemId(null)
+                }}
                 onHover={setHoverId}
               />
             ))}
@@ -1166,6 +1288,25 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             )}
           </Layer>
 
+          {/* 物品层在墙之上：家具要压在墙线上，但顺序反过来就点不到被盖住的墙了。
+              选中用几何命中（wallAt/handleAt），不依赖 Konva 的 hit graph。 */}
+          <Layer>
+            {items.map((item) => (
+              <ItemShape
+                key={item.id}
+                item={item}
+                type={typeByKey.get(item.typeKey)}
+                selected={item.id === selectedItemId}
+                scale={viewport.scale}
+                onSelect={() => {
+                  setSelectedItemId(item.id)
+                  setSelectedId(null)
+                }}
+                onDragEnd={(e) => void onItemDragEnd(item, e)}
+              />
+            ))}
+          </Layer>
+
           <Layer listening={false}>
             {liveCorners.map((c) => (
               <Circle key={c.id} x={c.x} y={c.y} radius={3 / viewport.scale} fill="#8b8b9e" />
@@ -1199,7 +1340,15 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             保存中…
           </div>
         )}
-      </main>
+        </main>
+        <ItemInspector
+          item={selectedItem}
+          type={selectedItemType}
+          rooms={plan.rooms}
+          onUpdate={updateItemFields}
+          onDelete={removeItem}
+        />
+      </div>
 
       {showTypes ? <TypeManager onClose={() => setShowTypes(false)} /> : null}
     </div>
@@ -1395,6 +1544,80 @@ function RunDimension({
         strokeWidth={3 / scale}
         fillAfterStrokeEnabled
       />
+    </>
+  )
+}
+
+/**
+ * 平面图上的家具/设备。
+ *
+ * `item.x` / `item.y` 是物品**中心**（厘米）。Group 的原点放在中心，再用 offset
+ * 把绘制原点挪回左上角——这样 `rotation` 绕自身中心转，而不是绕左上角把沙发甩出房间。
+ * 标签放在中心、水平居中，旋转后也不会和图形分家。
+ */
+function ItemShape({
+  item,
+  type,
+  selected,
+  scale,
+  onSelect,
+  onDragEnd,
+}: {
+  item: Item
+  type?: ItemType
+  selected: boolean
+  scale: number
+  onSelect: () => void
+  onDragEnd: (e: Konva.KonvaEventObject<Event>) => void
+}) {
+  const width = type?.defaultWidth ?? 60
+  const depth = type?.defaultDepth ?? 60
+  return (
+    <>
+      <Group
+        x={item.x}
+        y={item.y}
+        offsetX={width / 2}
+        offsetY={depth / 2}
+        rotation={item.rotation}
+        draggable
+        onMouseDown={(e) => {
+          // 不让 Stage 把它当成"开始画墙"
+          e.cancelBubble = true
+        }}
+        onClick={(e) => {
+          e.cancelBubble = true
+          onSelect()
+        }}
+        onTap={(e) => {
+          e.cancelBubble = true
+          onSelect()
+        }}
+        onDragStart={onSelect}
+        onDragEnd={onDragEnd}
+      >
+        <Rect
+          width={width}
+          height={depth}
+          fill={item.kind === 'device' ? '#dbe6ff' : '#e8e1d4'}
+          stroke={selected ? '#4f6bed' : '#8a8a9e'}
+          strokeWidth={(selected ? 2 : 1) / scale}
+          cornerRadius={2 / scale}
+        />
+      </Group>
+      {selected || width >= 40 ? (
+        <Text
+          x={item.x - width / 2}
+          y={item.y - 7 / scale}
+          width={width}
+          align="center"
+          text={item.name}
+          fontSize={11 / scale}
+          fill="#3a3a4d"
+          wrap="none"
+          listening={false}
+        />
+      ) : null}
     </>
   )
 }
