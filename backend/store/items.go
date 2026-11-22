@@ -49,14 +49,14 @@ type InitialState struct {
 
 // ItemCreate 是创建物品的输入；States 由类型元数据推导。
 type ItemCreate struct {
-	TypeKey  string
-	Name     string
-	RoomHash *string
-	X, Y     float64
-	Rotation float64
-	Status   *string
-	Attrs    json.RawMessage
-	States   []InitialState
+	TypeKey    string
+	Name       string
+	RoomHash   *string
+	X, Y       float64
+	Rotation   float64
+	Status     *string
+	Attrs      json.RawMessage
+	States     []InitialState
 	WallID     *uuid.UUID
 	WallOffset *float64
 }
@@ -136,12 +136,12 @@ func (s *Items) CreateItem(ctx context.Context, in ItemCreate) (Item, error) {
 		rawAttrs = json.RawMessage(`{}`)
 	}
 	id, err := q.InsertItem(ctx, storegen.InsertItemParams{
-		TypeKey:  in.TypeKey,
-		Name:     in.Name,
-		RoomHash: textValue(in.RoomHash),
-		X:        in.X,
-		Y:        in.Y,
-		Rotation: in.Rotation,
+		TypeKey:    in.TypeKey,
+		Name:       in.Name,
+		RoomHash:   textValue(in.RoomHash),
+		X:          in.X,
+		Y:          in.Y,
+		Rotation:   in.Rotation,
 		Status:     textValue(in.Status),
 		Attrs:      rawAttrs,
 		WallID:     uuidPtrValue(in.WallID),
@@ -174,15 +174,15 @@ func (s *Items) CreateItem(ctx context.Context, in ItemCreate) (Item, error) {
 
 func (s *Items) UpdateItem(ctx context.Context, in ItemUpdate) (Item, error) {
 	rows, err := s.q.UpdateItem(ctx, storegen.UpdateItemParams{
-		ID:        pgUUID(in.ID),
-		NameSet:   in.NameSet,
-		Name:      in.Name,
-		RoomSet:   in.RoomSet,
-		RoomHash:  in.RoomHash,
-		PosSet:    in.PositionSet,
-		X:         in.X,
-		Y:         in.Y,
-		Rotation:  in.Rotation,
+		ID:         pgUUID(in.ID),
+		NameSet:    in.NameSet,
+		Name:       in.Name,
+		RoomSet:    in.RoomSet,
+		RoomHash:   in.RoomHash,
+		PosSet:     in.PositionSet,
+		X:          in.X,
+		Y:          in.Y,
+		Rotation:   in.Rotation,
 		StatusSet:  in.StatusSet,
 		Status:     in.Status,
 		AttrsSet:   in.AttrsSet,
@@ -210,15 +210,15 @@ func itemFromRow(id pgtype.UUID, typeKey, kind, name string, roomHash, roomName 
 		return Item{}, err
 	}
 	return Item{
-		ID:       itemID,
-		TypeKey:  typeKey,
-		Kind:     kind,
-		Name:     name,
-		RoomHash: fromPGText(roomHash),
-		RoomName: fromPGText(roomName),
-		X:        x,
-		Y:        y,
-		Rotation: rotation,
+		ID:         itemID,
+		TypeKey:    typeKey,
+		Kind:       kind,
+		Name:       name,
+		RoomHash:   fromPGText(roomHash),
+		RoomName:   fromPGText(roomName),
+		X:          x,
+		Y:          y,
+		Rotation:   rotation,
 		Status:     fromPGText(status),
 		Attrs:      attrs,
 		WallID:     uuidPtrFromPG(wallID),

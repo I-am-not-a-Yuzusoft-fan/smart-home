@@ -35,9 +35,9 @@ type planBody struct {
 		Hash string `json:"hash"`
 		Name string `json:"name"`
 	} `json:"staleRooms"`
-	Openings []planOpening `json:"openings"`
-	OpenWalls int   `json:"openWalls"`
-	Version   int64 `json:"version"`
+	Openings  []planOpening `json:"openings"`
+	OpenWalls int           `json:"openWalls"`
+	Version   int64         `json:"version"`
 	Walls     []struct {
 		ID  string  `json:"id"`
 		AID string  `json:"aId"`

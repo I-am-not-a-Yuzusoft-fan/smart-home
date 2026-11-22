@@ -584,3 +584,99 @@ func clampWallOpenings(ctx context.Context, q *storegen.Queries, wallID openapi_
 	}
 	return nil
 }
+
+// LoadUnderlay 读底图元数据；没有底图返回 nil, nil 而不是报错。
+func (p *PGPlan) LoadUnderlay(ctx context.Context) (*PlanUnderlay, error) {
+	row, err := p.queries.GetUnderlay(ctx)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &PlanUnderlay{
+		ContentType: row.ContentType,
+		WidthPx:     int(row.WidthPx),
+		HeightPx:    int(row.HeightPx),
+		Sha256:      row.Sha256,
+		CmPerPx:     row.CmPerPx,
+		OffsetXCm:   row.OffsetXCm,
+		OffsetYCm:   row.OffsetYCm,
+		RotationDeg: int(row.RotationDeg),
+		Opacity:     row.Opacity,
+		Visible:     row.Visible,
+		UpdatedAt:   row.UpdatedAt.Time,
+	}, nil
+}
+
+// LoadUnderlayImage 单独取字节。
+func (p *PGPlan) LoadUnderlayImage(ctx context.Context) (string, []byte, error) {
+	row, err := p.queries.GetUnderlayImage(ctx)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil, nil
+		}
+		return "", nil, err
+	}
+	return row.ContentType, row.Bytes, nil
+}
+
+// SaveUnderlay 整张替换；换图等于换定标，参数一并重置。
+func (p *PGPlan) SaveUnderlay(ctx context.Context, in UnderlayUpload) error {
+	return p.queries.UpsertUnderlay(ctx, storegen.UpsertUnderlayParams{
+		ContentType: in.ContentType,
+		WidthPx:     int32(in.WidthPx),
+		HeightPx:    int32(in.HeightPx),
+		Bytes:       in.Bytes,
+		Sha256:      in.Sha256,
+		CmPerPx:     in.CmPerPx,
+		OffsetXCm:   in.OffsetXCm,
+		OffsetYCm:   in.OffsetYCm,
+	})
+}
+
+// UpdateUnderlayMeta 合并补丁后写回，返回新元数据。
+func (p *PGPlan) UpdateUnderlayMeta(ctx context.Context, patch UnderlayMetaPatch) (*PlanUnderlay, error) {
+	current, err := p.LoadUnderlay(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, ErrUnderlayMissing
+	}
+	next := *current
+	if patch.CmPerPx != nil {
+		next.CmPerPx = *patch.CmPerPx
+	}
+	if patch.OffsetXCm != nil {
+		next.OffsetXCm = *patch.OffsetXCm
+	}
+	if patch.OffsetYCm != nil {
+		next.OffsetYCm = *patch.OffsetYCm
+	}
+	if patch.RotationDeg != nil {
+		next.RotationDeg = *patch.RotationDeg
+	}
+	if patch.Opacity != nil {
+		next.Opacity = *patch.Opacity
+	}
+	if patch.Visible != nil {
+		next.Visible = *patch.Visible
+	}
+	if err := p.queries.UpdateUnderlayMeta(ctx, storegen.UpdateUnderlayMetaParams{
+		CmPerPx:     next.CmPerPx,
+		OffsetXCm:   next.OffsetXCm,
+		OffsetYCm:   next.OffsetYCm,
+		RotationDeg: int32(next.RotationDeg),
+		Opacity:     next.Opacity,
+		Visible:     next.Visible,
+	}); err != nil {
+		return nil, err
+	}
+	return p.LoadUnderlay(ctx)
+}
+
+// DeleteUnderlay 删掉唯一那一行。
+func (p *PGPlan) DeleteUnderlay(ctx context.Context) (int64, error) {
+	return p.queries.DeleteUnderlay(ctx)
+}

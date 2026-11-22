@@ -134,6 +134,16 @@ type PlanStore interface {
 	CreateOpening(ctx context.Context, in OpeningInput) (openapi_types.UUID, error)
 	UpdateOpening(ctx context.Context, id openapi_types.UUID, in OpeningPatchInput) error
 	DeleteOpening(ctx context.Context, id openapi_types.UUID) (int64, error)
+	// LoadUnderlay 读底图元数据；没有底图时返回 nil, nil。
+	LoadUnderlay(ctx context.Context) (*PlanUnderlay, error)
+	// LoadUnderlayImage 单独取字节：元数据要随 Plan 每次返回，图片不该跟着 JSON 走。
+	LoadUnderlayImage(ctx context.Context) (contentType string, data []byte, err error)
+	// SaveUnderlay 整张替换底图，并把定标与显示参数重置。
+	SaveUnderlay(ctx context.Context, in UnderlayUpload) error
+	// UpdateUnderlayMeta 只改出现的字段，返回改后的元数据。
+	UpdateUnderlayMeta(ctx context.Context, patch UnderlayMetaPatch) (*PlanUnderlay, error)
+	// DeleteUnderlay 删掉底图与字节；本来就没有也返回 0。
+	DeleteUnderlay(ctx context.Context) (int64, error)
 }
 
 // placeOnWall 把「沿墙偏移」换算成世界坐标与朝向，并把偏移夹进墙内。
@@ -449,6 +459,29 @@ func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 			Height: o.Height,
 			Sill:   o.Sill,
 		})
+	}
+
+	// 底图元数据随户型一次返回；图片字节走单独的路由，避免每次 GET /api/plan
+	// 都拖着一张几 MB 的图片。
+	underlay, err := s.plan.LoadUnderlay(ctx)
+	if err != nil {
+		return gen.Plan{}, err
+	}
+	if underlay != nil {
+		u := gen.Underlay{
+			ContentType: gen.UnderlayContentType(underlay.ContentType),
+			WidthPx:     underlay.WidthPx,
+			HeightPx:    underlay.HeightPx,
+			Sha256:      underlay.Sha256,
+			CmPerPx:     underlay.CmPerPx,
+			OffsetXCm:   underlay.OffsetXCm,
+			OffsetYCm:   underlay.OffsetYCm,
+			RotationDeg: gen.UnderlayRotationDeg(underlay.RotationDeg),
+			Opacity:     underlay.Opacity,
+			Visible:     underlay.Visible,
+			UpdatedAt:   underlay.UpdatedAt,
+		}
+		plan.Underlay = &u
 	}
 
 	// 失配的名字：墙改过之后哈希变了，旧名字不该悄悄消失，也不能自动挂到

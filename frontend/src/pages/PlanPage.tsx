@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
-import { Circle, Group, Layer, Line, Path, Rect, Stage, Text } from 'react-konva'
+import { Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
 import {
   ApiError,
   createItem,
   createOpening,
   clearRoomName,
+  clearUnderlay,
   createWall,
   deleteItem,
   deleteOpening,
@@ -16,6 +17,9 @@ import {
   logout,
   updateItem,
   updateRoomName,
+  updateUnderlay,
+  uploadUnderlay,
+  underlayImageUrl,
   updateWall,
   type Corner,
   type Item,
@@ -25,10 +29,12 @@ import {
   type Room,
   type RoomKind,
   type SessionUser,
+  type Underlay,
   type Wall,
 } from '../api/client.ts'
 import ItemInspector from '../components/ItemInspector.tsx'
 import ItemSidebar, { type ItemFilters } from '../components/ItemSidebar.tsx'
+import { UnderlayPanel } from '../components/UnderlayPanel.tsx'
 import TypeManager from '../components/TypeManager.tsx'
 import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from '../features/plan/edit.ts'
 import {
@@ -40,6 +46,7 @@ import {
 } from '../features/plan/geometry.ts'
 import { DEFAULT_RULES, snap as snapTo, type Guide as SnapGuide, type SnapRule } from '../features/plan/snap.ts'
 import { collinearRuns } from '../features/plan/dimensions.ts'
+import { imageCenter, imageRect, type UnderlayTransform } from '../features/plan/underlay.ts'
 import { replacePlan, type WallSnapshot } from '../api/client.ts'
 
 type Props = {
@@ -116,6 +123,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     past: [],
     future: [],
   })
+  const [showUnderlay, setShowUnderlay] = useState(false)
+  const [underlayBusy, setUnderlayBusy] = useState(false)
+  const [underlayImage, setUnderlayImage] = useState<HTMLImageElement | null>(null)
   const [size, setSize] = useState({ width: 800, height: 600 })
   // 画布真实尺寸要等 ResizeObserver 报一次；在那之前 fit 会按 800×600 算，
   // 结果内容偏在左上角（第一次打开时尤其明显）。
@@ -126,12 +136,76 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     rooms: [],
     openings: [],
     openWalls: 0,
+    underlay: null,
     staleRooms: [],
     version: 0,
   })
   // 回调里要读「最新」的户型：闭包捕获的 plan 可能落后一次渲染。
   const planRef = useRef<Plan>(plan)
   planRef.current = plan
+
+  // 底图的「图片像素 ↔ 世界厘米」变换：只从元数据算，不从画布读。
+  const underlayTransform = useMemo<UnderlayTransform | null>(() => {
+    const u = plan.underlay
+    if (!u) return null
+    return {
+      widthPx: u.widthPx,
+      heightPx: u.heightPx,
+      cmPerPx: u.cmPerPx,
+      offsetXCm: u.offsetXCm,
+      offsetYCm: u.offsetYCm,
+      rotationDeg: u.rotationDeg,
+    }
+  }, [plan.underlay])
+
+  // 图片按 sha 拉一次：换图必然换 sha，所以不必担心拿到旧缓存。
+  useEffect(() => {
+    const sha = plan.underlay?.sha256
+    if (!sha) {
+      setUnderlayImage(null)
+      return
+    }
+    let cancelled = false
+    const img = new window.Image()
+    img.onload = () => {
+      if (!cancelled) setUnderlayImage(img)
+    }
+    img.onerror = () => {
+      if (!cancelled) setUnderlayImage(null)
+    }
+    img.src = underlayImageUrl(sha)
+    return () => {
+      cancelled = true
+    }
+  }, [plan.underlay?.sha256])
+
+  const saveUnderlay = async (file: File) => {
+    setUnderlayBusy(true)
+    try {
+      setPlan(await uploadUnderlay(file))
+      // 换图是一次硬操作：撤销栈里的快照只含墙，回退过去会让人误以为能"撤销换图"。
+      setHistory({ past: [], future: [] })
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '上传底图失败')
+    } finally {
+      setUnderlayBusy(false)
+    }
+  }
+
+  const dropUnderlay = async () => {
+    setUnderlayBusy(true)
+    try {
+      await clearUnderlay()
+      setPlan(await getPlan())
+      setHistory({ past: [], future: [] })
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '删除底图失败')
+    } finally {
+      setUnderlayBusy(false)
+    }
+  }
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -1240,6 +1314,20 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           <span className="text-xs" style={{ color: 'var(--color-muted)' }}>
             {Math.round(viewport.scale * 100)}%
           </span>
+          <button
+            onClick={() => setShowUnderlay((v) => !v)}
+            aria-pressed={showUnderlay}
+            title="上传一张户型图垫在画布下面照着描"
+            className="whitespace-nowrap px-2 py-1 text-xs"
+            style={{
+              border: `1px solid ${showUnderlay ? 'var(--color-primary)' : 'var(--color-border)'}`,
+              borderRadius: 'var(--radius-sm)',
+              background: showUnderlay ? 'var(--color-primary-weak)' : 'var(--color-bg)',
+              color: showUnderlay ? 'var(--color-primary)' : 'inherit',
+            }}
+          >
+            底图
+          </button>
           {user.role === 'admin' ? (
             <button
               onClick={() => setShowTypes(true)}
@@ -1433,6 +1521,16 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         >
           拖拽画墙 · 点墙选中后 Delete 删除 · 空格/中键平移 · 滚轮缩放 · Shift 自由角度 · 拖端点改墙
         </div>
+        {showUnderlay ? (
+          <UnderlayPanel
+            underlay={plan.underlay}
+            isAdmin={user.role === 'admin'}
+            busy={underlayBusy}
+            onUpload={(file) => void saveUnderlay(file)}
+            onClear={() => void dropUnderlay()}
+            onClose={() => setShowUnderlay(false)}
+          />
+        ) : null}
         <Stage
           ref={stageRef}
           width={size.width}
@@ -1453,6 +1551,23 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           style={{ cursor: panRef.current ? 'grabbing' : spaceDown ? 'grab' : 'crosshair' }}
         >
           <Layer>{gridLines}</Layer>
+
+          {/* 底图垫在网格之上、墙之下：它只是参照物，不该挡住墙与物品 */}
+          {underlayTransform && underlayImage && plan.underlay?.visible ? (
+            <Layer listening={false}>
+              <KonvaImage
+                image={underlayImage}
+                x={imageCenter(underlayTransform).x}
+                y={imageCenter(underlayTransform).y}
+                offsetX={imageRect(underlayTransform).w / 2}
+                offsetY={imageRect(underlayTransform).h / 2}
+                width={imageRect(underlayTransform).w}
+                height={imageRect(underlayTransform).h}
+                rotation={plan.underlay.rotationDeg}
+                opacity={plan.underlay.opacity}
+              />
+            </Layer>
+          ) : null}
 
           {/* 房间画在墙下面：半透明填充，墙压在上面边界才清楚 */}
           <Layer listening={false}>

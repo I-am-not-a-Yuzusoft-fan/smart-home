@@ -118,6 +118,22 @@ type PlanMetum struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type PlanUnderlay struct {
+	ID          bool               `json:"id"`
+	ContentType string             `json:"content_type"`
+	WidthPx     int32              `json:"width_px"`
+	HeightPx    int32              `json:"height_px"`
+	Bytes       []byte             `json:"bytes"`
+	Sha256      string             `json:"sha256"`
+	CmPerPx     float64            `json:"cm_per_px"`
+	OffsetXCm   float64            `json:"offset_x_cm"`
+	OffsetYCm   float64            `json:"offset_y_cm"`
+	RotationDeg int32              `json:"rotation_deg"`
+	Opacity     float64            `json:"opacity"`
+	Visible     bool               `json:"visible"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 // 房间命名表：主键是墙环多边形的哈希；房间几何不落库，墙改则哈希变、旧命名失效
 type RoomName struct {
 	PolygonHash string             `json:"polygon_hash"`

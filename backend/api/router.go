@@ -42,6 +42,10 @@ func (s *Server) Router() http.Handler {
 			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "请求参数不合法")
 		},
 	})
+
+	// 底图字节不走生成代码：一个 200 响应可能带三种 content type，
+	// 契约里写出来只会让 codegen 生成难用的 union。鉴权链是同一个。
+	r.Get("/api/plan/underlay/image", s.ServeUnderlayImage)
 	return r
 }
 

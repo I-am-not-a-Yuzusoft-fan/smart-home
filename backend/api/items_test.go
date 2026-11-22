@@ -15,15 +15,15 @@ import (
 const seedRoomHash = "2a6c15cc655eea79"
 
 type itemResponse struct {
-	ID       string         `json:"id"`
-	TypeKey  string         `json:"typeKey"`
-	Kind     string         `json:"kind"`
-	Name     string         `json:"name"`
-	RoomHash *string        `json:"roomHash"`
-	RoomName *string        `json:"roomName"`
-	X        float64        `json:"x"`
-	Y        float64        `json:"y"`
-	Rotation float64        `json:"rotation"`
+	ID         string         `json:"id"`
+	TypeKey    string         `json:"typeKey"`
+	Kind       string         `json:"kind"`
+	Name       string         `json:"name"`
+	RoomHash   *string        `json:"roomHash"`
+	RoomName   *string        `json:"roomName"`
+	X          float64        `json:"x"`
+	Y          float64        `json:"y"`
+	Rotation   float64        `json:"rotation"`
 	Status     *string        `json:"status"`
 	Attrs      map[string]any `json:"attrs"`
 	WallID     *string        `json:"wallId"`
