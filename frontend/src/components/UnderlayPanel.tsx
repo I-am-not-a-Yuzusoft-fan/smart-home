@@ -43,6 +43,7 @@ export function UnderlayPanel({
   onSample,
 }: Props) {
   const [length, setLength] = useState('')
+  const [lengthError, setLengthError] = useState<string | null>(null)
   const [opacity, setOpacity] = useState(underlay?.opacity ?? 0.45)
   const [samplePath, setSamplePath] = useState('')
 
@@ -54,7 +55,12 @@ export function UnderlayPanel({
   const submit = (e: FormEvent) => {
     e.preventDefault()
     const value = Number(length)
-    if (Number.isFinite(value) && value > 0) onCalibrate(value)
+    if (!Number.isFinite(value) || value <= 0) {
+      setLengthError('真实长度要填一个大于 0 的数字')
+      return
+    }
+    setLengthError(null)
+    onCalibrate(value)
   }
 
   const pick = (e: ChangeEvent<HTMLInputElement>) => {
@@ -126,6 +132,11 @@ export function UnderlayPanel({
                     />
                     厘米
                   </label>
+                  {lengthError ? (
+                    <p className="text-xs" style={{ color: 'var(--color-danger)' }}>
+                      {lengthError}
+                    </p>
+                  ) : null}
                   <div className="flex gap-2">
                     <button
                       type="submit"
