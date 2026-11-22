@@ -349,3 +349,17 @@ func parseUUID(raw string) (pgtype.UUID, error) {
 	}
 	return pgUUID(u), nil
 }
+
+// UpsertRoomName 只写名字与用途：几何由墙推导，库里不存房间多边形。
+func (p *PGPlan) UpsertRoomName(ctx context.Context, hash, name, kind string) error {
+	return p.queries.UpsertRoomName(ctx, storegen.UpsertRoomNameParams{
+		PolygonHash: hash,
+		Name:        name,
+		Kind:        kind,
+	})
+}
+
+// DeleteRoomName 清掉某个哈希上的名字。返回 0 行也当成功——"之后没有名字"就是调用方要的。
+func (p *PGPlan) DeleteRoomName(ctx context.Context, hash string) (int64, error) {
+	return p.queries.DeleteRoomName(ctx, hash)
+}

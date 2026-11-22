@@ -1,12 +1,15 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // planBody 只取测试要用的字段，避免和生成的模型耦合。
@@ -27,9 +30,13 @@ type planBody struct {
 		X  float64 `json:"x"`
 		Y  float64 `json:"y"`
 	} `json:"corners"`
-	Rooms     []planRoom `json:"rooms"`
-	OpenWalls int        `json:"openWalls"`
-	Version   int64      `json:"version"`
+	Rooms      []planRoom `json:"rooms"`
+	StaleRooms []struct {
+		Hash string `json:"hash"`
+		Name string `json:"name"`
+	} `json:"staleRooms"`
+	OpenWalls int   `json:"openWalls"`
+	Version   int64 `json:"version"`
 	Walls     []struct {
 		ID  string  `json:"id"`
 		AID string  `json:"aId"`
@@ -428,9 +435,9 @@ func TestReplacePlanRestoresDeletedWallWithSameID(t *testing.T) {
 	}
 	plan := decodePlan(t, created.Body.Bytes())
 	var target struct {
-		id           string
-		ax, ay, bx   float64
-		by           float64
+		id         string
+		ax, ay, bx float64
+		by         float64
 	}
 	for _, w := range plan.Walls {
 		if w.AY == 3300 && w.BY == 3300 && w.AX == 3300 {
@@ -503,4 +510,211 @@ func TestReplacePlanDeletesWallsMissingFromList(t *testing.T) {
 	}
 	do(t, h, http.MethodPut, "/api/plan",
 		fmt.Sprintf(`{"version":%d,"walls":[%s]}`, current, strings.Join(full, ",")), cookie)
+}
+
+// rectPlan 在指定位置画一个闭合方框，返回房间哈希与四面墙的 id。
+func rectPlan(t *testing.T, h http.Handler, cookie *http.Cookie, x0, y0, size float64) (string, []string) {
+	t.Helper()
+	type pt struct{ x, y float64 }
+	corners := []pt{{x0, y0}, {x0 + size, y0}, {x0 + size, y0 + size}, {x0, y0 + size}}
+	ids := make([]string, 0, 4)
+	for i := range corners {
+		a, b := corners[i], corners[(i+1)%len(corners)]
+		body := fmt.Sprintf(`{"ax":%s,"ay":%s,"bx":%s,"by":%s}`,
+			ftoa(a.x), ftoa(a.y), ftoa(b.x), ftoa(b.y))
+		res := do(t, h, http.MethodPost, "/api/walls", body, cookie)
+		if res.Code != http.StatusCreated {
+			t.Fatalf("画墙应 201，实际 %d：%s", res.Code, res.Body.String())
+		}
+		found := ""
+		for _, w := range decodePlan(t, res.Body.Bytes()).Walls {
+			if (w.AX == a.x && w.AY == a.y && w.BX == b.x && w.BY == b.y) ||
+				(w.AX == b.x && w.AY == b.y && w.BX == a.x && w.BY == a.y) {
+				found = w.ID
+			}
+		}
+		if found == "" {
+			t.Fatalf("返回的户型里找不到刚画的墙 (%v → %v)", a, b)
+		}
+		ids = append(ids, found)
+	}
+	want := size * size / 10000
+	plan := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
+	for _, r := range plan.Rooms {
+		if len(r.Ring) == 4 && r.AreaM2 == want {
+			return r.Hash, ids
+		}
+	}
+	t.Fatalf("闭合方框后应出现面积 %.2f ㎡ 的房间，实际 %+v", want, plan.Rooms)
+	return "", ids
+}
+
+// cleanupRoom 先删名字再删墙：名字按哈希存，墙一删哈希就失配、API 再也删不掉了，
+// 残留的行会让下次跑同一个方框的用例读到旧名字。
+func cleanupRoom(t *testing.T, pool *pgxpool.Pool, h http.Handler, cookie *http.Cookie, hash string, walls []string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `DELETE FROM room_name WHERE polygon_hash = $1`, hash); err != nil {
+		t.Errorf("清理房间名失败：%v", err)
+	}
+	for _, id := range walls {
+		do(t, h, http.MethodDelete, "/api/walls/"+id, "", cookie)
+	}
+}
+
+func roomByHash(plan planBody, hash string) *planRoom {
+	for i := range plan.Rooms {
+		if plan.Rooms[i].Hash == hash {
+			return &plan.Rooms[i]
+		}
+	}
+	return nil
+}
+
+// 起名要落库，清名之后房间回到没名字的状态。
+func TestUpdateRoomNamePersistsAndClears(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+	pool := testPool(t)
+
+	hash, walls := rectPlan(t, h, cookie, 2600, 2600, 200)
+	t.Cleanup(func() { cleanupRoom(t, pool, h, cookie, hash, walls) })
+
+	res := do(t, h, http.MethodPatch, "/api/rooms/"+hash, `{"name":"储藏室","kind":"study"}`, cookie)
+	if res.Code != http.StatusOK {
+		t.Fatalf("起名应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+	if room := roomByHash(decodePlan(t, res.Body.Bytes()), hash); room == nil ||
+		room.Name == nil || *room.Name != "储藏室" {
+		t.Fatalf("响应里应带上名字，实际 %+v", room)
+	}
+
+	// 换个请求读一次，确认不是只在响应当中生效
+	again := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
+	room := roomByHash(again, hash)
+	if room == nil || room.Name == nil || *room.Name != "储藏室" {
+		t.Fatalf("刷新后名字应还在，实际 %+v", room)
+	}
+	if room.Kind == nil || *room.Kind != "study" {
+		t.Fatalf("用途应保存为 study，实际 %+v", room.Kind)
+	}
+
+	if res := do(t, h, http.MethodDelete, "/api/rooms/"+hash, "", cookie); res.Code != http.StatusNoContent {
+		t.Fatalf("清名应 204，实际 %d：%s", res.Code, res.Body.String())
+	}
+	cleared := roomByHash(decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes()), hash)
+	if cleared == nil {
+		t.Fatal("清名不该把房间本身弄丢")
+	}
+	if cleared.Name != nil {
+		t.Fatalf("清名之后不该还有名字，实际 %q", *cleared.Name)
+	}
+}
+
+// 墙一改，哈希就变：旧名字不能悄悄消失，也不能挂到形状不同的房间上。
+func TestRoomNameBecomesStaleAfterWallChange(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+	pool := testPool(t)
+
+	hash, walls := rectPlan(t, h, cookie, 2800, 2800, 200)
+	t.Cleanup(func() { cleanupRoom(t, pool, h, cookie, hash, walls) })
+
+	if res := do(t, h, http.MethodPatch, "/api/rooms/"+hash, `{"name":"书房","kind":"study"}`, cookie); res.Code != http.StatusOK {
+		t.Fatalf("起名应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+
+	// 拆一面墙：这个房间不再存在
+	if res := do(t, h, http.MethodDelete, "/api/walls/"+walls[0], "", cookie); res.Code != http.StatusNoContent {
+		t.Fatalf("删墙应 204，实际 %d", res.Code)
+	}
+	plan := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
+	if room := roomByHash(plan, hash); room != nil {
+		t.Fatalf("拆墙之后不该还有这个房间，实际 %+v", room)
+	}
+	found := false
+	for _, s := range plan.StaleRooms {
+		if s.Hash == hash && s.Name == "书房" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("旧名字应出现在 staleRooms 里，实际 %+v", plan.StaleRooms)
+	}
+}
+
+// 过期的哈希不能往库里写一行永远不会被读到的名字。
+func TestUpdateRoomNameRejectsUnknownRoom(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+
+	res := do(t, h, http.MethodPatch, "/api/rooms/0000000000000000", `{"name":"幽灵房"}`, cookie)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("未知哈希应 404，实际 %d：%s", res.Code, res.Body.String())
+	}
+	if code := errorCode(t, res); code != "NOT_FOUND" {
+		t.Errorf("错误码应为 NOT_FOUND，实际 %s", code)
+	}
+}
+
+func TestUpdateRoomNameRejectsBadName(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+	pool := testPool(t)
+
+	hash, walls := rectPlan(t, h, cookie, 3000, 2600, 200)
+	t.Cleanup(func() { cleanupRoom(t, pool, h, cookie, hash, walls) })
+
+	cases := []struct{ name, body string }{
+		{"空名字", `{"name":"   "}`},
+		{"名字过长", `{"name":"` + strings.Repeat("房", 25) + `"}`},
+	}
+	for _, c := range cases {
+		res := do(t, h, http.MethodPatch, "/api/rooms/"+hash, c.body, cookie)
+		if res.Code != http.StatusBadRequest {
+			t.Errorf("%s 应 400，实际 %d：%s", c.name, res.Code, res.Body.String())
+			continue
+		}
+		if code := errorCode(t, res); code != "VALIDATION_FAILED" {
+			t.Errorf("%s 错误码应为 VALIDATION_FAILED，实际 %s", c.name, code)
+		}
+	}
+}
+
+// 失配名字必须能被清掉——否则它会永远挂着，用户连"重新起名"都无从下手。
+func TestClearStaleRoomNameIsAllowed(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+	pool := testPool(t)
+
+	hash, walls := rectPlan(t, h, cookie, 3200, 2600, 200)
+	t.Cleanup(func() {
+		for _, id := range walls {
+			do(t, h, http.MethodDelete, "/api/walls/"+id, "", cookie)
+		}
+	})
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM room_name WHERE polygon_hash = $1`, hash); err != nil {
+			t.Errorf("清理房间名失败：%v", err)
+		}
+	})
+
+	if res := do(t, h, http.MethodPatch, "/api/rooms/"+hash, `{"name":"次卧","kind":"bedroom"}`, cookie); res.Code != http.StatusOK {
+		t.Fatalf("起名应 200，实际 %d", res.Code)
+	}
+	do(t, h, http.MethodDelete, "/api/walls/"+walls[0], "", cookie)
+
+	if res := do(t, h, http.MethodDelete, "/api/rooms/"+hash, "", cookie); res.Code != http.StatusNoContent {
+		t.Fatalf("清理失配名字应 204，实际 %d：%s", res.Code, res.Body.String())
+	}
+	plan := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
+	for _, s := range plan.StaleRooms {
+		if s.Hash == hash {
+			t.Fatalf("清理之后不该还在 staleRooms 里：%+v", plan.StaleRooms)
+		}
+	}
 }
