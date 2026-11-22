@@ -137,7 +137,9 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
             />
           </label>
           <p className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
-            挂墙物品的位置与朝向由墙决定：挪这面墙，它会跟着走。想自由摆放就先把它拖离墙面。
+            {type?.mount === 'wall'
+              ? '挂墙物品的位置与朝向由墙决定：挪这面墙，它会跟着走；拖到另一面墙边就能换墙。'
+              : '这面墙的位置与朝向决定它的摆放：挪墙它会跟着走。把它拖离墙面就能自由摆放。'}
           </p>
         </>
       ) : (

@@ -1198,6 +1198,7 @@ components:
           description: |
             挂墙物品给出所在墙的 id。给了墙就以 `wallOffset` 定位，
             `x` / `y` / `rotation` 由服务端按墙算出来，传了也会被覆盖。
+            类型 `mount` 为 `wall` 的物品必填，否则 400。
         wallOffset:
           type: number
           format: double
@@ -1235,7 +1236,9 @@ components:
           additionalProperties: true
         wallId:
           type: string
-          description: 改成挂墙物品；空字符串表示脱离墙面、回到自由摆放
+          description: |
+            改成挂墙物品；空字符串表示脱离墙面、回到自由摆放。
+            `mount` 为 `wall` 的类型不接受空字符串（400）。
         wallOffset:
           type: number
           format: double

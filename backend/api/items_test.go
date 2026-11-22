@@ -368,10 +368,60 @@ func TestWallMountedItemFollowsWall(t *testing.T) {
 		t.Fatalf("wallOffset 60 时应在 (4000,4060)，实际 (%.1f,%.1f)", moved.X, moved.Y)
 	}
 
-	// 空串 = 脱离墙面，位置保持不变
+	// 挂墙类型不能脱离墙面：窗帘飘在房间中间没有意义
 	res = do(t, h, http.MethodPatch, "/api/items/"+created.ID, `{"wallId":""}`, admin)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("窗帘脱离墙面应 400，实际 %d：%s", res.Code, res.Body.String())
+	}
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/items/"+created.ID, "", admin) })
+}
+
+// 挂墙类型没有墙就没有位置：服务端必须兜底，不能只靠前端把落点吸到墙上。
+func TestCreateWallMountedTypeNeedsWall(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	_, walls := rectPlan(t, h, admin, 4400, 4400, 400)
+	defer cleanupRoom(t, testPool(t), h, admin, "", walls)
+
+	res := do(t, h, http.MethodPost, "/api/items",
+		`{"typeKey":"curtain","name":"悬空窗帘","roomHash":null,"x":4200,"y":4200}`, admin)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("不带 wallId 建窗帘应 400，实际 %d：%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "只能挂在墙上") {
+		t.Fatalf("文案应说明要挂墙：%s", res.Body.String())
+	}
+
+	// 落地类型照旧可以直接放在房间中间
+	res = do(t, h, http.MethodPost, "/api/items",
+		`{"typeKey":"sofa","name":"测试沙发","roomHash":null,"x":4200,"y":4200}`, admin)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("沙发落地应 201，实际 %d：%s", res.Code, res.Body.String())
+	}
+	var sofa itemResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &sofa); err != nil {
+		t.Fatalf("新建响应不是 JSON：%v", err)
+	}
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/items/"+sofa.ID, "", admin) })
+}
+
+// 落地类型被贴到墙上后仍可脱离：脱离是"取消挂墙"，不违反挂墙类型的规则。
+func TestFloorItemCanDetachFromWall(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	_, walls := rectPlan(t, h, admin, 4000, 4000, 400)
+	defer cleanupRoom(t, testPool(t), h, admin, "", walls)
+
+	sofa := createItem(t, h, admin, fmt.Sprintf(
+		`{"typeKey":"sofa","name":"贴墙沙发","roomHash":null,"x":0,"y":0,"wallId":%q,"wallOffset":100}`, walls[0]))
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/items/"+sofa.ID, "", admin) })
+	if sofa.WallID == nil || *sofa.WallID != walls[0] {
+		t.Fatalf("沙发应记下 wallId，实际 %+v", sofa)
+	}
+
+	res := do(t, h, http.MethodPatch, "/api/items/"+sofa.ID, `{"wallId":""}`, admin)
 	if res.Code != http.StatusOK {
-		t.Fatalf("脱离墙面应 200，实际 %d：%s", res.Code, res.Body.String())
+		t.Fatalf("落地类型脱离墙面应 200，实际 %d：%s", res.Code, res.Body.String())
 	}
 	var detached itemResponse
 	if err := json.Unmarshal(res.Body.Bytes(), &detached); err != nil {
@@ -380,15 +430,11 @@ func TestWallMountedItemFollowsWall(t *testing.T) {
 	if detached.WallID != nil || detached.WallOffset != nil {
 		t.Fatalf("脱离后不应再有 wallId/wallOffset：%+v", detached)
 	}
-	if detached.X != 4000 || detached.Y != 4060 {
-		t.Fatalf("脱离时位置应保持 (4000,4060)，实际 (%.1f,%.1f)", detached.X, detached.Y)
-	}
-	// 自由摆放后又能直接改坐标了
-	res = do(t, h, http.MethodPatch, "/api/items/"+created.ID, `{"x":4100,"y":4100}`, admin)
+	// 脱离后回到自由摆放，坐标可以随便改
+	res = do(t, h, http.MethodPatch, "/api/items/"+sofa.ID, `{"x":4200,"y":4200}`, admin)
 	if res.Code != http.StatusOK {
 		t.Fatalf("脱离后改坐标应 200，实际 %d：%s", res.Code, res.Body.String())
 	}
-	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/items/"+created.ID, "", admin) })
 }
 
 // 删墙时挂在上面的物品跟着删，库里不会留下指向不存在墙的孤儿行。
