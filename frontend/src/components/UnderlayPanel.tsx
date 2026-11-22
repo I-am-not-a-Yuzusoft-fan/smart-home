@@ -2,6 +2,7 @@ import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 
 import type { Underlay, UnderlayPatch } from '../api/client'
 import { nextRotation } from '../features/plan/underlay.ts'
+import { UNDERLAY_SAMPLES, type UnderlaySample } from '../features/plan/samples.ts'
 
 type Props = {
   underlay: Underlay | null
@@ -17,6 +18,7 @@ type Props = {
   onCancelCalibration: () => void
   onCalibrate: (lengthCm: number) => void
   onPatch: (patch: UnderlayPatch) => void
+  onSample: (sample: UnderlaySample) => void
 }
 
 /**
@@ -38,9 +40,11 @@ export function UnderlayPanel({
   onCancelCalibration,
   onCalibrate,
   onPatch,
+  onSample,
 }: Props) {
   const [length, setLength] = useState('')
   const [opacity, setOpacity] = useState(underlay?.opacity ?? 0.45)
+  const [samplePath, setSamplePath] = useState('')
 
   // 底图换了（上传/删除/重新加载）就跟着服务端的值走，拖动过程中的本地值不覆盖。
   useEffect(() => {
@@ -238,6 +242,48 @@ export function UnderlayPanel({
               disabled={busy}
               onChange={pick}
             />
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <select
+              value={samplePath}
+              disabled={busy}
+              onChange={(e) => setSamplePath(e.target.value)}
+              className="max-w-[9rem] px-1 py-0.5"
+              style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}
+            >
+              <option value="">示例户型图…</option>
+              <optgroup label="合成图（现代 CAD 风格）">
+                {UNDERLAY_SAMPLES.filter((s) => s.group === 'synthetic').map((s) => (
+                  <option key={s.path} value={s.path}>
+                    {s.label}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="档案扫描件（公有领域）">
+                {UNDERLAY_SAMPLES.filter((s) => s.group === 'scan').map((s) => (
+                  <option key={s.path} value={s.path}>
+                    {s.label}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
+            <button
+              type="button"
+              disabled={busy || !samplePath}
+              onClick={() => {
+                const sample = UNDERLAY_SAMPLES.find((s) => s.path === samplePath)
+                if (sample) onSample(sample)
+              }}
+              className="px-2 py-1 text-xs"
+              style={{
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--color-bg)',
+                opacity: busy || !samplePath ? 0.5 : 1,
+              }}
+            >
+              垫示例图
+            </button>
           </label>
           {underlay ? (
             <button

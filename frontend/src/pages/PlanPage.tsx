@@ -56,6 +56,7 @@ import {
   type UnderlayTransform,
 } from '../features/plan/underlay.ts'
 import { replacePlan, type WallSnapshot } from '../api/client.ts'
+import { sampleAsFile, type UnderlaySample } from '../features/plan/samples.ts'
 
 type Props = {
   user: SessionUser
@@ -213,6 +214,17 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : '删除底图失败')
+    } finally {
+      setUnderlayBusy(false)
+    }
+  }
+
+  const useSample = async (sample: UnderlaySample) => {
+    setUnderlayBusy(true)
+    try {
+      await saveUnderlay(await sampleAsFile(sample))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '示例图加载失败')
     } finally {
       setUnderlayBusy(false)
     }
@@ -1604,6 +1616,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             onCancelCalibration={cancelCalibration}
             onCalibrate={(lengthCm) => void applyCalibration(lengthCm)}
             onPatch={(patch) => void patchUnderlay(patch)}
+            onSample={(sample) => void useSample(sample)}
           />
         ) : null}
         <Stage
