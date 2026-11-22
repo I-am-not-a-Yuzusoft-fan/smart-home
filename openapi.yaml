@@ -98,6 +98,38 @@ paths:
                 $ref: "#/components/schemas/Plan"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+    put:
+      operationId: replacePlan
+      summary: 整份替换户型（撤销/重做）
+      description: |
+        撤销/重做不重放操作，而是把整份墙列表写回：墙的 id 由服务端生成，
+        删了再建会换 id，门窗的 `wall_id` 就断了。所以这里是「按 id 对齐」的整份替换——
+        列表里的 id 表示保留并更新，缺的 id 删除，没有 id 的插入。
+
+        `version` 对不上说明别处已经改过，返回 409；客户端应重新 GET 而不是覆盖。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanInput"
+      responses:
+        "200":
+          description: 替换后的户型
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "409":
+          description: 版本号过期，别处已改过
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/walls:
     post:
       operationId: createWall
@@ -124,11 +156,55 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthenticated"
   /api/walls/{wallId}:
+    patch:
+      operationId: updateWall
+      summary: 改一面墙的端点或厚度
+      description: |
+        用于拖端点微调长度与角度。端点同样按坐标落库（已存在就复用），
+        所以把端点拖到另一面墙的端点上是"合并到那个点"，不是新建一个重合点。
+        改完不再被任何墙引用的端点会被清掉。
+        若改完与另一面已有墙完全重合（同一对端点），返回 409，不悄悄合并两面墙。
+      parameters:
+        - name: wallId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WallInput"
+      responses:
+        "200":
+          description: 已更新，返回整个户型
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: 没有这面墙
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: 改完会和另一面墙重合成同一对端点
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
     delete:
       operationId: deleteWall
       summary: 删除一面墙
       description: |
-        只删墙，不删端点——端点可能被其他墙共用，成为孤立端点也是合法状态。
+        删掉这面墙，并清理因此不再被任何墙引用的端点（共用端点会保留）。
         重复删除返回 404（后端不做幂等处理），调用方应把 404 当作"已经没了"。
       parameters:
         - name: wallId
@@ -506,7 +582,7 @@ components:
           format: double
     Plan:
       type: object
-      required: [corners, walls, rooms, openWalls]
+      required: [corners, walls, rooms, openWalls, version]
       properties:
         corners:
           type: array
@@ -526,6 +602,64 @@ components:
         openWalls:
           type: integer
           description: 没有参与任何闭合区域的墙数；大于 0 时前端提示「还有墙没围上」
+        version:
+          type: integer
+          format: int64
+          description: |
+            平面图版本号。每次整份替换成功后 +1，撤销/重做靠它做乐观并发：
+            写回时带上旧版本号，服务端发现对不上就返回 409，客户端重新取全量。
+    WallSnapshot:
+      type: object
+      required: [ax, ay, bx, by]
+      additionalProperties: false
+      description: |
+        整份替换时的一面墙。`id` 可省略：省略表示新建（服务端生成），
+        带上表示「这面墙原来就在」——撤销/重做必须保住 id，否则门窗的
+        `wall_id` 与前端选中态都会断。
+      properties:
+        id:
+          type: string
+          format: uuid
+        ax:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 5000
+        ay:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 5000
+        bx:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 5000
+        by:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 5000
+        thickness:
+          type: number
+          format: double
+          minimum: 1
+          maximum: 100
+          default: 10
+    PlanInput:
+      type: object
+      required: [version, walls]
+      additionalProperties: false
+      description: 整份替换整个户型（撤销/重做用）。
+      properties:
+        version:
+          type: integer
+          format: int64
+          description: 客户端读到的版本号；与服务端不一致时返回 409
+        walls:
+          type: array
+          items:
+            $ref: "#/components/schemas/WallSnapshot"
     PlanPoint:
       type: object
       required: [x, y]

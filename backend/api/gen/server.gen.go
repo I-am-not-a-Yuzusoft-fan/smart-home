@@ -495,7 +495,18 @@ type Plan struct {
 	// Rooms 由墙的闭环推导出来的房间。前端只渲染，不自己推导。
 	// 墙没围成闭环时这里是空数组，`openWalls` 会给出提示依据。
 	Rooms []Room `json:"rooms"`
-	Walls []Wall `json:"walls"`
+
+	// Version 平面图版本号。每次整份替换成功后 +1，撤销/重做靠它做乐观并发：
+	// 写回时带上旧版本号，服务端发现对不上就返回 409，客户端重新取全量。
+	Version int64  `json:"version"`
+	Walls   []Wall `json:"walls"`
+}
+
+// PlanInput 整份替换整个户型（撤销/重做用）。
+type PlanInput struct {
+	// Version 客户端读到的版本号；与服务端不一致时返回 409
+	Version int64          `json:"version"`
+	Walls   []WallSnapshot `json:"walls"`
 }
 
 // PlanPoint defines model for PlanPoint.
@@ -564,6 +575,18 @@ type WallInput struct {
 	Thickness *float64 `json:"thickness,omitempty"`
 }
 
+// WallSnapshot 整份替换时的一面墙。`id` 可省略：省略表示新建（服务端生成），
+// 带上表示「这面墙原来就在」——撤销/重做必须保住 id，否则门窗的
+// `wall_id` 与前端选中态都会断。
+type WallSnapshot struct {
+	Ax        float64             `json:"ax"`
+	Ay        float64             `json:"ay"`
+	Bx        float64             `json:"bx"`
+	By        float64             `json:"by"`
+	Id        *openapi_types.UUID `json:"id,omitempty"`
+	Thickness *float64            `json:"thickness,omitempty"`
+}
+
 // Conflict defines model for Conflict.
 type Conflict = Error
 
@@ -610,8 +633,14 @@ type CreateItemJSONRequestBody = ItemInput
 // UpdateItemJSONRequestBody defines body for UpdateItem for application/json ContentType.
 type UpdateItemJSONRequestBody = ItemUpdate
 
+// ReplacePlanJSONRequestBody defines body for ReplacePlan for application/json ContentType.
+type ReplacePlanJSONRequestBody = PlanInput
+
 // CreateWallJSONRequestBody defines body for CreateWall for application/json ContentType.
 type CreateWallJSONRequestBody = WallInput
+
+// UpdateWallJSONRequestBody defines body for UpdateWall for application/json ContentType.
+type UpdateWallJSONRequestBody = WallInput
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -654,12 +683,18 @@ type ServerInterface interface {
 	// GetPlan 取当前户型（端点与墙）
 	// (GET /api/plan)
 	GetPlan(w http.ResponseWriter, r *http.Request)
+	// ReplacePlan 整份替换户型（撤销/重做）
+	// (PUT /api/plan)
+	ReplacePlan(w http.ResponseWriter, r *http.Request)
 	// CreateWall 画一面墙
 	// (POST /api/walls)
 	CreateWall(w http.ResponseWriter, r *http.Request)
 	// DeleteWall 删除一面墙
 	// (DELETE /api/walls/{wallId})
 	DeleteWall(w http.ResponseWriter, r *http.Request, wallId openapi_types.UUID)
+	// UpdateWall 改一面墙的端点或厚度
+	// (PATCH /api/walls/{wallId})
+	UpdateWall(w http.ResponseWriter, r *http.Request, wallId openapi_types.UUID)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -744,6 +779,12 @@ func (_ Unimplemented) GetPlan(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// ReplacePlan 整份替换户型（撤销/重做）
+// (PUT /api/plan)
+func (_ Unimplemented) ReplacePlan(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // CreateWall 画一面墙
 // (POST /api/walls)
 func (_ Unimplemented) CreateWall(w http.ResponseWriter, r *http.Request) {
@@ -753,6 +794,12 @@ func (_ Unimplemented) CreateWall(w http.ResponseWriter, r *http.Request) {
 // DeleteWall 删除一面墙
 // (DELETE /api/walls/{wallId})
 func (_ Unimplemented) DeleteWall(w http.ResponseWriter, r *http.Request, wallId openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateWall 改一面墙的端点或厚度
+// (PATCH /api/walls/{wallId})
+func (_ Unimplemented) UpdateWall(w http.ResponseWriter, r *http.Request, wallId openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1040,6 +1087,20 @@ func (siw *ServerInterfaceWrapper) GetPlan(w http.ResponseWriter, r *http.Reques
 	handler.ServeHTTP(w, r)
 }
 
+// ReplacePlan operation middleware
+func (siw *ServerInterfaceWrapper) ReplacePlan(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReplacePlan(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // CreateWall operation middleware
 func (siw *ServerInterfaceWrapper) CreateWall(w http.ResponseWriter, r *http.Request) {
 
@@ -1071,6 +1132,32 @@ func (siw *ServerInterfaceWrapper) DeleteWall(w http.ResponseWriter, r *http.Req
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.DeleteWall(w, r, wallId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateWall operation middleware
+func (siw *ServerInterfaceWrapper) UpdateWall(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "wallId" -------------
+	var wallId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "wallId", chi.URLParam(r, "wallId"), &wallId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "wallId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateWall(w, r, wallId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1209,10 +1296,16 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/api/plan", wrapper.GetPlan)
 	})
 	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/api/plan", wrapper.ReplacePlan)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/api/walls", wrapper.CreateWall)
 	})
 	r.Group(func(r chi.Router) {
 		r.Delete(options.BaseURL+"/api/walls/{wallId}", wrapper.DeleteWall)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/api/walls/{wallId}", wrapper.UpdateWall)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/item-types", wrapper.ListItemTypes)

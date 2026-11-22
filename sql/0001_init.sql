@@ -138,6 +138,16 @@ COMMENT ON TABLE state_history IS '只记变化，不记采样；不建 item 外
 CREATE INDEX state_history_lookup_idx ON state_history (item_id, capability_key, recorded_at DESC);
 CREATE INDEX state_history_time_idx ON state_history (recorded_at);
 
+-- 平面图版本号：整份快照式的撤销/重做靠它做乐观并发。
+-- 只有一行（id = 1 的 CHECK），每次 ReplacePlan 成功后 +1；客户端带着旧版本号写回就是 409。
+CREATE TABLE plan_meta (
+    id          smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    version     bigint NOT NULL DEFAULT 1,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO plan_meta (id, version) VALUES (1, 1);
+
 CREATE TABLE command_log (
     id              bigserial PRIMARY KEY,
     request_id      uuid NOT NULL UNIQUE,

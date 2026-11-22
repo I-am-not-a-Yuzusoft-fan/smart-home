@@ -12,6 +12,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bumpPlanVersion = `-- name: BumpPlanVersion :one
+UPDATE plan_meta SET version = version + 1, updated_at = now() WHERE id = 1
+RETURNING version
+`
+
+func (q *Queries) BumpPlanVersion(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, bumpPlanVersion)
+	var version int64
+	err := row.Scan(&version)
+	return version, err
+}
+
 const completeCommand = `-- name: CompleteCommand :exec
 UPDATE command_log
 SET status = $2, error = $3, completed_at = $4, duration_ms = $5
@@ -37,6 +49,16 @@ func (q *Queries) CompleteCommand(ctx context.Context, arg CompleteCommandParams
 	return err
 }
 
+const deleteOrphanCorners = `-- name: DeleteOrphanCorners :exec
+DELETE FROM corner c
+WHERE NOT EXISTS (SELECT 1 FROM wall w WHERE w.a = c.id OR w.b = c.id)
+`
+
+func (q *Queries) DeleteOrphanCorners(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteOrphanCorners)
+	return err
+}
+
 const deleteWall = `-- name: DeleteWall :execrows
 DELETE FROM wall WHERE id = $1
 `
@@ -47,6 +69,26 @@ func (q *Queries) DeleteWall(ctx context.Context, id pgtype.UUID) (int64, error)
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteWallByID = `-- name: DeleteWallByID :exec
+DELETE FROM wall WHERE id = $1
+`
+
+func (q *Queries) DeleteWallByID(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWallByID, id)
+	return err
+}
+
+const getPlanVersion = `-- name: GetPlanVersion :one
+SELECT version FROM plan_meta WHERE id = 1
+`
+
+func (q *Queries) GetPlanVersion(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, getPlanVersion)
+	var version int64
+	err := row.Scan(&version)
+	return version, err
 }
 
 const getState = `-- name: GetState :one
@@ -70,6 +112,22 @@ func (q *Queries) GetState(ctx context.Context, arg GetStateParams) (CapabilityS
 		&i.Source,
 		&i.UpdatedAt,
 	)
+	return i, err
+}
+
+const getWall = `-- name: GetWall :one
+SELECT a, b FROM wall WHERE id = $1
+`
+
+type GetWallRow struct {
+	A pgtype.UUID `json:"a"`
+	B pgtype.UUID `json:"b"`
+}
+
+func (q *Queries) GetWall(ctx context.Context, id pgtype.UUID) (GetWallRow, error) {
+	row := q.db.QueryRow(ctx, getWall, id)
+	var i GetWallRow
+	err := row.Scan(&i.A, &i.B)
 	return i, err
 }
 
@@ -164,6 +222,28 @@ func (q *Queries) InsertWall(ctx context.Context, arg InsertWallParams) (pgtype.
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const insertWallWithID = `-- name: InsertWallWithID :exec
+INSERT INTO wall (id, a, b, thickness) VALUES ($1, $2, $3, $4)
+`
+
+type InsertWallWithIDParams struct {
+	ID        pgtype.UUID `json:"id"`
+	A         pgtype.UUID `json:"a"`
+	B         pgtype.UUID `json:"b"`
+	Thickness float64     `json:"thickness"`
+}
+
+// 撤销/重做要保住墙 id：门窗的 wall_id、前端的选中态都挂在它上面。
+func (q *Queries) InsertWallWithID(ctx context.Context, arg InsertWallWithIDParams) error {
+	_, err := q.db.Exec(ctx, insertWallWithID,
+		arg.ID,
+		arg.A,
+		arg.B,
+		arg.Thickness,
+	)
+	return err
 }
 
 const listCorners = `-- name: ListCorners :many
@@ -263,6 +343,30 @@ func (q *Queries) ListStatesByItem(ctx context.Context, itemID pgtype.UUID) ([]C
 	return items, nil
 }
 
+const listWallIDs = `-- name: ListWallIDs :many
+SELECT id FROM wall
+`
+
+func (q *Queries) ListWallIDs(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listWallIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWalls = `-- name: ListWalls :many
 SELECT w.id, w.a, w.b, w.thickness,
        ca.x AS ax, ca.y AS ay, cb.x AS bx, cb.y AS by
@@ -310,6 +414,66 @@ func (q *Queries) ListWalls(ctx context.Context) ([]ListWallsRow, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockPlanVersion = `-- name: LockPlanVersion :one
+SELECT version FROM plan_meta WHERE id = 1 FOR UPDATE
+`
+
+// 事务里先锁这一行，才能让「读版本 → 比对 → 写 → +1」不被并发插队。
+func (q *Queries) LockPlanVersion(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, lockPlanVersion)
+	var version int64
+	err := row.Scan(&version)
+	return version, err
+}
+
+const updateWall = `-- name: UpdateWall :execrows
+UPDATE wall SET a = $2, b = $3, thickness = $4 WHERE id = $1
+`
+
+type UpdateWallParams struct {
+	ID        pgtype.UUID `json:"id"`
+	A         pgtype.UUID `json:"a"`
+	B         pgtype.UUID `json:"b"`
+	Thickness float64     `json:"thickness"`
+}
+
+func (q *Queries) UpdateWall(ctx context.Context, arg UpdateWallParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateWall,
+		arg.ID,
+		arg.A,
+		arg.B,
+		arg.Thickness,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateWallGeom = `-- name: UpdateWallGeom :execrows
+UPDATE wall SET a = $2, b = $3, thickness = $4 WHERE id = $1
+`
+
+type UpdateWallGeomParams struct {
+	ID        pgtype.UUID `json:"id"`
+	A         pgtype.UUID `json:"a"`
+	B         pgtype.UUID `json:"b"`
+	Thickness float64     `json:"thickness"`
+}
+
+func (q *Queries) UpdateWallGeom(ctx context.Context, arg UpdateWallGeomParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateWallGeom,
+		arg.ID,
+		arg.A,
+		arg.B,
+		arg.Thickness,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertCorner = `-- name: UpsertCorner :one
