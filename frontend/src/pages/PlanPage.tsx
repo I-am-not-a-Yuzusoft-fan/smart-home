@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
-import { Circle, Layer, Line, Rect, Stage, Text } from 'react-konva'
+import { Circle, Group, Layer, Line, Rect, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
 import {
   ApiError,
@@ -534,15 +534,16 @@ function ItemShape({
   const depth = type?.defaultDepth ?? 60
   return (
     <>
-      <Rect
+      {/*
+        item.x / item.y 是物品**中心**。Group 的原点放在中心，再用 offset 把绘制原点
+        挪回左上角——这样 rotation 绕自身中心转，而不是绕左上角把沙发甩出房间。
+      */}
+      <Group
         x={item.x}
         y={item.y}
-        width={width}
-        height={depth}
+        offsetX={width / 2}
+        offsetY={depth / 2}
         rotation={item.rotation}
-        fill={item.kind === 'device' ? '#dbe6ff' : '#e8e1d4'}
-        stroke={selected ? '#4f6bed' : '#8a8a9e'}
-        strokeWidth={selected ? 2 : 1}
         draggable
         onMouseDown={(e) => {
           e.cancelBubble = true
@@ -557,12 +558,21 @@ function ItemShape({
         }}
         onDragStart={onSelect}
         onDragEnd={onDragEnd}
-      />
+      >
+        <Rect
+          width={width}
+          height={depth}
+          fill={item.kind === 'device' ? '#dbe6ff' : '#e8e1d4'}
+          stroke={selected ? '#4f6bed' : '#8a8a9e'}
+          strokeWidth={selected ? 2 : 1}
+        />
+      </Group>
       {selected || width >= 40 ? (
         <Text
-          x={item.x + 4}
-          y={item.y + 4}
-          width={Math.max(width - 8, 20)}
+          x={item.x - width / 2}
+          y={item.y - 7}
+          width={width}
+          align="center"
           text={item.name}
           fontSize={11}
           fill="#3a3a4d"

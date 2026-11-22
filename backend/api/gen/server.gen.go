@@ -363,15 +363,17 @@ type Item struct {
 	// RoomName 房间显示名；房间还没有命名时省略
 	RoomName *string `json:"roomName,omitempty"`
 
-	// Rotation 旋转角度（度）
+	// Rotation 绕物品中心旋转的角度（度，顺时针为正）
 	Rotation float64 `json:"rotation"`
 
 	// Status 仅家具使用；设备状态在 capability_state
 	Status  *ItemStatus `json:"status,omitempty"`
 	TypeKey string      `json:"typeKey"`
 
-	// X 平面坐标（厘米）
+	// X 物品中心点的平面坐标 X（厘米）
 	X float64 `json:"x"`
+
+	// Y 物品中心点的平面坐标 Y（厘米）
 	Y float64 `json:"y"`
 }
 

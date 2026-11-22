@@ -88,6 +88,10 @@ func (s *Server) CreateItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "创建物品失败")
 		return
 	}
+	if typ.Kind == "device" && body.Status != nil {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, deviceStatusMessage)
+		return
+	}
 	roomHash, msg, ok := s.normalizeRoomHash(r.Context(), body.RoomHash)
 	if !ok {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
@@ -145,6 +149,10 @@ func (s *Server) UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_t
 		return
 	}
 
+	if existing.Kind == "device" && body.Status != nil {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, deviceStatusMessage)
+		return
+	}
 	update := itemstore.ItemUpdate{ID: itemID}
 	if body.Name != nil {
 		name := strings.TrimSpace(*body.Name)
@@ -295,6 +303,12 @@ func validatePosition(x, y, rotation float64) (string, bool) {
 	}
 	return "", true
 }
+
+// deviceStatusMessage 说明为什么设备不能写 status。
+//
+// 设备的状态在 capability_state（每项能力一条），item.status 是给家具用的
+// 「正常/闲置/维修」。允许两边都写就会出现两份真相，读的人不知道该信哪个。
+const deviceStatusMessage = "设备不使用 status 字段：设备状态在 capability_state 里（如 on、brightness），item.status 只用于家具"
 
 func validStatus(status string) bool {
 	return status == "normal" || status == "idle" || status == "maintenance"

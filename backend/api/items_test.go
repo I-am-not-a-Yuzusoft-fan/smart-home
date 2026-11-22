@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -216,5 +217,91 @@ func TestUpdateAndDeleteMissingItem(t *testing.T) {
 	w = do(t, h, http.MethodDelete, "/api/items/"+missing, "", admin)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("删除不存在物品应 404，实际 %d", w.Code)
+	}
+}
+
+// 未知字段与类型错误要给出可操作的文案，而不是笼统的「不是合法的 JSON」。
+func TestCreateItemReportsUnknownField(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+
+	w := do(t, h, http.MethodPost, "/api/items", `{"typeKey":"sofa","name":"x","x":0,"y":0,"nope":1}`, admin)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("未知字段应 400，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "不支持的字段") || !strings.Contains(w.Body.String(), "nope") {
+		t.Fatalf("文案应指出具体字段，实际：%s", w.Body.String())
+	}
+}
+
+func TestUpdateItemReportsUnknownField(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	item := createItem(t, h, admin, `{"typeKey":"sofa","name":"x","x":0,"y":0}`)
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/items/"+item.ID, "", admin) })
+
+	// typeKey 不在 ItemUpdate 里，改类型必须走删除重建。
+	w := do(t, h, http.MethodPatch, "/api/items/"+item.ID, `{"typeKey":"ac"}`, admin)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("未知字段应 400，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "不支持的字段") || !strings.Contains(w.Body.String(), "typeKey") {
+		t.Fatalf("文案应指出具体字段，实际：%s", w.Body.String())
+	}
+}
+
+func TestCreateItemReportsMalformedJSON(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+
+	w := do(t, h, http.MethodPost, "/api/items", `{"typeKey":`, admin)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("残缺 JSON 应 400，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "不是合法的 JSON") {
+		t.Fatalf("文案应说明 JSON 不合法，实际：%s", w.Body.String())
+	}
+}
+
+// 设备的真实状态在 capability_state 里；item.status 只对家具有语义（ADR 0002 §2.2）。
+func TestCreateDeviceRejectsStatus(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+
+	w := do(t, h, http.MethodPost, "/api/items",
+		`{"typeKey":"ceiling_light","name":"灯","x":10,"y":10,"status":"maintenance"}`, admin)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("设备带 status 应 400，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "设备不使用 status") {
+		t.Fatalf("文案应说明设备不用 status，实际：%s", w.Body.String())
+	}
+}
+
+func TestUpdateDeviceRejectsStatus(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	item := createItem(t, h, admin, `{"typeKey":"ceiling_light","name":"灯","x":10,"y":10}`)
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/items/"+item.ID, "", admin) })
+
+	w := do(t, h, http.MethodPatch, "/api/items/"+item.ID, `{"status":"maintenance"}`, admin)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("设备改 status 应 400，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "设备不使用 status") {
+		t.Fatalf("文案应说明设备不用 status，实际：%s", w.Body.String())
+	}
+}
+
+// 家具仍然可以用 status。
+func TestFurnitureKeepsStatus(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	item := createItem(t, h, admin, `{"typeKey":"sofa","name":"沙发","x":0,"y":0}`)
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/items/"+item.ID, "", admin) })
+
+	w := do(t, h, http.MethodPatch, "/api/items/"+item.ID, `{"status":"maintenance"}`, admin)
+	if w.Code != http.StatusOK {
+		t.Fatalf("家具改 status 应 200，实际 %d：%s", w.Code, w.Body.String())
 	}
 }

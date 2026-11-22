@@ -749,14 +749,15 @@ components:
         x:
           type: number
           format: double
-          description: 平面坐标（厘米）
+          description: 物品中心点的平面坐标 X（厘米）
         y:
           type: number
           format: double
+          description: 物品中心点的平面坐标 Y（厘米）
         rotation:
           type: number
           format: double
-          description: 旋转角度（度）
+          description: 绕物品中心旋转的角度（度，顺时针为正）
         status:
           type: string
           enum: [normal, idle, maintenance]
