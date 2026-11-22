@@ -50,6 +50,8 @@ type WallInput struct {
 var (
 	ErrWallNotFound = errors.New("墙不存在")
 	ErrWallConflict = errors.New("改完与另一面墙重合")
+	// ErrPlanConflict 版本号过期：别处已经改过这份户型。
+	ErrPlanConflict = errors.New("plan version conflict")
 )
 
 // RoomName 是用户给某个房间起的名字，键是房间多边形的哈希。
@@ -63,6 +65,14 @@ type RoomName struct {
 //
 // 写操作：画墙、改墙、删墙。端点去重与「同一对端点只留一面墙」属于持久化语义，
 // 放在实现里（PGPlan），接口层不掺和。
+// WallSnapshot 是一面墙的完整几何；ID 为空表示新画的一面墙。
+type WallSnapshot struct {
+	ID        *string
+	AX, AY    float64
+	BX, BY    float64
+	Thickness float64
+}
+
 type PlanStore interface {
 	LoadPlan(ctx context.Context) ([]PlanCorner, []PlanWall, error)
 	// LoadRoomNames 只取"名字"，几何由墙推导——房间不存几何是 ADR 0002 定下的。
@@ -70,6 +80,10 @@ type PlanStore interface {
 	CreateWall(ctx context.Context, in WallInput) error
 	UpdateWall(ctx context.Context, id openapi_types.UUID, in WallInput) error
 	DeleteWall(ctx context.Context, id openapi_types.UUID) (int64, error)
+	// LoadVersion 读平面图版本号；撤销/重做拿它做乐观并发。
+	LoadVersion(ctx context.Context) (int64, error)
+	// ReplacePlan 按 id 对齐地整份替换墙列表，成功后版本号 +1。
+	ReplacePlan(ctx context.Context, version int64, walls []WallSnapshot) error
 }
 
 // GetPlan 返回整张户型。端点单独列，因为两面墙共享一个端点。
@@ -197,9 +211,15 @@ func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 		return gen.Plan{}, err
 	}
 
+	version, err := s.plan.LoadVersion(ctx)
+	if err != nil {
+		return gen.Plan{}, err
+	}
+
 	plan := gen.Plan{
 		Corners: make([]gen.Corner, 0, len(corners)),
 		Walls:   make([]gen.Wall, 0, len(walls)),
+		Version: version,
 	}
 	for _, c := range corners {
 		plan.Corners = append(plan.Corners, gen.Corner{Id: c.ID, X: c.X, Y: c.Y})
@@ -274,4 +294,59 @@ func validateWall(in WallInput) (string, bool) {
 		return "墙厚必须在 1–100 厘米之间", false
 	}
 	return "", true
+}
+
+// ReplacePlan 整份替换户型，供撤销/重做使用。
+//
+// 不重放操作是因为墙的 id 由服务端生成：删了再建会换 id，而门窗的
+// `wall_id`（T5 起）与前端选中态都挂在它上面。整份替换按 id 对齐，
+// 保住 id 才谈得上「撤销一次删除」。
+func (s *Server) ReplacePlan(w http.ResponseWriter, r *http.Request) {
+	var in gen.PlanInput
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "请求体不合法")
+		return
+	}
+
+	walls := make([]WallSnapshot, 0, len(in.Walls))
+	for _, wall := range in.Walls {
+		thickness := 10.0
+		if wall.Thickness != nil {
+			thickness = *wall.Thickness
+		}
+		if msg, ok := validateWall(WallInput{
+			AX: wall.Ax, AY: wall.Ay, BX: wall.Bx, BY: wall.By, Thickness: thickness,
+		}); !ok {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
+			return
+		}
+		var id *string
+		if wall.Id != nil {
+			s := wall.Id.String()
+			id = &s
+		}
+		walls = append(walls, WallSnapshot{
+			ID: id, AX: wall.Ax, AY: wall.Ay, BX: wall.Bx, BY: wall.By, Thickness: thickness,
+		})
+	}
+
+	if err := s.plan.ReplacePlan(r.Context(), in.Version, walls); err != nil {
+		if errors.Is(err, ErrPlanConflict) {
+			writeError(w, http.StatusConflict, gen.CONFLICT, "户型已被他人修改，请刷新后重试")
+			return
+		}
+		s.log.Error("替换户型失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "服务器出了点问题")
+		return
+	}
+
+	plan, err := s.readPlan(r.Context())
+	if err != nil {
+		s.log.Error("替换后读取户型失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "服务器出了点问题")
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
 }

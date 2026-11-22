@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ type planBody struct {
 	} `json:"corners"`
 	Rooms     []planRoom `json:"rooms"`
 	OpenWalls int        `json:"openWalls"`
+	Version   int64      `json:"version"`
 	Walls     []struct {
 		ID  string  `json:"id"`
 		AID string  `json:"aId"`
@@ -396,4 +398,109 @@ func wallInRect(t *testing.T, p planBody, y float64) string {
 	}
 	t.Fatalf("没找到 y=%v 的墙", y)
 	return ""
+}
+
+// 撤销/重做走「整份替换 + 版本号」，下面三条钉住它的关键语义。
+func TestReplacePlanRejectsStaleVersion(t *testing.T) {
+	h := newTestServer(t)
+	cookie := sessionCookie(t, do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil))
+
+	plan := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
+	body := fmt.Sprintf(`{"version":%d,"walls":[]}`, plan.Version+5)
+	rec := do(t, h, http.MethodPut, "/api/plan", body, cookie)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("版本号不符应 409，实际 %d：%s", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != "CONFLICT" {
+		t.Fatalf("错误码应为 CONFLICT，实际 %s", code)
+	}
+}
+
+func TestReplacePlanRestoresDeletedWallWithSameID(t *testing.T) {
+	h := newTestServer(t)
+	cookie := sessionCookie(t, do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil))
+
+	// 建一面墙，记下 id 与几何
+	created := do(t, h, http.MethodPost, "/api/walls",
+		`{"ax":3300,"ay":3300,"bx":3700,"by":3300}`, cookie)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("建墙失败 %d：%s", created.Code, created.Body.String())
+	}
+	plan := decodePlan(t, created.Body.Bytes())
+	var target struct {
+		id           string
+		ax, ay, bx   float64
+		by           float64
+	}
+	for _, w := range plan.Walls {
+		if w.AY == 3300 && w.BY == 3300 && w.AX == 3300 {
+			target.id, target.ax, target.ay, target.bx, target.by = w.ID, w.AX, w.AY, w.BX, w.BY
+		}
+	}
+	if target.id == "" {
+		t.Fatal("没找到刚建的墙")
+	}
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/walls/"+target.id, "", cookie) })
+
+	// 删掉它 —— 相当于用户按了 Delete
+	if del := do(t, h, http.MethodDelete, "/api/walls/"+target.id, "", cookie); del.Code != http.StatusNoContent {
+		t.Fatalf("删墙失败 %d", del.Code)
+	}
+
+	// 撤销：把整份列表写回，带原来的 id
+	current := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
+	restore := fmt.Sprintf(
+		`{"version":%d,"walls":[
+			{"id":%q,"ax":%v,"ay":%v,"bx":%v,"by":%v}
+		]}`, current.Version, target.id, target.ax, target.ay, target.bx, target.by)
+	rec := do(t, h, http.MethodPut, "/api/plan", restore, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("撤销应 200，实际 %d：%s", rec.Code, rec.Body.String())
+	}
+
+	after := decodePlan(t, rec.Body.Bytes())
+	found := false
+	for _, w := range after.Walls {
+		if w.ID == target.id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("撤销应恢复同一面墙（id 必须是 %s），实际 %+v", target.id, after.Walls)
+	}
+	if after.Version <= current.Version {
+		t.Fatalf("替换成功后版本号应递增：%d → %d", current.Version, after.Version)
+	}
+}
+
+func TestReplacePlanDeletesWallsMissingFromList(t *testing.T) {
+	h := newTestServer(t)
+	cookie := sessionCookie(t, do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil))
+
+	before := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
+	var keep []string
+	for _, w := range before.Walls {
+		keep = append(keep, fmt.Sprintf(`{"id":%q,"ax":%v,"ay":%v,"bx":%v,"by":%v}`,
+			w.ID, w.AX, w.AY, w.BX, w.BY))
+	}
+	// 只写回前一半的墙：剩下的应该被删掉
+	half := keep[:len(keep)/2]
+	body := fmt.Sprintf(`{"version":%d,"walls":[%s]}`, before.Version, strings.Join(half, ","))
+	rec := do(t, h, http.MethodPut, "/api/plan", body, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("整份替换应 200，实际 %d：%s", rec.Code, rec.Body.String())
+	}
+	after := decodePlan(t, rec.Body.Bytes())
+	if len(after.Walls) != len(half) {
+		t.Fatalf("墙数应变成 %d，实际 %d", len(half), len(after.Walls))
+	}
+	// 还原，别影响其他用例共享的数据库
+	current := after.Version
+	var full []string
+	for _, w := range before.Walls {
+		full = append(full, fmt.Sprintf(`{"id":%q,"ax":%v,"ay":%v,"bx":%v,"by":%v}`,
+			w.ID, w.AX, w.AY, w.BX, w.BY))
+	}
+	do(t, h, http.MethodPut, "/api/plan",
+		fmt.Sprintf(`{"version":%d,"walls":[%s]}`, current, strings.Join(full, ",")), cookie)
 }

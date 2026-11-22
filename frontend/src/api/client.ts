@@ -104,6 +104,18 @@ export type Plan = {
   rooms: Room[]
   /** 没参与任何闭合区域的墙数：大于 0 说明还有墙没围上 */
   openWalls: number
+  /** 平面图版本号：撤销/重做写回时带上它做乐观并发 */
+  version: number
+}
+
+/** 整份替换时的墙：带 id 表示「这面墙原来就在」，撤销删除靠它保住 id。 */
+export type WallSnapshot = {
+  id?: string
+  ax: number
+  ay: number
+  bx: number
+  by: number
+  thickness?: number
 }
 
 /** 读当前户型。 */
@@ -122,6 +134,7 @@ export const updateWall = (
 /** 删一面墙。 */
 export const deleteWall = (id: string) => request<void>(`/api/walls/${id}`, { method: 'DELETE' })
 
+<<<<<<< HEAD
 export type ItemKind = 'furniture' | 'device'
 export type ItemStatus = 'normal' | 'idle' | 'maintenance'
 
@@ -191,6 +204,18 @@ export const updateItem = (id: string, input: ItemUpdate) =>
 /** 删除物品。 */
 export const deleteItem = (id: string) =>
   request<void>(`/api/items/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+/**
+ * 整份替换户型（撤销/重做）。
+ *
+ * 版本号对不上会拿到 409 —— 那是「别处已经改过」，调用方应重新取全量，
+ * 而不是把自己的旧快照覆盖上去。
+ */
+export const replacePlan = (input: { version: number; walls: WallSnapshot[] }) =>
+  request<Plan>('/api/plan', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
 
 /** 枚举能力的一个选项：value 入库，label 给人看。 */
 export type CapabilityOption = { value: string; label: string }

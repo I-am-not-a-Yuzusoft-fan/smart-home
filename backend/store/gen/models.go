@@ -109,6 +109,12 @@ type Opening struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type PlanMetum struct {
+	ID        int16              `json:"id"`
+	Version   int64              `json:"version"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 // 房间命名表：主键是墙环多边形的哈希；房间几何不落库，墙改则哈希变、旧命名失效
 type RoomName struct {
 	PolygonHash string             `json:"polygon_hash"`

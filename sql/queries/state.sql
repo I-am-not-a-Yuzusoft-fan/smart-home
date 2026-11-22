@@ -65,6 +65,30 @@ RETURNING id;
 -- name: DeleteWall :execrows
 DELETE FROM wall WHERE id = $1;
 
+-- name: GetPlanVersion :one
+SELECT version FROM plan_meta WHERE id = 1;
+
+-- name: LockPlanVersion :one
+-- 事务里先锁这一行，才能让「读版本 → 比对 → 写 → +1」不被并发插队。
+SELECT version FROM plan_meta WHERE id = 1 FOR UPDATE;
+
+-- name: BumpPlanVersion :one
+UPDATE plan_meta SET version = version + 1, updated_at = now() WHERE id = 1
+RETURNING version;
+
+-- name: ListWallIDs :many
+SELECT id FROM wall;
+
+-- name: InsertWallWithID :exec
+-- 撤销/重做要保住墙 id：门窗的 wall_id、前端的选中态都挂在它上面。
+INSERT INTO wall (id, a, b, thickness) VALUES ($1, $2, $3, $4);
+
+-- name: UpdateWallGeom :execrows
+UPDATE wall SET a = $2, b = $3, thickness = $4 WHERE id = $1;
+
+-- name: DeleteWallByID :exec
+DELETE FROM wall WHERE id = $1;
+
 -- name: ListRoomNames :many
 -- 房间只存名字：几何由墙推导，哈希变了旧名字自然失配。
 SELECT polygon_hash, name, kind

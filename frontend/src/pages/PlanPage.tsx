@@ -19,6 +19,7 @@ import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from
 import { distanceToSegment, type Seg } from '../features/plan/geometry.ts'
 import { DEFAULT_RULES, snap as snapTo, type Guide as SnapGuide, type SnapRule } from '../features/plan/snap.ts'
 import { collinearRuns } from '../features/plan/dimensions.ts'
+import { replacePlan, type WallSnapshot } from '../api/client.ts'
 
 type Props = {
   user: SessionUser
@@ -88,11 +89,20 @@ type SnapResult = { x: number; y: number; guide: Guide }
 export default function PlanPage({ user, onSignedOut }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
+  // 撤销/重做存的是「整份墙快照」而不是操作序列：墙的 id 由服务端生成，
+  // 删了再建会换 id，门窗的 wall_id 与前置的选中态都会断，所以只能整份写回。
+  const [history, setHistory] = useState<{ past: WallSnapshot[][]; future: WallSnapshot[][] }>({
+    past: [],
+    future: [],
+  })
   const [size, setSize] = useState({ width: 800, height: 600 })
   // 画布真实尺寸要等 ResizeObserver 报一次；在那之前 fit 会按 800×600 算，
   // 结果内容偏在左上角（第一次打开时尤其明显）。
   const [sizeReady, setSizeReady] = useState(false)
-  const [plan, setPlan] = useState<Plan>({ corners: [], walls: [], rooms: [], openWalls: 0 })
+  const [plan, setPlan] = useState<Plan>({ corners: [], walls: [], rooms: [], openWalls: 0, version: 0 })
+  // 回调里要读「最新」的户型：闭包捕获的 plan 可能落后一次渲染。
+  const planRef = useRef<Plan>(plan)
+  planRef.current = plan
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -162,6 +172,70 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }, [])
 
   /** 让所有墙正好落进视口，四周留 60 px。空户型就回到 1:1 原点。 */
+  const snapshotOf = useCallback(
+    (p: Plan): WallSnapshot[] =>
+      p.walls.map((w) => ({ id: w.id, ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness })),
+    [],
+  )
+
+  /** 记一次「改动前」的快照；新改动会清空重做栈（分叉的历史没有意义）。 */
+  const remember = useCallback(
+    (before: WallSnapshot[]) =>
+      setHistory((h) => ({ past: [...h.past, before].slice(-50), future: [] })),
+    [],
+  )
+
+  /**
+   * 把某一份快照写回服务端。
+   *
+   * 409 表示别处已经改过——这时用旧快照覆盖会静默回滚别人的修改，
+   * 所以重新取全量并清空历史，把冲突摆到用户面前而不是替它做决定。
+   */
+  const applySnapshot = useCallback(
+    async (target: WallSnapshot[]) => {
+      setSaving(true)
+      try {
+        const next = await replacePlan({ version: planRef.current.version, walls: target })
+        setPlan(next)
+        setSelectedId(null)
+        setError(null)
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) {
+          setHistory({ past: [], future: [] })
+          try {
+            setPlan(await getPlan())
+          } catch {
+            /* 取不到就保持现状，下一轮再说 */
+          }
+          setError('户型已被别处修改，已刷新到最新状态')
+        } else {
+          setError(e instanceof Error ? e.message : '操作失败')
+        }
+      } finally {
+        setSaving(false)
+      }
+    },
+    [],
+  )
+
+  const undo = useCallback(async () => {
+    const past = history.past
+    if (past.length === 0) return
+    const current = snapshotOf(planRef.current)
+    const target = past[past.length - 1]
+    setHistory({ past: past.slice(0, -1), future: [current, ...history.future].slice(0, 50) })
+    await applySnapshot(target)
+  }, [history.past, history.future, snapshotOf, applySnapshot])
+
+  const redo = useCallback(async () => {
+    const future = history.future
+    if (future.length === 0) return
+    const current = snapshotOf(planRef.current)
+    const target = future[0]
+    setHistory({ past: [...history.past, current].slice(-50), future: future.slice(1) })
+    await applySnapshot(target)
+  }, [history.past, history.future, snapshotOf, applySnapshot])
+
   const fitToContent = useCallback(() => {
     if (plan.corners.length === 0) {
       setViewport({ scale: 1, x: 0, y: 0 })
@@ -207,7 +281,27 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         e.preventDefault()
         setSpaceDown(true)
       }
+      if (e.key === 'Escape' && isTyping(e.target)) {
+        ;(e.target as HTMLElement).blur()
+        setDraft(null)
+        setEditing(null)
+        setGuide({ kind: 'none' })
+        return
+      }
       if (isTyping(e.target)) return
+      // Ctrl/Cmd+Z 撤销，再加 Shift 重做；Ctrl+Y 也认，习惯 Windows 的人会按。
+      const mod = e.metaKey || e.ctrlKey
+      if (mod && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        if (e.shiftKey) void redo()
+        else void undo()
+        return
+      }
+      if (mod && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault()
+        void redo()
+        return
+      }
       if (e.key === 'Escape') {
         setDraft(null)
         setEditing(null)
@@ -231,9 +325,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
     }
-    // removeWall 每次渲染都是新函数，但内部只用 setState 与 props，闭包安全
+    // removeWall/undo/redo 每次渲染都是新函数，但内部只用 setState 与 props，闭包安全
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId])
+  }, [selectedId, history.past.length, history.future.length])
 
   // 只认"被墙引用"的端点：删墙后留下的孤立端点既不该画出来，也不该被吸附——
   // 否则用户会吸到一个看不见的点上，还以为是 bug。
@@ -510,8 +604,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     setSaving(true)
     try {
       const before = new Set(plan.walls.map((w) => w.id))
+      const snapshot = snapshotOf(plan)
       const next = await createWall({ ax: d.ax, ay: d.ay, bx: d.bx, by: d.by })
       if (seq === writeSeq.current) {
+        remember(snapshot)
         setPlan(next)
         setError(null)
         const created = next.walls.find((w) => !before.has(w.id))
@@ -531,8 +627,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     const seq = ++writeSeq.current
     setSaving(true)
     try {
+      const snapshot = snapshotOf(plan)
       const next = await updateWall(cur.wallId, { ax: cur.ax, ay: cur.ay, bx: cur.bx, by: cur.by })
       if (seq === writeSeq.current) {
+        remember(snapshot)
         setPlan(next)
         setSelectedId(cur.wallId)
         setError(null)
@@ -617,6 +715,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
   async function removeWall(id: string) {
     const seq = ++writeSeq.current
+    const snapshot = snapshotOf(plan)
     setSaving(true)
     try {
       await deleteWall(id)
@@ -635,6 +734,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       try {
         const next = await getPlan()
         if (seq === writeSeq.current) {
+          remember(snapshot)
           setPlan(next)
           setSelectedId(null)
           setError(null)
@@ -818,6 +918,34 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             }}
           >
             导出 PNG
+          </button>
+          <button
+            onClick={() => void undo()}
+            disabled={history.past.length === 0 || saving}
+            title="撤销（Ctrl/Cmd+Z）"
+            className="px-2 py-1 text-xs"
+            style={{
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--color-bg)',
+              opacity: history.past.length === 0 || saving ? 0.45 : 1,
+            }}
+          >
+            撤销
+          </button>
+          <button
+            onClick={() => void redo()}
+            disabled={history.future.length === 0 || saving}
+            title="重做（Ctrl/Cmd+Shift+Z）"
+            className="px-2 py-1 text-xs"
+            style={{
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--color-bg)',
+              opacity: history.future.length === 0 || saving ? 0.45 : 1,
+            }}
+          >
+            重做
           </button>
           <button
             onClick={fitToContent}
