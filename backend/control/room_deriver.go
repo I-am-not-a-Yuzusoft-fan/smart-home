@@ -431,3 +431,45 @@ func keyPair(a, b string) [2]string {
 	}
 	return [2]string{b, a}
 }
+
+// ArcPolyline 把一面弧墙离散成折线顶点（不含两端），用于房间推导。
+//
+// 参数是两端坐标与弧度（度，正负表示往弦的哪一侧弯）。按 ≤5° 一段采样，
+// 90° 弧是 18 段，面积误差 < 0.1%。弧本身不落库：半径与圆心由弦长与弧角反解。
+func ArcPolyline(a, b Point, extentDeg float64) []Point {
+	theta := extentDeg * math.Pi / 180
+	if math.Abs(theta) < 1e-6 {
+		return nil
+	}
+	dx, dy := b.X-a.X, b.Y-a.Y
+	d := math.Hypot(dx, dy)
+	if d < 1e-9 {
+		return nil
+	}
+	// 圆心在弦的中垂线上：h = (d/2) / tan(θ/2)，正 θ 时落在弦的左侧。
+	h := (d / 2) / math.Tan(theta/2)
+	mx, my := (a.X+b.X)/2, (a.Y+b.Y)/2
+	nx, ny := -dy/d, dx/d
+	cx, cy := mx+nx*h, my+ny*h
+	r := math.Hypot(a.X-cx, a.Y-cy)
+	start := math.Atan2(a.Y-cy, a.X-cx)
+	end := math.Atan2(b.Y-cy, b.X-cx)
+	delta := end - start
+	for delta > math.Pi {
+		delta -= 2 * math.Pi
+	}
+	for delta < -math.Pi {
+		delta += 2 * math.Pi
+	}
+	// 采样步数：按 |δ| 每 5° 一段，至少 2 段。
+	steps := int(math.Ceil(math.Abs(delta) / (5 * math.Pi / 180)))
+	if steps < 2 {
+		steps = 2
+	}
+	out := make([]Point, 0, steps-1)
+	for i := 1; i < steps; i++ {
+		ang := start + delta*float64(i)/float64(steps)
+		out = append(out, Point{X: cx + r*math.Cos(ang), Y: cy + r*math.Sin(ang)})
+	}
+	return out
+}

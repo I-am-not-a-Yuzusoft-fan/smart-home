@@ -930,7 +930,10 @@ type UnderlayPatchRotationDeg int
 // Wall defines model for Wall.
 type Wall struct {
 	// AId 起点端点 id
-	AId       openapi_types.UUID `json:"aId"`
+	AId openapi_types.UUID `json:"aId"`
+
+	// ArcExtent 弧度（度），0 为直墙
+	ArcExtent float64            `json:"arcExtent"`
 	Ax        float64            `json:"ax"`
 	Ay        float64            `json:"ay"`
 	BId       openapi_types.UUID `json:"bId"`
@@ -942,6 +945,10 @@ type Wall struct {
 
 // WallInput defines model for WallInput.
 type WallInput struct {
+	// ArcExtent 弧度（度）。0 表示直墙；正负表示往弦的哪一侧弯（逆时针为正）。
+	// 半径与圆心由弦长和弧角反解，不落库。
+	ArcExtent *float64 `json:"arcExtent,omitempty"`
+
 	// Ax 起点 x，单位厘米，原点在平面图左上角（0–5000，超出会被拒）
 	Ax float64 `json:"ax"`
 	Ay float64 `json:"ay"`
@@ -958,6 +965,8 @@ type WallInput struct {
 // 带上表示「这面墙原来就在」——撤销/重做必须保住 id，否则门窗的
 // `wall_id` 与前端选中态都会断。
 type WallSnapshot struct {
+	// ArcExtent 弧度（度），0 为直墙
+	ArcExtent *float64            `json:"arcExtent,omitempty"`
 	Ax        float64             `json:"ax"`
 	Ay        float64             `json:"ay"`
 	Bx        float64             `json:"bx"`

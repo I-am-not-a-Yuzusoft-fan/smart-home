@@ -39,7 +39,9 @@ import { UnderlayPanel } from '../components/UnderlayPanel.tsx'
 import TypeManager from '../components/TypeManager.tsx'
 import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from '../features/plan/edit.ts'
 import {
+  arcPoints,
   clampWallOffset,
+  distanceToPolyline,
   distanceToSegment,
   nearestWallAnchor,
   pointInPolygon,
@@ -102,6 +104,7 @@ type WallForm = {
   length: string
   angle: string
   thickness: string
+  arc: string
   ax: string
   ay: string
   bx: string
@@ -110,6 +113,7 @@ type WallForm = {
 
 function newWallForm(w: Wall): WallForm {
   return {
+    arc: String(w.arcExtent ?? 0),
     length: (wallLength(w) / 100).toFixed(2),
     angle: wallAngle(w).toFixed(1),
     thickness: String(tidy(w.thickness)),
@@ -781,7 +785,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     let best: string | null = null
     let bestDist = tol
     for (const w of plan.walls) {
-      const d = distanceToSegment(x, y, w)
+      const d =
+        Math.abs(w.arcExtent) >= 0.5
+          ? distanceToPolyline(
+              x,
+              y,
+              arcPoints({ x: w.ax, y: w.ay }, { x: w.bx, y: w.by }, w.arcExtent),
+            )
+          : distanceToSegment(x, y, w)
       if (d <= bestDist) {
         bestDist = d
         best = w.id
@@ -1048,6 +1059,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     setWallForm((f) => (f ? { ...f, [field]: raw } : f))
     const n = Number.parseFloat(raw)
     if (!Number.isFinite(n) || !workSeg) return
+    // 厚度与弧度不影响端点几何，只留在表单里等「应用」
+    if (field === 'arc' || field === 'thickness') return
 
     let next = workSeg
     if (field === 'length') next = withLength(workSeg, n * 100)
@@ -1085,6 +1098,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       1,
       100,
     )
+    const arcExtent = Math.min(179, Math.max(-179, Number.parseFloat(wallForm.arc) || 0))
     const seq = ++writeSeq.current
     setSaving(true)
     try {
@@ -1094,6 +1108,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         bx: tidy(workSeg.bx),
         by: tidy(workSeg.by),
         thickness,
+        arcExtent,
       })
       if (seq === writeSeq.current) {
         setPlan(next)
@@ -1667,6 +1682,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
               </label>
               {wallField('角度（°）', wallForm.angle, (v) => updateWallField('angle', v))}
               {wallField('厚度（厘米）', wallForm.thickness, (v) => updateWallField('thickness', v))}
+              {wallField('弧度（度）', wallForm.arc, (v) => updateWallField('arc', v))}
               {wallField('起点 X', wallForm.ax, (v) => updateWallField('ax', v))}
               {wallField('起点 Y', wallForm.ay, (v) => updateWallField('ay', v))}
               {wallField('终点 X', wallForm.bx, (v) => updateWallField('bx', v))}
@@ -2063,6 +2079,25 @@ type WallShapeProps = {
 
 function WallLine({ wall, quad, selected, hovered, scale }: WallShapeProps & { quad?: Pt[] }) {
   const fill = selected ? '#4f6bed' : hovered ? '#55557a' : '#3a3a4d'
+  // 弧墙 v1 不平头斜接：直接沿弧画一条粗线，两端各补一个半径半墙厚的圆盖住接缝。
+  if (Math.abs(wall.arcExtent) >= 0.5) {
+    const pts = arcPoints({ x: wall.ax, y: wall.ay }, { x: wall.bx, y: wall.by }, wall.arcExtent)
+    const half = Math.max(wall.thickness, 4) / 2
+    return (
+      <>
+        <Line
+          points={pts.flatMap((p) => [p.x, p.y])}
+          stroke={selected ? '#4f6bed' : hovered ? '#55557a' : '#3a3a4d'}
+          strokeWidth={Math.max(wall.thickness, 4)}
+          lineCap="butt"
+          lineJoin="round"
+          listening={false}
+        />
+        <Circle x={wall.ax} y={wall.ay} radius={half} fill={fill} listening={false} />
+        <Circle x={wall.bx} y={wall.by} radius={half} fill={fill} listening={false} />
+      </>
+    )
+  }
   // 没有四角数据（例如刚画完还没重算）时退回中心线描边，至少不会消失。
   const points = quad
     ? quad.flatMap((p) => [p.x, p.y])

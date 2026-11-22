@@ -80,6 +80,8 @@ export type Wall = {
   bx: number
   by: number
   thickness: number
+  /** 弧度（度），0 是直墙；半径与圆心由弦长和弧角反解，不落库。 */
+  arcExtent: number
 }
 
 /** 整个户型。端点单列是因为两面墙共用一个端点。 */
@@ -188,19 +190,27 @@ export type WallSnapshot = {
   bx: number
   by: number
   thickness?: number
+  arcExtent?: number
 }
 
 /** 读当前户型。 */
 export const getPlan = () => request<Plan>('/api/plan')
 
 /** 画一面墙；返回保存后的整个户型。 */
-export const createWall = (input: { ax: number; ay: number; bx: number; by: number; thickness?: number }) =>
+export const createWall = (input: {
+  ax: number
+  ay: number
+  bx: number
+  by: number
+  thickness?: number
+  arcExtent?: number
+}) =>
   request<Plan>('/api/walls', { method: 'POST', body: JSON.stringify(input) })
 
 /** 改一面墙的端点或厚度（拖端点微调长度与角度走这条）。 */
 export const updateWall = (
   id: string,
-  input: { ax: number; ay: number; bx: number; by: number; thickness?: number },
+  input: { ax: number; ay: number; bx: number; by: number; thickness?: number; arcExtent?: number },
 ) => request<Plan>(`/api/walls/${id}`, { method: 'PATCH', body: JSON.stringify(input) })
 
 /** 删一面墙。墙上的门窗与挂墙物品会被级联删除。 */

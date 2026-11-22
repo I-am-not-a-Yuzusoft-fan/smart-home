@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"strings"
@@ -39,6 +40,8 @@ type PlanWall struct {
 	AX, AY    float64
 	BX, BY    float64
 	Thickness float64
+	// ArcExtent 弧度（度）：0 为直墙，正负表示往弦的哪一侧弯。
+	ArcExtent float64
 }
 
 // WallInput 是画墙的输入。
@@ -46,6 +49,7 @@ type WallInput struct {
 	AX, AY    float64
 	BX, BY    float64
 	Thickness float64
+	ArcExtent float64
 }
 
 // PlanOpening 是一个门或窗。和挂墙物品一样用「墙 + 沿墙偏移」定位，
@@ -89,6 +93,8 @@ var (
 	// ErrOpeningNotFound 开口不存在；ErrOpeningTooWide 开口超出墙长。
 	ErrOpeningNotFound = errors.New("开口不存在")
 	ErrOpeningTooWide  = errors.New("开口超出墙的范围")
+	// ErrArcWall 挂在弧墙上：v1 只在直墙上开门窗、挂物品。
+	ErrArcWall = errors.New("弧墙暂不支持门窗与挂墙物品")
 	// ErrPlanConflict 版本号过期：别处已经改过这份户型。
 	ErrPlanConflict = errors.New("plan version conflict")
 )
@@ -110,6 +116,7 @@ type WallSnapshot struct {
 	AX, AY    float64
 	BX, BY    float64
 	Thickness float64
+	ArcExtent float64
 }
 
 type PlanStore interface {
@@ -200,10 +207,15 @@ func (s *Server) CreateWall(w http.ResponseWriter, r *http.Request) {
 	if body.Thickness != nil {
 		thickness = float64(*body.Thickness)
 	}
+	arc := 0.0
+	if body.ArcExtent != nil {
+		arc = float64(*body.ArcExtent)
+	}
 	in := WallInput{
 		AX: float64(body.Ax), AY: float64(body.Ay),
 		BX: float64(body.Bx), BY: float64(body.By),
 		Thickness: thickness,
+		ArcExtent: arc,
 	}
 	if msg, ok := validateWall(in); !ok {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
@@ -243,10 +255,15 @@ func (s *Server) UpdateWall(w http.ResponseWriter, r *http.Request, wallID opena
 	if body.Thickness != nil {
 		thickness = float64(*body.Thickness)
 	}
+	arc := 0.0
+	if body.ArcExtent != nil {
+		arc = float64(*body.ArcExtent)
+	}
 	in := WallInput{
 		AX: float64(body.Ax), AY: float64(body.Ay),
 		BX: float64(body.Bx), BY: float64(body.By),
 		Thickness: thickness,
+		ArcExtent: arc,
 	}
 	if msg, ok := validateWall(in); !ok {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
@@ -326,6 +343,9 @@ func (s *Server) CreateOpening(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, ErrOpeningTooWide):
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "开口超出了这面墙的范围")
+		return
+	case errors.Is(err, ErrArcWall):
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "弧墙暂不支持门窗：先把它改成直墙再开洞")
 		return
 	default:
 		s.log.Error("开洞失败", "err", err)
@@ -414,7 +434,20 @@ func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 	}
 	edges := make([]control.Wall, 0, len(walls))
 	for _, w := range walls {
-		edges = append(edges, control.Wall{A: w.AID.String(), B: w.BID.String()})
+		if math.Abs(w.ArcExtent) < 0.5 {
+			edges = append(edges, control.Wall{A: w.AID.String(), B: w.BID.String()})
+			continue
+		}
+		// 弧墙先离散成折线再进推导：房间多边形因此是折线近似（≤5° 一段）。
+		// 采样点用「墙 id + 序号」当临时端点，不落库，墙一改哈希自然就变。
+		prev := w.AID.String()
+		for i, ap := range control.ArcPolyline(control.Point{X: w.AX, Y: w.AY}, control.Point{X: w.BX, Y: w.BY}, w.ArcExtent) {
+			id := fmt.Sprintf("%s#arc%d", w.ID.String(), i)
+			points = append(points, control.Point{ID: id, X: ap.X, Y: ap.Y})
+			edges = append(edges, control.Wall{A: prev, B: id})
+			prev = id
+		}
+		edges = append(edges, control.Wall{A: prev, B: w.BID.String()})
 	}
 	derived := control.Derive(points, edges)
 
@@ -513,6 +546,7 @@ func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 			Bx:        w.BX,
 			By:        w.BY,
 			Thickness: w.Thickness,
+			ArcExtent: w.ArcExtent,
 		})
 	}
 	return plan, nil
@@ -609,6 +643,9 @@ func validateWall(in WallInput) (string, bool) {
 	if in.Thickness < 1 || in.Thickness > maxWallThick {
 		return "墙厚必须在 1–100 厘米之间", false
 	}
+	if math.Abs(in.ArcExtent) >= 180 {
+		return "弧度必须在 −180° 到 180° 之间", false
+	}
 	return "", true
 }
 
@@ -632,8 +669,12 @@ func (s *Server) ReplacePlan(w http.ResponseWriter, r *http.Request) {
 		if wall.Thickness != nil {
 			thickness = *wall.Thickness
 		}
+		arc := 0.0
+		if wall.ArcExtent != nil {
+			arc = *wall.ArcExtent
+		}
 		if msg, ok := validateWall(WallInput{
-			AX: wall.Ax, AY: wall.Ay, BX: wall.Bx, BY: wall.By, Thickness: thickness,
+			AX: wall.Ax, AY: wall.Ay, BX: wall.Bx, BY: wall.By, Thickness: thickness, ArcExtent: arc,
 		}); !ok {
 			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
 			return
@@ -645,6 +686,7 @@ func (s *Server) ReplacePlan(w http.ResponseWriter, r *http.Request) {
 		}
 		walls = append(walls, WallSnapshot{
 			ID: id, AX: wall.Ax, AY: wall.Ay, BX: wall.Bx, BY: wall.By, Thickness: thickness,
+			ArcExtent: arc,
 		})
 	}
 

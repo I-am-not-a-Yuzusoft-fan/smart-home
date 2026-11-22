@@ -46,6 +46,7 @@ type planBody struct {
 		AY  float64 `json:"ay"`
 		BX  float64 `json:"bx"`
 		BY  float64 `json:"by"`
+		ArcExtent float64 `json:"arcExtent"`
 	} `json:"walls"`
 }
 

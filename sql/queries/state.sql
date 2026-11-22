@@ -44,7 +44,7 @@ ON CONFLICT (x, y) DO UPDATE SET x = EXCLUDED.x
 RETURNING id;
 
 -- name: ListWalls :many
-SELECT w.id, w.a, w.b, w.thickness,
+SELECT w.id, w.a, w.b, w.thickness, w.arc_extent,
        ca.x AS ax, ca.y AS ay, cb.x AS bx, cb.y AS by
 FROM wall w
 JOIN corner ca ON ca.id = w.a
@@ -58,8 +58,8 @@ FROM wall
 WHERE (a = $1 AND b = $2) OR (a = $2 AND b = $1);
 
 -- name: InsertWall :one
-INSERT INTO wall (a, b, thickness)
-VALUES ($1, $2, $3)
+INSERT INTO wall (a, b, thickness, arc_extent)
+VALUES ($1, $2, $3, $4)
 RETURNING id;
 
 -- name: DeleteWall :execrows
@@ -81,10 +81,10 @@ SELECT id FROM wall;
 
 -- name: InsertWallWithID :exec
 -- 撤销/重做要保住墙 id：门窗的 wall_id、前端的选中态都挂在它上面。
-INSERT INTO wall (id, a, b, thickness) VALUES ($1, $2, $3, $4);
+INSERT INTO wall (id, a, b, thickness, arc_extent) VALUES ($1, $2, $3, $4, $5);
 
 -- name: UpdateWallGeom :execrows
-UPDATE wall SET a = $2, b = $3, thickness = $4 WHERE id = $1;
+UPDATE wall SET a = $2, b = $3, thickness = $4, arc_extent = $5 WHERE id = $1;
 
 -- name: DeleteWallByID :exec
 DELETE FROM wall WHERE id = $1;
@@ -95,10 +95,10 @@ SELECT polygon_hash, name, kind
 FROM room_name;
 
 -- name: GetWall :one
-SELECT a, b FROM wall WHERE id = $1;
+SELECT a, b, thickness, arc_extent FROM wall WHERE id = $1;
 
 -- name: UpdateWall :execrows
-UPDATE wall SET a = $2, b = $3, thickness = $4 WHERE id = $1;
+UPDATE wall SET a = $2, b = $3, thickness = $4, arc_extent = $5 WHERE id = $1;
 
 -- name: DeleteOrphanCorners :exec
 DELETE FROM corner c
@@ -141,7 +141,7 @@ DELETE FROM opening WHERE id = $1;
 
 -- name: GetWallByID :one
 -- 单个墙的端点坐标：挂墙物品与门窗换算位置时要用。
-SELECT w.id, w.a, w.b, w.thickness,
+SELECT w.id, w.a, w.b, w.thickness, w.arc_extent,
        ca.x AS ax, ca.y AS ay, cb.x AS bx, cb.y AS by
 FROM wall w
 JOIN corner ca ON ca.id = w.a
