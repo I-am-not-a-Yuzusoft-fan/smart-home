@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -79,7 +80,36 @@ func uploadUnderlay(t *testing.T, h http.Handler, cookie *http.Cookie, data []by
 	return doBytes(t, h, http.MethodPut, "/api/plan/underlay", data, cookie)
 }
 
+// preserveUnderlay 在用例开始前把当前底图存进临时表，结束时写回。
+//
+// 底图是单行表，测试用的又是同一套开发库：用例删掉它会让人以为自己的底图
+// 丢了（其实是被测试清空的）。临时表挂在这条连接上，连接释放就消失。
+func preserveUnderlay(t *testing.T) {
+	t.Helper()
+	pool := testPool(t)
+	ctx := context.Background()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("取数据库连接失败：%v", err)
+	}
+	if _, err := conn.Exec(ctx, `CREATE TEMP TABLE underlay_backup AS SELECT * FROM plan_underlay`); err != nil {
+		conn.Release()
+		t.Fatalf("备份底图失败：%v", err)
+	}
+	t.Cleanup(func() {
+		defer conn.Release()
+		if _, err := conn.Exec(ctx, `DELETE FROM plan_underlay`); err != nil {
+			t.Errorf("测试结束清理底图失败：%v", err)
+			return
+		}
+		if _, err := conn.Exec(ctx, `INSERT INTO plan_underlay SELECT * FROM underlay_backup`); err != nil {
+			t.Errorf("测试结束恢复底图失败：%v", err)
+		}
+	})
+}
+
 func TestUploadUnderlayStoresMetadataAndServesImage(t *testing.T) {
+	preserveUnderlay(t)
 	h := newTestServer(t)
 	admin := loginAs(t, h, "zhang")
 	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/plan/underlay", "", admin) })
@@ -117,6 +147,7 @@ func TestUploadUnderlayStoresMetadataAndServesImage(t *testing.T) {
 }
 
 func TestUploadUnderlayRejectsNonImage(t *testing.T) {
+	preserveUnderlay(t)
 	h := newTestServer(t)
 	admin := loginAs(t, h, "zhang")
 	w := uploadUnderlay(t, h, admin, []byte("this is not an image at all"))
@@ -126,6 +157,7 @@ func TestUploadUnderlayRejectsNonImage(t *testing.T) {
 }
 
 func TestUploadUnderlayRejectsOversizedBody(t *testing.T) {
+	preserveUnderlay(t)
 	h := newTestServer(t)
 	admin := loginAs(t, h, "zhang")
 	w := uploadUnderlay(t, h, admin, bytes.Repeat([]byte{0}, 5<<20+1))
@@ -135,6 +167,7 @@ func TestUploadUnderlayRejectsOversizedBody(t *testing.T) {
 }
 
 func TestUpdateUnderlayMetaMergesAndValidates(t *testing.T) {
+	preserveUnderlay(t)
 	h := newTestServer(t)
 	admin := loginAs(t, h, "zhang")
 	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/plan/underlay", "", admin) })
@@ -169,6 +202,7 @@ func TestUpdateUnderlayMetaMergesAndValidates(t *testing.T) {
 }
 
 func TestUpdateUnderlayMetaWithoutUnderlayIs404(t *testing.T) {
+	preserveUnderlay(t)
 	h := newTestServer(t)
 	admin := loginAs(t, h, "zhang")
 	do(t, h, http.MethodDelete, "/api/plan/underlay", "", admin)
@@ -179,6 +213,7 @@ func TestUpdateUnderlayMetaWithoutUnderlayIs404(t *testing.T) {
 }
 
 func TestUnderlayRequiresAdmin(t *testing.T) {
+	preserveUnderlay(t)
 	h := newTestServer(t)
 	admin := loginAs(t, h, "zhang")
 	member := loginAs(t, h, "li")
@@ -199,6 +234,7 @@ func TestUnderlayRequiresAdmin(t *testing.T) {
 }
 
 func TestDeleteUnderlayIsIdempotent(t *testing.T) {
+	preserveUnderlay(t)
 	h := newTestServer(t)
 	admin := loginAs(t, h, "zhang")
 	if w := uploadUnderlay(t, h, admin, pngBytes(t, 32, 32)); w.Code != http.StatusOK {
