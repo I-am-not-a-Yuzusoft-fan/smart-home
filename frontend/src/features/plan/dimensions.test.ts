@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { collinearRuns, outerRuns, type DimWall } from './dimensions'
+import {
+  axisSegments,
+  collinearRuns,
+  outerRuns,
+  outerRunsInBounds,
+  polygonCentroid,
+  roomExtent,
+  type DimWall,
+} from './dimensions'
 
 /** 造一面墙，参数用「厘米」的世界坐标。 */
 function w(id: string, ax: number, ay: number, bx: number, by: number): DimWall {
@@ -106,5 +114,142 @@ describe('outerRuns', () => {
 
   it('空输入返回空', () => {
     expect(outerRuns([])).toEqual([])
+  })
+})
+
+describe('roomExtent', () => {
+  const rect = (w: number, h: number) => [
+    { x: 0, y: 0 },
+    { x: w, y: 0 },
+    { x: w, y: h },
+    { x: 0, y: h },
+  ]
+
+  it('轴对齐矩形就是宽×深', () => {
+    expect(roomExtent(rect(400, 300))).toEqual({ width: 400, height: 300, angle: 0 })
+  })
+
+  it('顶点顺序反过来也一样', () => {
+    expect(roomExtent(rect(400, 300).reverse())).toEqual({ width: 400, height: 300, angle: 0 })
+  })
+
+  it('纵长矩形报 300×400，宽就是水平方向的开间', () => {
+    expect(roomExtent(rect(300, 400))).toEqual({ width: 300, height: 400, angle: 0 })
+  })
+
+  it('斜放的房间报真实边长而不是包围盒', () => {
+    const a = (30 * Math.PI) / 180
+    const pts = rect(400, 300).map((p) => ({
+      x: p.x * Math.cos(a) - p.y * Math.sin(a),
+      y: p.x * Math.sin(a) + p.y * Math.cos(a),
+    }))
+    const e = roomExtent(pts)!
+    expect(e.width).toBeCloseTo(400, 6)
+    expect(e.height).toBeCloseTo(300, 6)
+    expect(e.angle).toBeCloseTo(30, 6)
+  })
+
+  it('L 形用最小矩形，不把凹口算进去', () => {
+    // 600×600 的 L：切掉右上 300×300，最小矩形是 600×600；包围盒也是 600×600，
+    // 但斜 45° 后包围盒会胀到 848，最小矩形不会。
+    const l = [
+      { x: 0, y: 0 },
+      { x: 600, y: 0 },
+      { x: 600, y: 300 },
+      { x: 300, y: 300 },
+      { x: 300, y: 600 },
+      { x: 0, y: 600 },
+    ]
+    const e = roomExtent(l)!
+    expect(e.width * e.height).toBeLessThan(600 * 600 + 1)
+  })
+
+  it('点太少返回 null', () => {
+    expect(roomExtent([{ x: 0, y: 0 }, { x: 1, y: 1 }])).toBeNull()
+  })
+})
+
+
+describe('axisSegments：轴线尺寸（第二排链）', () => {
+  it('矩形本身没有内墙时就是一段总长', () => {
+    expect(axisSegments(rect, true, 0, 400)).toEqual([{ a: 0, b: 400, length: 400 }])
+  })
+
+  it('中间加一道竖隔墙，水平链断成两段开间', () => {
+    const withPartition = [...rect, w('p', 250, 0, 250, 300)]
+    // 3300 + 3300 那种读法：位置来自竖墙的墙中线，不是墙表面。
+    expect(axisSegments(withPartition, true, 0, 400)).toEqual([
+      { a: 0, b: 250, length: 250 },
+      { a: 250, b: 400, length: 150 },
+    ])
+  })
+
+  it('竖直链只看横墙', () => {
+    const withPartition = [...rect, w('p', 0, 120, 400, 120)]
+    expect(axisSegments(withPartition, false, 0, 300)).toEqual([
+      { a: 0, b: 120, length: 120 },
+      { a: 120, b: 300, length: 180 },
+    ])
+  })
+
+  it('跨度外的墙不参与，重复轴线只算一次', () => {
+    const extra = [
+      ...rect,
+      w('outside', 900, 0, 900, 300), // 超出 0–400 的跨度
+      w('dup', 250, 300, 250, 0), // 与 p 同一根轴线，只是方向相反
+      w('p', 250, 0, 250, 300),
+    ]
+    const segs = axisSegments(extra, true, 0, 400)
+    expect(segs.map((s) => s.length)).toEqual([250, 150])
+  })
+})
+
+
+describe('outerRunsInBounds：只认贴着同一条边的链', () => {
+  const bounds = { minX: 0, minY: 0, maxX: 400, maxY: 300 }
+
+  it('四条外轮廓都在', () => {
+    const out = outerRunsInBounds(collinearRuns(rect), bounds)
+    expect(out).toHaveLength(4)
+  })
+
+  it('两端顶着上下边界的室内隔墙不算外轮廓', () => {
+    // 这道竖隔墙 (200,0)-(200,300) 的两个端点都落在包围盒边界上，
+    // 但整条链不贴边——以前它会凭空多出一条「300」的总尺寸压在房间里。
+    const withPartition = [...rect, w('p', 200, 0, 200, 300)]
+    const out = outerRunsInBounds(collinearRuns(withPartition), bounds)
+    expect(out).toHaveLength(4)
+    expect(out.every((run) => run.wallIds.length === 1)).toBe(true)
+    expect(out.some((run) => run.wallIds.includes('p'))).toBe(false)
+  })
+})
+
+describe('polygonCentroid：异形房间的标签落点', () => {
+  const tri = [{ x: 0, y: 0 }, { x: 120, y: 0 }, { x: 0, y: 200 }]
+
+  it('三角形形心在内部', () => {
+    const c = polygonCentroid(tri)
+    expect(c.x).toBeCloseTo(40, 6)
+    expect(c.y).toBeCloseTo(200 / 3, 6)
+  })
+})
+
+describe('axisSegments 的短墙过滤', () => {
+  const ring: DimWall[] = [
+    { id: 'b', ax: 0, ay: 0, bx: 300, by: 0 },
+    { id: 'r', ax: 300, ay: 0, bx: 300, by: 400 },
+    { id: 't', ax: 300, ay: 400, bx: 0, by: 400 },
+    { id: 'l', ax: 0, ay: 400, bx: 0, by: 0 },
+    { id: 'stub', ax: 100, ay: 175, bx: 100, by: 225 },
+  ]
+
+  it('房间里的小隔断不参与定轴', () => {
+    const segs = axisSegments(ring, true, 0, 300)
+    expect(segs.map((s) => Math.round(s.length))).toEqual([300])
+  })
+
+  it('显式给出更小的下限时它会参与', () => {
+    const segs = axisSegments(ring, true, 0, 300, 1, 10)
+    expect(segs.map((s) => Math.round(s.length))).toEqual([100, 200])
   })
 })
