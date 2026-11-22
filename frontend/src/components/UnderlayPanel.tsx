@@ -1,6 +1,7 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 
-import type { Underlay } from '../api/client'
+import type { Underlay, UnderlayPatch } from '../api/client'
+import { nextRotation } from '../features/plan/underlay.ts'
 
 type Props = {
   underlay: Underlay | null
@@ -15,6 +16,7 @@ type Props = {
   onStartCalibration: () => void
   onCancelCalibration: () => void
   onCalibrate: (lengthCm: number) => void
+  onPatch: (patch: UnderlayPatch) => void
 }
 
 /**
@@ -35,8 +37,15 @@ export function UnderlayPanel({
   onStartCalibration,
   onCancelCalibration,
   onCalibrate,
+  onPatch,
 }: Props) {
   const [length, setLength] = useState('')
+  const [opacity, setOpacity] = useState(underlay?.opacity ?? 0.45)
+
+  // 底图换了（上传/删除/重新加载）就跟着服务端的值走，拖动过程中的本地值不覆盖。
+  useEffect(() => {
+    if (underlay) setOpacity(underlay.opacity)
+  }, [underlay?.opacity, underlay?.sha256])
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -162,6 +171,51 @@ export function UnderlayPanel({
               两点定标
             </button>
           )}
+        </div>
+      ) : null}
+
+      {underlay ? (
+        <div className="mt-3 space-y-2">
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={underlay.visible}
+              disabled={!isAdmin || busy}
+              onChange={(e) => onPatch({ visible: e.target.checked })}
+            />
+            显示底图
+          </label>
+          <label className="block text-xs" style={{ color: 'var(--color-muted)' }}>
+            不透明度 {Math.round(opacity * 100)}%
+            <input
+              type="range"
+              min="10"
+              max="100"
+              step="5"
+              value={Math.round(opacity * 100)}
+              disabled={!isAdmin || busy}
+              className="mt-1 w-full"
+              onChange={(e) => setOpacity(Number(e.target.value) / 100)}
+              onPointerUp={() => onPatch({ opacity })}
+              onKeyUp={() => onPatch({ opacity })}
+            />
+          </label>
+          {isAdmin ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onPatch({ rotationDeg: nextRotation(underlay.rotationDeg) })}
+              className="px-2 py-1 text-xs"
+              style={{
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--color-bg)',
+                opacity: busy ? 0.5 : 1,
+              }}
+            >
+              旋转 90°（当前 {underlay.rotationDeg}°）
+            </button>
+          ) : null}
         </div>
       ) : null}
 

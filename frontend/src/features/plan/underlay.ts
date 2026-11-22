@@ -112,6 +112,6 @@ export function calibrate(
 }
 
 /** 旋转 90° 的整数倍并归一到 0/90/180/270。 */
-export function nextRotation(deg: number): number {
-  return (((deg + 90) % 360) + 360) % 360
+export function nextRotation(deg: number): 0 | 90 | 180 | 270 {
+  return ((((deg + 90) % 360) + 360) % 360) as 0 | 90 | 180 | 270
 }

@@ -30,6 +30,7 @@ import {
   type RoomKind,
   type SessionUser,
   type Underlay,
+  type UnderlayPatch,
   type Wall,
 } from '../api/client.ts'
 import ItemInspector from '../components/ItemInspector.tsx'
@@ -212,6 +213,18 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : '删除底图失败')
+    } finally {
+      setUnderlayBusy(false)
+    }
+  }
+
+  const patchUnderlay = async (patch: UnderlayPatch) => {
+    setUnderlayBusy(true)
+    try {
+      setPlan(await updateUnderlay(patch))
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '修改底图失败')
     } finally {
       setUnderlayBusy(false)
     }
@@ -1590,6 +1603,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             onStartCalibration={startCalibration}
             onCancelCalibration={cancelCalibration}
             onCalibrate={(lengthCm) => void applyCalibration(lengthCm)}
+            onPatch={(patch) => void patchUnderlay(patch)}
           />
         ) : null}
         <Stage
