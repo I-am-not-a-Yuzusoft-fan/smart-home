@@ -204,28 +204,58 @@ func (e ItemUpdateStatus) Valid() bool {
 
 // Defines values for RoomKind.
 const (
-	Bathroom RoomKind = "bathroom"
-	Bedroom  RoomKind = "bedroom"
-	Hallway  RoomKind = "hallway"
-	Kitchen  RoomKind = "kitchen"
-	Living   RoomKind = "living"
-	Study    RoomKind = "study"
+	RoomKindBathroom RoomKind = "bathroom"
+	RoomKindBedroom  RoomKind = "bedroom"
+	RoomKindHallway  RoomKind = "hallway"
+	RoomKindKitchen  RoomKind = "kitchen"
+	RoomKindLiving   RoomKind = "living"
+	RoomKindStudy    RoomKind = "study"
 )
 
 // Valid indicates whether the value is a known member of the RoomKind enum.
 func (e RoomKind) Valid() bool {
 	switch e {
-	case Bathroom:
+	case RoomKindBathroom:
 		return true
-	case Bedroom:
+	case RoomKindBedroom:
 		return true
-	case Hallway:
+	case RoomKindHallway:
 		return true
-	case Kitchen:
+	case RoomKindKitchen:
 		return true
-	case Living:
+	case RoomKindLiving:
 		return true
-	case Study:
+	case RoomKindStudy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RoomNameInputKind.
+const (
+	RoomNameInputKindBathroom RoomNameInputKind = "bathroom"
+	RoomNameInputKindBedroom  RoomNameInputKind = "bedroom"
+	RoomNameInputKindHallway  RoomNameInputKind = "hallway"
+	RoomNameInputKindKitchen  RoomNameInputKind = "kitchen"
+	RoomNameInputKindLiving   RoomNameInputKind = "living"
+	RoomNameInputKindStudy    RoomNameInputKind = "study"
+)
+
+// Valid indicates whether the value is a known member of the RoomNameInputKind enum.
+func (e RoomNameInputKind) Valid() bool {
+	switch e {
+	case RoomNameInputKindBathroom:
+		return true
+	case RoomNameInputKindBedroom:
+		return true
+	case RoomNameInputKindHallway:
+		return true
+	case RoomNameInputKindKitchen:
+		return true
+	case RoomNameInputKindLiving:
+		return true
+	case RoomNameInputKindStudy:
 		return true
 	default:
 		return false
@@ -244,6 +274,36 @@ func (e SessionUserRole) Valid() bool {
 	case Admin:
 		return true
 	case Member:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StaleRoomKind.
+const (
+	StaleRoomKindBathroom StaleRoomKind = "bathroom"
+	StaleRoomKindBedroom  StaleRoomKind = "bedroom"
+	StaleRoomKindHallway  StaleRoomKind = "hallway"
+	StaleRoomKindKitchen  StaleRoomKind = "kitchen"
+	StaleRoomKindLiving   StaleRoomKind = "living"
+	StaleRoomKindStudy    StaleRoomKind = "study"
+)
+
+// Valid indicates whether the value is a known member of the StaleRoomKind enum.
+func (e StaleRoomKind) Valid() bool {
+	switch e {
+	case StaleRoomKindBathroom:
+		return true
+	case StaleRoomKindBedroom:
+		return true
+	case StaleRoomKindHallway:
+		return true
+	case StaleRoomKindKitchen:
+		return true
+	case StaleRoomKindLiving:
+		return true
+	case StaleRoomKindStudy:
 		return true
 	default:
 		return false
@@ -496,6 +556,10 @@ type Plan struct {
 	// 墙没围成闭环时这里是空数组，`openWalls` 会给出提示依据。
 	Rooms []Room `json:"rooms"`
 
+	// StaleRooms 失配的房间名：墙改过之后，原来那间房的哈希对不上了，名字就悬空在这里。
+	// 前端据此提示「原来给客厅起的名字已失效」，并允许一键清理。
+	StaleRooms []StaleRoom `json:"staleRooms"`
+
 	// Version 平面图版本号。每次整份替换成功后 +1，撤销/重做靠它做乐观并发：
 	// 写回时带上旧版本号，服务端发现对不上就返回 409，客户端重新取全量。
 	Version int64  `json:"version"`
@@ -537,6 +601,17 @@ type Room struct {
 // RoomKind 房间用途；还没指定时为空
 type RoomKind string
 
+// RoomNameInput defines model for RoomNameInput.
+type RoomNameInput struct {
+	Kind *RoomNameInputKind `json:"kind,omitempty"`
+
+	// Name 房间名，1–24 个字
+	Name string `json:"name"`
+}
+
+// RoomNameInputKind defines model for RoomNameInput.Kind.
+type RoomNameInputKind string
+
 // SessionUser defines model for SessionUser.
 type SessionUser struct {
 	DisplayName string             `json:"displayName"`
@@ -547,6 +622,16 @@ type SessionUser struct {
 
 // SessionUserRole defines model for SessionUser.Role.
 type SessionUserRole string
+
+// StaleRoom 失配的房间名——哈希已经不属于任何现存房间。
+type StaleRoom struct {
+	Hash string         `json:"hash"`
+	Kind *StaleRoomKind `json:"kind,omitempty"`
+	Name string         `json:"name"`
+}
+
+// StaleRoomKind defines model for StaleRoom.Kind.
+type StaleRoomKind string
 
 // Wall defines model for Wall.
 type Wall struct {
@@ -636,6 +721,9 @@ type UpdateItemJSONRequestBody = ItemUpdate
 // ReplacePlanJSONRequestBody defines body for ReplacePlan for application/json ContentType.
 type ReplacePlanJSONRequestBody = PlanInput
 
+// UpdateRoomNameJSONRequestBody defines body for UpdateRoomName for application/json ContentType.
+type UpdateRoomNameJSONRequestBody = RoomNameInput
+
 // CreateWallJSONRequestBody defines body for CreateWall for application/json ContentType.
 type CreateWallJSONRequestBody = WallInput
 
@@ -686,6 +774,12 @@ type ServerInterface interface {
 	// ReplacePlan 整份替换户型（撤销/重做）
 	// (PUT /api/plan)
 	ReplacePlan(w http.ResponseWriter, r *http.Request)
+	// ClearRoomName 清掉房间名
+	// (DELETE /api/rooms/{hash})
+	ClearRoomName(w http.ResponseWriter, r *http.Request, hash string)
+	// UpdateRoomName 给房间起名或改用途
+	// (PATCH /api/rooms/{hash})
+	UpdateRoomName(w http.ResponseWriter, r *http.Request, hash string)
 	// CreateWall 画一面墙
 	// (POST /api/walls)
 	CreateWall(w http.ResponseWriter, r *http.Request)
@@ -782,6 +876,18 @@ func (_ Unimplemented) GetPlan(w http.ResponseWriter, r *http.Request) {
 // ReplacePlan 整份替换户型（撤销/重做）
 // (PUT /api/plan)
 func (_ Unimplemented) ReplacePlan(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ClearRoomName 清掉房间名
+// (DELETE /api/rooms/{hash})
+func (_ Unimplemented) ClearRoomName(w http.ResponseWriter, r *http.Request, hash string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateRoomName 给房间起名或改用途
+// (PATCH /api/rooms/{hash})
+func (_ Unimplemented) UpdateRoomName(w http.ResponseWriter, r *http.Request, hash string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1101,6 +1207,58 @@ func (siw *ServerInterfaceWrapper) ReplacePlan(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ClearRoomName operation middleware
+func (siw *ServerInterfaceWrapper) ClearRoomName(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "hash" -------------
+	var hash string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "hash", chi.URLParam(r, "hash"), &hash, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "hash", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClearRoomName(w, r, hash)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateRoomName operation middleware
+func (siw *ServerInterfaceWrapper) UpdateRoomName(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "hash" -------------
+	var hash string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "hash", chi.URLParam(r, "hash"), &hash, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "hash", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateRoomName(w, r, hash)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // CreateWall operation middleware
 func (siw *ServerInterfaceWrapper) CreateWall(w http.ResponseWriter, r *http.Request) {
 
@@ -1306,6 +1464,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/api/walls/{wallId}", wrapper.UpdateWall)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/api/rooms/{hash}", wrapper.ClearRoomName)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/api/rooms/{hash}", wrapper.UpdateRoomName)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/item-types", wrapper.ListItemTypes)

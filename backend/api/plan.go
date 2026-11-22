@@ -6,6 +6,8 @@ import (
 	"errors"
 	"math"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
@@ -84,7 +86,15 @@ type PlanStore interface {
 	LoadVersion(ctx context.Context) (int64, error)
 	// ReplacePlan 按 id 对齐地整份替换墙列表，成功后版本号 +1。
 	ReplacePlan(ctx context.Context, version int64, walls []WallSnapshot) error
+	// UpsertRoomName 只写"名字与用途"，不碰几何。
+	UpsertRoomName(ctx context.Context, hash, name, kind string) error
+	// DeleteRoomName 清掉某个哈希上的名字；本来就没有也返回 0，不算错。
+	DeleteRoomName(ctx context.Context, hash string) (int64, error)
 }
+
+// roomGoneMessage 是房间哈希对不上时的统一文案：墙改过、别人改过、页面太旧，
+// 三种原因对用户是同一件事——刷新重来。
+const roomGoneMessage = "房间不存在或已变化，请刷新后重试"
 
 // GetPlan 返回整张户型。端点单独列，因为两面墙共享一个端点。
 func (s *Server) GetPlan(w http.ResponseWriter, r *http.Request) {
@@ -261,6 +271,25 @@ func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 	}
 	plan.OpenWalls = derived.OpenWalls
 
+	// 失配的名字：墙改过之后哈希变了，旧名字不该悄悄消失，也不能自动挂到
+	// 形状不同的房间上——单列出来让用户自己决定重命名还是清掉。
+	live := make(map[string]struct{}, len(derived.Rings))
+	for _, ring := range derived.Rings {
+		live[ring.Hash] = struct{}{}
+	}
+	plan.StaleRooms = make([]gen.StaleRoom, 0, len(names))
+	for _, n := range names {
+		if _, ok := live[n.Hash]; ok {
+			continue
+		}
+		stale := gen.StaleRoom{Hash: n.Hash, Name: n.Name}
+		if n.Kind != "" {
+			k := gen.StaleRoomKind(n.Kind)
+			stale.Kind = &k
+		}
+		plan.StaleRooms = append(plan.StaleRooms, stale)
+	}
+
 	for _, w := range walls {
 		plan.Walls = append(plan.Walls, gen.Wall{
 			Id:        w.ID,
@@ -274,6 +303,80 @@ func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 		})
 	}
 	return plan, nil
+}
+
+// UpdateRoomName 给房间起名或改用途。
+func (s *Server) UpdateRoomName(w http.ResponseWriter, r *http.Request, hash string) {
+	var body gen.UpdateRoomNameJSONRequestBody
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "房间名不能为空")
+		return
+	}
+	if utf8.RuneCountInString(name) > 24 {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "房间名最多 24 个字")
+		return
+	}
+	kind := string(gen.RoomKindLiving)
+	if body.Kind != nil {
+		kind = string(*body.Kind)
+	}
+	ok, err := s.roomExists(r.Context(), hash)
+	if err != nil {
+		s.log.Error("读取户型失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取户型失败")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, gen.NOTFOUND, roomGoneMessage)
+		return
+	}
+	if err := s.plan.UpsertRoomName(r.Context(), hash, name, kind); err != nil {
+		s.log.Error("保存房间名失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "保存房间名失败")
+		return
+	}
+	s.writePlan(w, r)
+}
+
+// ClearRoomName 清掉名字。幂等：没有名字、哈希已失配都返回 204。
+// 不校验「这个哈希是不是当前房间」——失配名字的清理入口正是这里。
+func (s *Server) ClearRoomName(w http.ResponseWriter, r *http.Request, hash string) {
+	if _, err := s.plan.DeleteRoomName(r.Context(), hash); err != nil {
+		s.log.Error("清除房间名失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "清除房间名失败")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// roomExists 校验哈希确实属于当前户型推导出来的某个房间。
+// 不做这层校验的话，前端拿着过期哈希也能写进一行永远不会被读到的名字。
+func (s *Server) roomExists(ctx context.Context, hash string) (bool, error) {
+	plan, err := s.readPlan(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, room := range plan.Rooms {
+		if room.Hash == hash {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// writePlan 回写最新整份户型——起名之后前端可以直接用返回值刷新，不用再取一次。
+func (s *Server) writePlan(w http.ResponseWriter, r *http.Request) {
+	plan, err := s.readPlan(r.Context())
+	if err != nil {
+		s.log.Error("读取户型失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取户型失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
 }
 
 // validateWall 只挡明显错误的输入：坐标越界、两端重合、墙厚离谱。

@@ -226,6 +226,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/rooms/{hash}:
+    parameters:
+      - name: hash
+        in: path
+        required: true
+        description: 房间多边形的哈希（由墙推导，16 位十六进制）
+        schema:
+          type: string
+          pattern: "^[0-9a-f]{16}$"
+    patch:
+      operationId: updateRoomName
+      summary: 给房间起名或改用途
+      description: |
+        房间几何由墙推导，库里只存名字与用途。`hash` 必须是当前户型里存在的房间；
+        墙改过之后哈希会变，旧名字会出现在 `Plan.staleRooms` 里，需要重新命名或清理。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RoomNameInput"
+      responses:
+        "200":
+          description: 已保存，返回最新的整份户型
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: 这个哈希不属于当前户型的任何房间
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: clearRoomName
+      summary: 清掉房间名
+      description: |
+        只删名字，不动几何。幂等：本来就没有名字、或者这个哈希已经失配
+        （墙改过之后旧名字还留在 `Plan.staleRooms` 里），都返回 204——
+        「清理失配名字」正是前端要的能力。
+      responses:
+        "204":
+          description: 已清除
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
   /api/item-types:
     get:
       operationId: listItemTypes
@@ -582,7 +632,7 @@ components:
           format: double
     Plan:
       type: object
-      required: [corners, walls, rooms, openWalls, version]
+      required: [corners, walls, rooms, openWalls, staleRooms, version]
       properties:
         corners:
           type: array
@@ -602,6 +652,13 @@ components:
         openWalls:
           type: integer
           description: 没有参与任何闭合区域的墙数；大于 0 时前端提示「还有墙没围上」
+        staleRooms:
+          type: array
+          description: |
+            失配的房间名：墙改过之后，原来那间房的哈希对不上了，名字就悬空在这里。
+            前端据此提示「原来给客厅起的名字已失效」，并允许一键清理。
+          items:
+            $ref: "#/components/schemas/StaleRoom"
         version:
           type: integer
           format: int64
@@ -698,6 +755,32 @@ components:
           type: string
           enum: [living, bedroom, kitchen, bathroom, study, hallway]
           description: 房间用途；还没指定时为空
+    StaleRoom:
+      type: object
+      required: [hash, name]
+      description: 失配的房间名——哈希已经不属于任何现存房间。
+      properties:
+        hash:
+          type: string
+          pattern: "^[0-9a-f]{16}$"
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [living, bedroom, kitchen, bathroom, study, hallway]
+    RoomNameInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 24
+          description: 房间名，1–24 个字
+        kind:
+          type: string
+          enum: [living, bedroom, kitchen, bathroom, study, hallway]
     CapabilityOption:
       type: object
       required: [value, label]

@@ -98,12 +98,20 @@ export type Room = {
   kind?: string
 }
 
+/** 房间用途。与后端的 `room_name.kind` 检查约束一致。 */
+export type RoomKind = 'living' | 'bedroom' | 'kitchen' | 'bathroom' | 'study' | 'hallway'
+
+/** 失配的房间名：墙改过之后哈希对不上任何现存房间，名字悬空在这里。 */
+export type StaleRoom = { hash: string; name: string; kind?: RoomKind }
+
 export type Plan = {
   corners: Corner[]
   walls: Wall[]
   rooms: Room[]
   /** 没参与任何闭合区域的墙数：大于 0 说明还有墙没围上 */
   openWalls: number
+  /** 失配的房间名：前端据此提示「原来起的名字已失效」并允许清理 */
+  staleRooms: StaleRoom[]
   /** 平面图版本号：撤销/重做写回时带上它做乐观并发 */
   version: number
 }
@@ -288,3 +296,14 @@ export const updateItemType = (key: string, input: ItemTypeUpdate) =>
 /** 删除类型（仅管理员）；仍被物品引用时返回 409。 */
 export const deleteItemType = (key: string) =>
   request<void>(`/api/item-types/${encodeURIComponent(key)}`, { method: 'DELETE' })
+
+/** 给房间起名或改用途。哈希必须是当前户型里存在的房间。 */
+export const updateRoomName = (hash: string, input: { name: string; kind?: RoomKind }) =>
+  request<Plan>(`/api/rooms/${encodeURIComponent(hash)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+
+/** 清掉房间名。幂等：失配的旧名字也用它清理。 */
+export const clearRoomName = (hash: string) =>
+  request<void>(`/api/rooms/${encodeURIComponent(hash)}`, { method: 'DELETE' })

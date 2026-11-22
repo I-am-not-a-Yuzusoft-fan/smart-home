@@ -80,3 +80,32 @@ export function averagePoint(points: Pt[]): Pt {
   }
   return { x: sx / points.length, y: sy / points.length }
 }
+
+/**
+ * 点是否落在多边形内（含边界）。
+ *
+ * 房间的点击选中不能靠 Konva 的 hit graph（自定义 Stage 变换下它恒返回 none），
+ * 所以拿后端推出来的 `ring` 做射线法：向右发一条射线，数穿过的边数，奇数次在里面。
+ * 边界与顶点算在里面——贴着墙点房间应该选中，而不是"差一像素没中"。
+ */
+export function pointInPolygon(p: Pt, ring: Pt[]): boolean {
+  if (ring.length < 3) return false
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[j]
+    const b = ring[i]
+    const cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
+    const onSegment =
+      Math.abs(cross) < 1e-9 &&
+      p.x >= Math.min(a.x, b.x) - 1e-9 &&
+      p.x <= Math.max(a.x, b.x) + 1e-9 &&
+      p.y >= Math.min(a.y, b.y) - 1e-9 &&
+      p.y <= Math.max(a.y, b.y) + 1e-9
+    if (onSegment) return true
+    if (a.y > p.y !== b.y > p.y) {
+      const hitX = a.x + ((p.y - a.y) * (b.x - a.x)) / (b.y - a.y)
+      if (p.x < hitX) inside = !inside
+    }
+  }
+  return inside
+}

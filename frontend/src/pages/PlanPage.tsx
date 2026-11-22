@@ -4,6 +4,7 @@ import type Konva from 'konva'
 import {
   ApiError,
   createItem,
+  clearRoomName,
   createWall,
   deleteItem,
   deleteWall,
@@ -12,12 +13,14 @@ import {
   listItemTypes,
   logout,
   updateItem,
+  updateRoomName,
   updateWall,
   type Corner,
   type Item,
   type ItemType,
   type Plan,
   type Room,
+  type RoomKind,
   type SessionUser,
   type Wall,
 } from '../api/client.ts'
@@ -25,7 +28,7 @@ import ItemInspector from '../components/ItemInspector.tsx'
 import ItemSidebar, { type ItemFilters } from '../components/ItemSidebar.tsx'
 import TypeManager from '../components/TypeManager.tsx'
 import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from '../features/plan/edit.ts'
-import { distanceToSegment, type Seg } from '../features/plan/geometry.ts'
+import { distanceToSegment, pointInPolygon, type Seg } from '../features/plan/geometry.ts'
 import { DEFAULT_RULES, snap as snapTo, type Guide as SnapGuide, type SnapRule } from '../features/plan/snap.ts'
 import { collinearRuns } from '../features/plan/dimensions.ts'
 import { replacePlan, type WallSnapshot } from '../api/client.ts'
@@ -108,7 +111,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   // 画布真实尺寸要等 ResizeObserver 报一次；在那之前 fit 会按 800×600 算，
   // 结果内容偏在左上角（第一次打开时尤其明显）。
   const [sizeReady, setSizeReady] = useState(false)
-  const [plan, setPlan] = useState<Plan>({ corners: [], walls: [], rooms: [], openWalls: 0, version: 0 })
+  const [plan, setPlan] = useState<Plan>({
+    corners: [],
+    walls: [],
+    rooms: [],
+    openWalls: 0,
+    staleRooms: [],
+    version: 0,
+  })
   // 回调里要读「最新」的户型：闭包捕获的 plan 可能落后一次渲染。
   const planRef = useRef<Plan>(plan)
   planRef.current = plan
@@ -122,6 +132,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [items, setItems] = useState<Item[]>([])
   const [types, setTypes] = useState<ItemType[]>([])
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
+  // 房间按哈希选中：几何由后端推导，前端只认这个键。
+  const [selectedRoomHash, setSelectedRoomHash] = useState<string | null>(null)
   const [filters, setFilters] = useState<ItemFilters>({ room: '', kind: '', q: '' })
   const [showTypes, setShowTypes] = useState(false)
   const [showDims, setShowDims] = useState(true)
@@ -141,7 +153,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   // 若整份覆盖就会把后画的墙抹掉（刷新才回来，用户以为丢了）。
   const writeSeq = useRef(0)
   // 按下时落点与命中的墙：松手时若几乎没动，就当成"点选"，而不是画一面极短的墙。
-  const pressRef = useRef<{ x: number; y: number; wallId: string | null } | null>(null)
+  const pressRef = useRef<{ x: number; y: number; wallId: string | null; roomHash: string | null } | null>(
+    null,
+  )
   const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
   const fittedRef = useRef(false)
 
@@ -162,6 +176,53 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const typeByKey = useMemo(() => new Map(types.map((typ) => [typ.key, typ])), [types])
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? null
   const selectedItemType = selectedItem ? typeByKey.get(selectedItem.typeKey) : undefined
+  const selectedRoom = plan.rooms.find((room) => room.hash === selectedRoomHash) ?? null
+
+  // 户型一变（撤销、别人改墙），选中的房间可能已经不在了；留着面板会指向幽灵。
+  useEffect(() => {
+    if (selectedRoomHash && !plan.rooms.some((room) => room.hash === selectedRoomHash)) {
+      setSelectedRoomHash(null)
+    }
+  }, [plan.rooms, selectedRoomHash])
+
+  async function saveRoomName(hash: string, name: string, kind: RoomKind) {
+    try {
+      setPlan(await updateRoomName(hash, { name, kind }))
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存房间名失败')
+    }
+  }
+
+  async function forgetRoomName(hash: string) {
+    try {
+      await clearRoomName(hash)
+      setPlan(await getPlan())
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '清除房间名失败')
+    }
+  }
+
+  async function forgetAllStaleRooms() {
+    try {
+      for (const stale of plan.staleRooms) {
+        await clearRoomName(stale.hash)
+      }
+      setPlan(await getPlan())
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '清理失配房间名失败')
+    }
+  }
+
+  // 房间命中：后端已经把多边形算好了，这里只做点面判断。
+  function roomAt(x: number, y: number): string | null {
+    for (const room of plan.rooms) {
+      if (pointInPolygon({ x, y }, room.ring)) return room.hash
+    }
+    return null
+  }
 
   useEffect(() => {
     void load()
@@ -498,13 +559,15 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     // 先看有没有按在选中墙的端点上——那是拖动改墙，不是画新墙。
     const grabbed = handleAt(p.x, p.y)
     if (grabbed) {
-      pressRef.current = { x: p.x, y: p.y, wallId: null }
+      pressRef.current = { x: p.x, y: p.y, wallId: null, roomHash: null }
       setEditing({ wallId: grabbed.wallId, end: grabbed.end, ax: grabbed.ax, ay: grabbed.ay, bx: grabbed.bx, by: grabbed.by })
       return
     }
 
     const wallId = wallAt(p.x, p.y)
-    pressRef.current = { x: p.x, y: p.y, wallId }
+    // 墙上的点击优先给墙；只有落在空地上才去找房间——否则永远选不中墙。
+    const roomHash = wallId ? null : roomAt(p.x, p.y)
+    pressRef.current = { x: p.x, y: p.y, wallId, roomHash }
     // 按在空白或墙上都算「离开物品」，否则点完物品再画墙，Delete 会删错东西。
     setSelectedItemId(null)
 
@@ -596,8 +659,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     // 几乎没动 = 点击：点中墙就选中，点空白就取消选中。
     if (moved < MIN_DRAG_PX) {
       setSelectedId(press.wallId)
+      // 墙优先：有墙就选墙，没有再看落点有没有踩中房间。
+      setSelectedRoomHash(press.wallId ? null : press.roomHash)
       return
     }
+    // 开始画墙就离开房间面板，否则属性面板会一直压着画布右边。
+    setSelectedRoomHash(null)
     if (!d) return
 
     // 终点要用松手那一刻的指针，不能用最后一次 mousemove 的位置：
@@ -1091,6 +1158,26 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         </p>
       )}
 
+      {plan.staleRooms.length > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-xs"
+          style={{ background: 'rgba(245, 158, 11, 0.14)', color: '#7c4a03' }}
+          role="status"
+        >
+          <span>
+            户型改过之后，这些房间名已经对不上原来的房间：
+            {plan.staleRooms.map((stale) => `「${stale.name}」`).join('、')}
+          </span>
+          <button
+            className="rounded px-2 py-0.5 font-medium"
+            style={{ border: '1px solid rgba(124, 74, 3, 0.35)' }}
+            onClick={() => void forgetAllStaleRooms()}
+          >
+            全部清理
+          </button>
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1">
         <ItemSidebar
           types={types}
@@ -1102,6 +1189,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           onSelectItem={(id) => {
             setSelectedItemId(id)
             setSelectedId(null)
+            setSelectedRoomHash(null)
           }}
         />
         <main
@@ -1113,6 +1201,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           }}
           onDrop={(e) => void onDropType(e)}
         >
+        {selectedRoom && (
+          <RoomPanel
+            room={selectedRoom}
+            onClose={() => setSelectedRoomHash(null)}
+            onSave={(name, kind) => void saveRoomName(selectedRoom.hash, name, kind)}
+            onClear={() => void forgetRoomName(selectedRoom.hash)}
+          />
+        )}
         {selected && wallForm && (
           <div
             className="absolute right-3 top-3 z-10 w-56 rounded p-3 text-xs"
@@ -1195,7 +1291,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           {/* 房间画在墙下面：半透明填充，墙压在上面边界才清楚 */}
           <Layer listening={false}>
             {plan.rooms.map((room) => (
-              <RoomShape key={room.hash} room={room} labelSize={13 / viewport.scale} />
+              <RoomShape
+                key={room.hash}
+                room={room}
+                labelSize={13 / viewport.scale}
+                selected={room.hash === selectedRoomHash}
+              />
             ))}
           </Layer>
 
@@ -1235,6 +1336,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 onPick={(id) => {
                   setSelectedId(id)
                   setSelectedItemId(null)
+                  setSelectedRoomHash(null)
                 }}
                 onHover={setHoverId}
               />
@@ -1301,6 +1403,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 onSelect={() => {
                   setSelectedItemId(item.id)
                   setSelectedId(null)
+                  setSelectedRoomHash(null)
                 }}
                 onDragEnd={(e) => void onItemDragEnd(item, e)}
               />
@@ -1464,7 +1567,15 @@ function clamp(v: number, min: number, max: number): number {
  * 面积与顶点都来自后端，这里只画——前端若自己也推导一遍，两套实现迟早分叉，
  * 就会出现「画布上是一间、列表里是两间」。
  */
-function RoomShape({ room, labelSize }: { room: Room; labelSize: number }) {
+function RoomShape({
+  room,
+  labelSize,
+  selected,
+}: {
+  room: Room
+  labelSize: number
+  selected: boolean
+}) {
   const points = room.ring.flatMap((p) => [p.x, p.y])
   const cx = room.ring.reduce((sum, p) => sum + p.x, 0) / room.ring.length
   const cy = room.ring.reduce((sum, p) => sum + p.y, 0) / room.ring.length
@@ -1472,7 +1583,13 @@ function RoomShape({ room, labelSize }: { room: Room; labelSize: number }) {
 
   return (
     <>
-      <Line points={points} closed fill="rgba(79,107,237,0.10)" stroke="rgba(79,107,237,0.35)" strokeWidth={1} />
+      <Line
+        points={points}
+        closed
+        fill={selected ? 'rgba(79,107,237,0.22)' : 'rgba(79,107,237,0.10)'}
+        stroke={selected ? '#4f6bed' : 'rgba(79,107,237,0.35)'}
+        strokeWidth={selected ? 2 : 1}
+      />
       <Text x={cx} y={cy} text={label} fontSize={labelSize} fill="#3a4a8f" offsetX={labelSize * 1.4} />
     </>
   )
@@ -1619,5 +1736,114 @@ function ItemShape({
         />
       ) : null}
     </>
+  )
+}
+
+/** 房间用途的中文名。顺序与后端 `room_name.kind` 的检查约束一致。 */
+const ROOM_KINDS: { value: RoomKind; label: string }[] = [
+  { value: 'living', label: '客厅' },
+  { value: 'bedroom', label: '卧室' },
+  { value: 'kitchen', label: '厨房' },
+  { value: 'bathroom', label: '卫生间' },
+  { value: 'study', label: '书房' },
+  { value: 'hallway', label: '走廊' },
+]
+
+/**
+ * 房间属性面板：只编辑名字与用途。
+ *
+ * 几何不可编辑是刻意的——房间由墙推导，改形状请去改墙；
+ * 面板里显示哈希前缀，是为了让「名字失配」这件事看得见（哈希变了名字就挂不上了）。
+ */
+function RoomPanel({
+  room,
+  onClose,
+  onSave,
+  onClear,
+}: {
+  room: Room
+  onClose: () => void
+  onSave: (name: string, kind: RoomKind) => void
+  onClear: () => void
+}) {
+  const [name, setName] = useState(room.name ?? '')
+  const [kind, setKind] = useState<RoomKind>((room.kind as RoomKind | undefined) ?? 'living')
+
+  // 选中另一间房时表单要跟着换，否则会把 A 的名字存到 B 上。
+  useEffect(() => {
+    setName(room.name ?? '')
+    setKind((room.kind as RoomKind | undefined) ?? 'living')
+  }, [room.hash, room.name, room.kind])
+
+  const trimmed = name.trim()
+  const fieldStyle = { border: '1px solid var(--color-border)', background: 'var(--color-bg)' }
+
+  return (
+    <div
+      className="absolute right-3 top-3 z-10 w-56 rounded p-3 text-xs"
+      style={{
+        background: 'var(--color-surface)',
+        border: '1px solid var(--color-border)',
+        boxShadow: '0 6px 20px rgba(0, 0, 0, 0.08)',
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-semibold">房间属性</span>
+        <button onClick={onClose} style={{ color: 'var(--color-muted)' }}>
+          关闭
+        </button>
+      </div>
+      <p className="mb-2" style={{ color: 'var(--color-muted)' }}>
+        {room.areaM2.toFixed(1)} ㎡ · 哈希 {room.hash.slice(0, 8)}
+      </p>
+      <label className="mb-2 flex flex-col gap-0.5">
+        <span style={{ color: 'var(--color-muted)' }}>名字</span>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="如：主卧"
+          maxLength={24}
+          className="w-full rounded px-1 py-0.5 text-xs"
+          style={fieldStyle}
+        />
+      </label>
+      <label className="mb-2 flex flex-col gap-0.5">
+        <span style={{ color: 'var(--color-muted)' }}>用途</span>
+        <select
+          value={kind}
+          onChange={(e) => setKind(e.target.value as RoomKind)}
+          className="w-full rounded px-1 py-0.5 text-xs"
+          style={fieldStyle}
+        >
+          {ROOM_KINDS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="flex gap-2">
+        <button
+          onClick={() => onSave(trimmed, kind)}
+          disabled={!trimmed}
+          className="rounded px-2 py-1"
+          style={{
+            background: 'var(--color-accent, #4f6bed)',
+            color: '#fff',
+            opacity: trimmed ? 1 : 0.45,
+          }}
+        >
+          保存
+        </button>
+        <button
+          onClick={onClear}
+          className="rounded px-2 py-1"
+          style={{ border: '1px solid var(--color-border)' }}
+        >
+          清除名字
+        </button>
+      </div>
+    </div>
   )
 }

@@ -59,6 +59,18 @@ func (q *Queries) DeleteOrphanCorners(ctx context.Context) error {
 	return err
 }
 
+const deleteRoomName = `-- name: DeleteRoomName :execrows
+DELETE FROM room_name WHERE polygon_hash = $1
+`
+
+func (q *Queries) DeleteRoomName(ctx context.Context, polygonHash string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteRoomName, polygonHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteWall = `-- name: DeleteWall :execrows
 DELETE FROM wall WHERE id = $1
 `
@@ -494,6 +506,26 @@ func (q *Queries) UpsertCorner(ctx context.Context, arg UpsertCornerParams) (pgt
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const upsertRoomName = `-- name: UpsertRoomName :exec
+INSERT INTO room_name (polygon_hash, name, kind)
+VALUES ($1, $2, $3)
+ON CONFLICT (polygon_hash) DO UPDATE
+SET name = EXCLUDED.name,
+    kind = EXCLUDED.kind,
+    updated_at = now()
+`
+
+type UpsertRoomNameParams struct {
+	PolygonHash string `json:"polygon_hash"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+}
+
+func (q *Queries) UpsertRoomName(ctx context.Context, arg UpsertRoomNameParams) error {
+	_, err := q.db.Exec(ctx, upsertRoomName, arg.PolygonHash, arg.Name, arg.Kind)
+	return err
 }
 
 const upsertState = `-- name: UpsertState :exec

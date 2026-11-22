@@ -103,3 +103,14 @@ UPDATE wall SET a = $2, b = $3, thickness = $4 WHERE id = $1;
 -- name: DeleteOrphanCorners :exec
 DELETE FROM corner c
 WHERE NOT EXISTS (SELECT 1 FROM wall w WHERE w.a = c.id OR w.b = c.id);
+
+-- name: UpsertRoomName :exec
+INSERT INTO room_name (polygon_hash, name, kind)
+VALUES ($1, $2, $3)
+ON CONFLICT (polygon_hash) DO UPDATE
+SET name = EXCLUDED.name,
+    kind = EXCLUDED.kind,
+    updated_at = now();
+
+-- name: DeleteRoomName :execrows
+DELETE FROM room_name WHERE polygon_hash = $1;
