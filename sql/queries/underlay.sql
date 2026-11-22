@@ -5,7 +5,7 @@ FROM plan_underlay
 WHERE id;
 
 -- name: GetUnderlayImage :one
-SELECT content_type, bytes
+SELECT content_type, bytes, sha256
 FROM plan_underlay
 WHERE id;
 
@@ -40,3 +40,16 @@ WHERE id;
 
 -- name: DeleteUnderlay :execrows
 DELETE FROM plan_underlay WHERE id;
+
+-- name: PatchUnderlay :one
+-- 一条语句完成「读-改-写」：nullable 参数走 COALESCE，避免并发 PATCH 丢更新。
+UPDATE plan_underlay SET
+  cm_per_px    = COALESCE(sqlc.narg('cm_per_px')::double precision, cm_per_px),
+  offset_x_cm  = COALESCE(sqlc.narg('offset_x_cm')::double precision, offset_x_cm),
+  offset_y_cm  = COALESCE(sqlc.narg('offset_y_cm')::double precision, offset_y_cm),
+  rotation_deg = COALESCE(sqlc.narg('rotation_deg')::integer, rotation_deg),
+  opacity      = COALESCE(sqlc.narg('opacity')::double precision, opacity),
+  visible      = COALESCE(sqlc.narg('visible')::boolean, visible),
+  updated_at   = now()
+WHERE id
+RETURNING *;

@@ -64,7 +64,7 @@ func (q *Queries) GetUnderlay(ctx context.Context) (GetUnderlayRow, error) {
 }
 
 const getUnderlayImage = `-- name: GetUnderlayImage :one
-SELECT content_type, bytes
+SELECT content_type, bytes, sha256
 FROM plan_underlay
 WHERE id
 `
@@ -72,12 +72,64 @@ WHERE id
 type GetUnderlayImageRow struct {
 	ContentType string `json:"content_type"`
 	Bytes       []byte `json:"bytes"`
+	Sha256      string `json:"sha256"`
 }
 
 func (q *Queries) GetUnderlayImage(ctx context.Context) (GetUnderlayImageRow, error) {
 	row := q.db.QueryRow(ctx, getUnderlayImage)
 	var i GetUnderlayImageRow
-	err := row.Scan(&i.ContentType, &i.Bytes)
+	err := row.Scan(&i.ContentType, &i.Bytes, &i.Sha256)
+	return i, err
+}
+
+const patchUnderlay = `-- name: PatchUnderlay :one
+UPDATE plan_underlay SET
+  cm_per_px    = COALESCE($1::double precision, cm_per_px),
+  offset_x_cm  = COALESCE($2::double precision, offset_x_cm),
+  offset_y_cm  = COALESCE($3::double precision, offset_y_cm),
+  rotation_deg = COALESCE($4::integer, rotation_deg),
+  opacity      = COALESCE($5::double precision, opacity),
+  visible      = COALESCE($6::boolean, visible),
+  updated_at   = now()
+WHERE id
+RETURNING id, content_type, width_px, height_px, bytes, sha256, cm_per_px, offset_x_cm, offset_y_cm, rotation_deg, opacity, visible, updated_at
+`
+
+type PatchUnderlayParams struct {
+	CmPerPx     pgtype.Float8 `json:"cm_per_px"`
+	OffsetXCm   pgtype.Float8 `json:"offset_x_cm"`
+	OffsetYCm   pgtype.Float8 `json:"offset_y_cm"`
+	RotationDeg pgtype.Int4   `json:"rotation_deg"`
+	Opacity     pgtype.Float8 `json:"opacity"`
+	Visible     pgtype.Bool   `json:"visible"`
+}
+
+// 一条语句完成「读-改-写」：nullable 参数走 COALESCE，避免并发 PATCH 丢更新。
+func (q *Queries) PatchUnderlay(ctx context.Context, arg PatchUnderlayParams) (PlanUnderlay, error) {
+	row := q.db.QueryRow(ctx, patchUnderlay,
+		arg.CmPerPx,
+		arg.OffsetXCm,
+		arg.OffsetYCm,
+		arg.RotationDeg,
+		arg.Opacity,
+		arg.Visible,
+	)
+	var i PlanUnderlay
+	err := row.Scan(
+		&i.ID,
+		&i.ContentType,
+		&i.WidthPx,
+		&i.HeightPx,
+		&i.Bytes,
+		&i.Sha256,
+		&i.CmPerPx,
+		&i.OffsetXCm,
+		&i.OffsetYCm,
+		&i.RotationDeg,
+		&i.Opacity,
+		&i.Visible,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 

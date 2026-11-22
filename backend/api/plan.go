@@ -137,7 +137,7 @@ type PlanStore interface {
 	// LoadUnderlay 读底图元数据；没有底图时返回 nil, nil。
 	LoadUnderlay(ctx context.Context) (*PlanUnderlay, error)
 	// LoadUnderlayImage 单独取字节：元数据要随 Plan 每次返回，图片不该跟着 JSON 走。
-	LoadUnderlayImage(ctx context.Context) (contentType string, data []byte, err error)
+	LoadUnderlayImage(ctx context.Context) (contentType string, data []byte, sha256 string, err error)
 	// SaveUnderlay 整张替换底图，并把定标与显示参数重置。
 	SaveUnderlay(ctx context.Context, in UnderlayUpload) error
 	// UpdateUnderlayMeta 只改出现的字段，返回改后的元数据。

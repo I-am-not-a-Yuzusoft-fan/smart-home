@@ -52,11 +52,12 @@ import {
   calibrate,
   imageCenter,
   imageRect,
+  imageToPlan,
   planToImage,
   type UnderlayTransform,
 } from '../features/plan/underlay.ts'
 import { replacePlan, type WallSnapshot } from '../api/client.ts'
-import { sampleAsFile, type UnderlaySample } from '../features/plan/samples.ts'
+import { sampleAsFile, syntheticCalibrations, type UnderlaySample } from '../features/plan/samples.ts'
 
 type Props = {
   user: SessionUser
@@ -70,6 +71,18 @@ const PX_PER_CM = 1
 /** 端点/墙线吸附半径（屏幕像素）。换算成世界单位要除以缩放。 */
 const SNAP_PX = 12
 /** 短于这个长度的拖拽当成点击，不建墙（屏幕像素）。 */
+/** 元数据 → 纯函数用的变换参数：字段名对得上，只是把接口类型收窄成数学类型。 */
+function transformOf(u: Underlay): UnderlayTransform {
+  return {
+    widthPx: u.widthPx,
+    heightPx: u.heightPx,
+    cmPerPx: u.cmPerPx,
+    offsetXCm: u.offsetXCm,
+    offsetYCm: u.offsetYCm,
+    rotationDeg: u.rotationDeg,
+  }
+}
+
 const MIN_DRAG_PX = 8
 const ZOOM_MIN = 0.25
 const ZOOM_MAX = 4
@@ -157,18 +170,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   planRef.current = plan
 
   // 底图的「图片像素 ↔ 世界厘米」变换：只从元数据算，不从画布读。
-  const underlayTransform = useMemo<UnderlayTransform | null>(() => {
-    const u = plan.underlay
-    if (!u) return null
-    return {
-      widthPx: u.widthPx,
-      heightPx: u.heightPx,
-      cmPerPx: u.cmPerPx,
-      offsetXCm: u.offsetXCm,
-      offsetYCm: u.offsetYCm,
-      rotationDeg: u.rotationDeg,
-    }
-  }, [plan.underlay])
+  const underlayTransform = useMemo<UnderlayTransform | null>(
+    () => (plan.underlay ? transformOf(plan.underlay) : null),
+    [plan.underlay],
+  )
 
   // 图片按 sha 拉一次：换图必然换 sha，所以不必担心拿到旧缓存。
   useEffect(() => {
@@ -191,56 +196,56 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     }
   }, [plan.underlay?.sha256])
 
-  const saveUnderlay = async (file: File) => {
+  /** 底图相关的异步操作都有同一套收尾：置忙、统一报错、复位忙。 */
+  const withUnderlayBusy = async (fallback: string, run: () => Promise<void>) => {
     setUnderlayBusy(true)
     try {
+      await run()
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : fallback)
+    } finally {
+      setUnderlayBusy(false)
+    }
+  }
+
+  const saveUnderlay = (file: File) =>
+    withUnderlayBusy('上传底图失败', async () => {
       setPlan(await uploadUnderlay(file))
       // 换图是一次硬操作：撤销栈里的快照只含墙，回退过去会让人误以为能"撤销换图"。
       setHistory({ past: [], future: [] })
-      setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '上传底图失败')
-    } finally {
-      setUnderlayBusy(false)
-    }
-  }
+    })
 
-  const dropUnderlay = async () => {
-    setUnderlayBusy(true)
-    try {
+  const dropUnderlay = () =>
+    withUnderlayBusy('删除底图失败', async () => {
       await clearUnderlay()
       setPlan(await getPlan())
       setHistory({ past: [], future: [] })
-      setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '删除底图失败')
-    } finally {
-      setUnderlayBusy(false)
-    }
-  }
+    })
 
-  const useSample = async (sample: UnderlaySample) => {
-    setUnderlayBusy(true)
-    try {
-      await saveUnderlay(await sampleAsFile(sample))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '示例图加载失败')
-    } finally {
-      setUnderlayBusy(false)
-    }
-  }
+  /** 示例图：上传后若图自带定标点，顺手把比例与应用内真实尺寸对上。 */
+  const loadSample = (sample: UnderlaySample) =>
+    withUnderlayBusy('示例图加载失败', async () => {
+      const next = await uploadUnderlay(await sampleAsFile(sample))
+      const calibration = (await syntheticCalibrations()).get(sample.path)
+      if (!calibration || !next.underlay) {
+        setPlan(next)
+        return
+      }
+      const t = transformOf(next.underlay)
+      // 钉住第一个标定点，只改比例与平移——和手动定标走同一个函数。
+      const anchor = imageToPlan(calibration.p1, t)
+      setPlan(
+        await updateUnderlay(
+          calibrate(calibration.p1, calibration.p2, anchor, calibration.lengthCm, t),
+        ),
+      )
+    })
 
-  const patchUnderlay = async (patch: UnderlayPatch) => {
-    setUnderlayBusy(true)
-    try {
+  const patchUnderlay = (patch: UnderlayPatch) =>
+    withUnderlayBusy('修改底图失败', async () => {
       setPlan(await updateUnderlay(patch))
-      setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '修改底图失败')
-    } finally {
-      setUnderlayBusy(false)
-    }
-  }
+    })
 
   const startCalibration = () => {
     if (!plan.underlay) return
@@ -254,10 +259,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     setCalibPoints([])
   }
 
-  const applyCalibration = async (lengthCm: number) => {
+  const applyCalibration = (lengthCm: number) => {
     if (!underlayTransform || calibPoints.length !== 2) return
-    setUnderlayBusy(true)
-    try {
+    return withUnderlayBusy('定标失败', async () => {
       const [p1, p2] = calibPoints
       // 用户点的是世界坐标；定标要在图片像素里量距离，所以反解回去。
       const u1 = planToImage(p1, underlayTransform)
@@ -265,12 +269,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       setPlan(await updateUnderlay(calibrate(u1, u2, p1, lengthCm, underlayTransform)))
       setCalibPoints([])
       setCalibrating(false)
-      setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '定标失败')
-    } finally {
-      setUnderlayBusy(false)
-    }
+    })
   }
 
   // 两个点在图上的当前距离：给用户一个「现在是多少」的参照，默认值也用它。
@@ -1616,7 +1615,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             onCancelCalibration={cancelCalibration}
             onCalibrate={(lengthCm) => void applyCalibration(lengthCm)}
             onPatch={(patch) => void patchUnderlay(patch)}
-            onSample={(sample) => void useSample(sample)}
+            onSample={(sample) => void loadSample(sample)}
           />
         ) : null}
         <Stage

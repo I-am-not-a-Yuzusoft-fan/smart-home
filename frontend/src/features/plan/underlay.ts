@@ -97,7 +97,8 @@ export function calibrate(
   t: UnderlayTransform,
 ): { cmPerPx: number; offsetXCm: number; offsetYCm: number } {
   const pixelDist = Math.hypot(u2.x - u1.x, u2.y - u1.y)
-  if (pixelDist <= 0) throw new Error('定标的两点不能重合')
+  // 两点太近时比例会被一次点击误差放大到没意义，直接拒绝（spec 约定 2px）。
+  if (pixelDist < 2) throw new Error('两点的图上距离太近（不到 2 像素），请重新点选')
   if (!Number.isFinite(lengthCm) || lengthCm <= 0) throw new Error('真实长度必须大于 0')
 
   const cmPerPx = lengthCm / pixelDist

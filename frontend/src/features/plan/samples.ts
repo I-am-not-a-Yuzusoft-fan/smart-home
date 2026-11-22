@@ -36,3 +36,40 @@ export async function sampleAsFile(sample: UnderlaySample): Promise<File> {
   const name = sample.path.split('/').pop() ?? 'sample.png'
   return new File([blob], name, { type: blob.type || 'image/png' })
 }
+
+/** 合成图自带的定标点：图上两个已知距离的像素位置 + 真实厘米数。 */
+export type SampleCalibration = { p1: { x: number; y: number }; p2: { x: number; y: number }; lengthCm: number }
+
+type IndexPlan = {
+  file: string
+  cm_per_px: number
+  calibration: { p1_px: [number, number]; p2_px: [number, number]; length_cm: number }
+}
+
+let calibrationCache: Promise<Map<string, SampleCalibration>> | null = null
+
+/**
+ * 读 `synthetic/index.json` 里每张合成图的标定数据。
+ *
+ * 这些图是脚本画的，标定点是「外轮廓两角 + 净宽」，所以下完图直接按它定标
+ * 得到的就是图纸真实比例——示例图因此能当回归基准用。
+ */
+export function syntheticCalibrations(): Promise<Map<string, SampleCalibration>> {
+  calibrationCache ??= (async () => {
+    const res = await fetch(`${SYNTHETIC_DIR}/index.json`)
+    if (!res.ok) throw new Error(`示例定标数据加载失败（${res.status}）`)
+    const body = (await res.json()) as { plans?: IndexPlan[] }
+    const map = new Map<string, SampleCalibration>()
+    for (const plan of body.plans ?? []) {
+      const c = plan.calibration
+      if (!c) continue
+      map.set(`${SYNTHETIC_DIR}/${plan.file}`, {
+        p1: { x: c.p1_px[0], y: c.p1_px[1] },
+        p2: { x: c.p2_px[0], y: c.p2_px[1] },
+        lengthCm: c.length_cm,
+      })
+    }
+    return map
+  })()
+  return calibrationCache
+}

@@ -264,7 +264,7 @@ func (s *Server) ClearUnderlay(w http.ResponseWriter, r *http.Request) {
 // 不写进契约：一个 200 响应带三种可能的 content type 会让 codegen 生成
 // 难用的 union，而这里只是一条"把字节倒出来"的路由。
 func (s *Server) ServeUnderlayImage(w http.ResponseWriter, r *http.Request) {
-	contentType, data, err := s.plan.LoadUnderlayImage(r.Context())
+	contentType, data, sha, err := s.plan.LoadUnderlayImage(r.Context())
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "读取底图失败", "err", err)
 		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取底图失败")
@@ -274,9 +274,16 @@ func (s *Server) ServeUnderlayImage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, gen.NOTFOUND, "还没有底图")
 		return
 	}
+	// ETag 用内容摘要：URL 上的 ?sha= 是缓存键，ETag 让「同一个 key 但内容不同」
+	// 也能在重取时被浏览器正确判新（换图后 sha 变，自然会重新下载）。
+	etag := `"` + sha + `"`
+	w.Header().Set("ETag", etag)
+	if match := r.Header.Get("If-None-Match"); match == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	w.Header().Set("Content-Type", contentType)
-	// 换图会换 URL 上的 sha；同一个 sha 可以放心让浏览器缓存。
-	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", "private, no-cache")
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(data); err != nil {
 		s.log.WarnContext(r.Context(), "写出底图失败", "err", err)

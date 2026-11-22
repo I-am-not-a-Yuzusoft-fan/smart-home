@@ -609,16 +609,16 @@ func (p *PGPlan) LoadUnderlay(ctx context.Context) (*PlanUnderlay, error) {
 	}, nil
 }
 
-// LoadUnderlayImage 单独取字节。
-func (p *PGPlan) LoadUnderlayImage(ctx context.Context) (string, []byte, error) {
+// LoadUnderlayImage 单独取字节；sha 一起带出来，响应头用它做 ETag。
+func (p *PGPlan) LoadUnderlayImage(ctx context.Context) (string, []byte, string, error) {
 	row, err := p.queries.GetUnderlayImage(ctx)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil, nil
+			return "", nil, "", nil
 		}
-		return "", nil, err
+		return "", nil, "", err
 	}
-	return row.ContentType, row.Bytes, nil
+	return row.ContentType, row.Bytes, row.Sha256, nil
 }
 
 // SaveUnderlay 整张替换；换图等于换定标，参数一并重置。
@@ -635,45 +635,50 @@ func (p *PGPlan) SaveUnderlay(ctx context.Context, in UnderlayUpload) error {
 	})
 }
 
-// UpdateUnderlayMeta 合并补丁后写回，返回新元数据。
+// UpdateUnderlayMeta 用一条 UPDATE 合并补丁，返回新元数据。
+//
+// 不做「读-改-写」：两个 PATCH（调透明度、调定标）同时到达时，后者会把前者读到的
+// 旧值写回去。COALESCE 让没传的字段保持库里原值，并发补丁各自只动自己那一列。
 func (p *PGPlan) UpdateUnderlayMeta(ctx context.Context, patch UnderlayMetaPatch) (*PlanUnderlay, error) {
-	current, err := p.LoadUnderlay(ctx)
+	arg := storegen.PatchUnderlayParams{}
+	if patch.CmPerPx != nil {
+		arg.CmPerPx = pgtype.Float8{Float64: *patch.CmPerPx, Valid: true}
+	}
+	if patch.OffsetXCm != nil {
+		arg.OffsetXCm = pgtype.Float8{Float64: *patch.OffsetXCm, Valid: true}
+	}
+	if patch.OffsetYCm != nil {
+		arg.OffsetYCm = pgtype.Float8{Float64: *patch.OffsetYCm, Valid: true}
+	}
+	if patch.RotationDeg != nil {
+		arg.RotationDeg = pgtype.Int4{Int32: int32(*patch.RotationDeg), Valid: true}
+	}
+	if patch.Opacity != nil {
+		arg.Opacity = pgtype.Float8{Float64: *patch.Opacity, Valid: true}
+	}
+	if patch.Visible != nil {
+		arg.Visible = pgtype.Bool{Bool: *patch.Visible, Valid: true}
+	}
+	row, err := p.queries.PatchUnderlay(ctx, arg)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrUnderlayMissing
+	}
 	if err != nil {
 		return nil, err
 	}
-	if current == nil {
-		return nil, ErrUnderlayMissing
-	}
-	next := *current
-	if patch.CmPerPx != nil {
-		next.CmPerPx = *patch.CmPerPx
-	}
-	if patch.OffsetXCm != nil {
-		next.OffsetXCm = *patch.OffsetXCm
-	}
-	if patch.OffsetYCm != nil {
-		next.OffsetYCm = *patch.OffsetYCm
-	}
-	if patch.RotationDeg != nil {
-		next.RotationDeg = *patch.RotationDeg
-	}
-	if patch.Opacity != nil {
-		next.Opacity = *patch.Opacity
-	}
-	if patch.Visible != nil {
-		next.Visible = *patch.Visible
-	}
-	if err := p.queries.UpdateUnderlayMeta(ctx, storegen.UpdateUnderlayMetaParams{
-		CmPerPx:     next.CmPerPx,
-		OffsetXCm:   next.OffsetXCm,
-		OffsetYCm:   next.OffsetYCm,
-		RotationDeg: int32(next.RotationDeg),
-		Opacity:     next.Opacity,
-		Visible:     next.Visible,
-	}); err != nil {
-		return nil, err
-	}
-	return p.LoadUnderlay(ctx)
+	return &PlanUnderlay{
+		ContentType: row.ContentType,
+		WidthPx:     int(row.WidthPx),
+		HeightPx:    int(row.HeightPx),
+		Sha256:      row.Sha256,
+		CmPerPx:     row.CmPerPx,
+		OffsetXCm:   row.OffsetXCm,
+		OffsetYCm:   row.OffsetYCm,
+		RotationDeg: int(row.RotationDeg),
+		Opacity:     row.Opacity,
+		Visible:     row.Visible,
+		UpdatedAt:   row.UpdatedAt.Time,
+	}, nil
 }
 
 // DeleteUnderlay 删掉唯一那一行。
