@@ -35,15 +35,7 @@ type planBody struct {
 		Hash string `json:"hash"`
 		Name string `json:"name"`
 	} `json:"staleRooms"`
-	Openings []struct {
-		ID     string  `json:"id"`
-		WallID string  `json:"wallId"`
-		Kind   string  `json:"kind"`
-		Offset float64 `json:"offset"`
-		Width  float64 `json:"width"`
-		Height float64 `json:"height"`
-		Sill   float64 `json:"sill"`
-	} `json:"openings"`
+	Openings []planOpening `json:"openings"`
 	OpenWalls int   `json:"openWalls"`
 	Version   int64 `json:"version"`
 	Walls     []struct {
@@ -64,6 +56,28 @@ func (p planBody) cornerAt(x, y float64) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+type planOpening struct {
+	ID     string  `json:"id"`
+	WallID string  `json:"wallId"`
+	Kind   string  `json:"kind"`
+	Offset float64 `json:"offset"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+	Sill   float64 `json:"sill"`
+}
+
+// openingsOnWall 只留某一面墙上的开口：seed 里也有门窗，
+// 按下标取会拿到别人的开口。
+func openingsOnWall(list []planOpening, wallID string) []planOpening {
+	var out []planOpening
+	for _, o := range list {
+		if o.WallID == wallID {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 func decodePlan(t *testing.T, body []byte) planBody {
@@ -463,12 +477,18 @@ func TestReplacePlanRestoresDeletedWallWithSameID(t *testing.T) {
 		t.Fatalf("删墙失败 %d", del.Code)
 	}
 
-	// 撤销：把整份列表写回，带原来的 id
+	// 撤销：把整份列表写回（现有墙 + 被删的那面），带原来的 id。
+	// 注意必须把现有墙一并写回：PUT 的语义是「缺了就删」，
+	// 只写目标墙会把库里其它墙（以及挂在墙上的物品）一起删掉。
 	current := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
-	restore := fmt.Sprintf(
-		`{"version":%d,"walls":[
-			{"id":%q,"ax":%v,"ay":%v,"bx":%v,"by":%v}
-		]}`, current.Version, target.id, target.ax, target.ay, target.bx, target.by)
+	var restoreWalls []string
+	for _, w := range current.Walls {
+		restoreWalls = append(restoreWalls, fmt.Sprintf(`{"id":%q,"ax":%v,"ay":%v,"bx":%v,"by":%v}`,
+			w.ID, w.AX, w.AY, w.BX, w.BY))
+	}
+	restoreWalls = append(restoreWalls, fmt.Sprintf(`{"id":%q,"ax":%v,"ay":%v,"bx":%v,"by":%v}`,
+		target.id, target.ax, target.ay, target.bx, target.by))
+	restore := fmt.Sprintf(`{"version":%d,"walls":[%s]}`, current.Version, strings.Join(restoreWalls, ","))
 	rec := do(t, h, http.MethodPut, "/api/plan", restore, cookie)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("撤销应 200，实际 %d：%s", rec.Code, rec.Body.String())
@@ -493,22 +513,29 @@ func TestReplacePlanDeletesWallsMissingFromList(t *testing.T) {
 	h := newTestServer(t)
 	cookie := sessionCookie(t, do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil))
 
+	hash, mine := rectPlan(t, h, cookie, 4000, 4000, 400)
+	defer cleanupRoom(t, testPool(t), h, cookie, hash, mine)
+
 	before := decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
-	var keep []string
+	// 只写回除「自己刚画的最后一面」之外的墙：那一面应该被删掉。
+	// 不能按列表尾部取，GET 返回的顺序不保证新墙在最后。
+	victim := mine[len(mine)-1]
+	var half []string
 	for _, w := range before.Walls {
-		keep = append(keep, fmt.Sprintf(`{"id":%q,"ax":%v,"ay":%v,"bx":%v,"by":%v}`,
+		if w.ID == victim {
+			continue
+		}
+		half = append(half, fmt.Sprintf(`{"id":%q,"ax":%v,"ay":%v,"bx":%v,"by":%v}`,
 			w.ID, w.AX, w.AY, w.BX, w.BY))
 	}
-	// 只写回前一半的墙：剩下的应该被删掉
-	half := keep[:len(keep)/2]
 	body := fmt.Sprintf(`{"version":%d,"walls":[%s]}`, before.Version, strings.Join(half, ","))
 	rec := do(t, h, http.MethodPut, "/api/plan", body, cookie)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("整份替换应 200，实际 %d：%s", rec.Code, rec.Body.String())
 	}
 	after := decodePlan(t, rec.Body.Bytes())
-	if len(after.Walls) != len(half) {
-		t.Fatalf("墙数应变成 %d，实际 %d", len(half), len(after.Walls))
+	if len(after.Walls) != len(before.Walls)-1 {
+		t.Fatalf("墙数应减少一面（%d → %d），实际 %d", len(before.Walls), len(before.Walls)-1, len(after.Walls))
 	}
 	// 还原，别影响其他用例共享的数据库
 	current := after.Version
@@ -744,11 +771,12 @@ func TestCreateOpeningClampsWhenWallShrinks(t *testing.T) {
 		t.Fatalf("开门应 201，实际 %d：%s", res.Code, res.Body.String())
 	}
 	plan := decodePlan(t, res.Body.Bytes())
-	if len(plan.Openings) != 1 || plan.Openings[0].Offset != 100 || plan.Openings[0].Kind != "door" {
-		t.Fatalf("开口没有按 100cm 偏移创建：%+v", plan.Openings)
+	mine := openingsOnWall(plan.Openings, wallID)
+	if len(mine) != 1 || mine[0].Offset != 100 || mine[0].Kind != "door" {
+		t.Fatalf("开口没有按 100cm 偏移创建：%+v", mine)
 	}
-	if plan.Openings[0].Height != 210 || plan.Openings[0].Sill != 0 {
-		t.Fatalf("门的默认高度/离地应为 210/0，实际 %.0f/%.0f", plan.Openings[0].Height, plan.Openings[0].Sill)
+	if mine[0].Height != 210 || mine[0].Sill != 0 {
+		t.Fatalf("门的默认高度/离地应为 210/0，实际 %.0f/%.0f", mine[0].Height, mine[0].Sill)
 	}
 
 	// 墙从 400 缩到 150：offset+width 超出，应被夹到 150-90=60。
@@ -758,8 +786,8 @@ func TestCreateOpeningClampsWhenWallShrinks(t *testing.T) {
 		t.Fatalf("改墙应 200，实际 %d：%s", res.Code, res.Body.String())
 	}
 	plan = decodePlan(t, res.Body.Bytes())
-	if len(plan.Openings) != 1 || plan.Openings[0].Offset != 60 {
-		t.Fatalf("墙缩短后开口应夹到 60cm，实际 %+v", plan.Openings)
+	if mine = openingsOnWall(plan.Openings, wallID); len(mine) != 1 || mine[0].Offset != 60 {
+		t.Fatalf("墙缩短后开口应夹到 60cm，实际 %+v", mine)
 	}
 
 	// 再拉回 400：夹紧是不可逆的（开口不会自己漂回去）。
@@ -769,8 +797,8 @@ func TestCreateOpeningClampsWhenWallShrinks(t *testing.T) {
 		t.Fatalf("改墙应 200，实际 %d：%s", res.Code, res.Body.String())
 	}
 	plan = decodePlan(t, res.Body.Bytes())
-	if len(plan.Openings) != 1 || plan.Openings[0].Offset != 60 {
-		t.Fatalf("墙拉长后开口偏移应保持 60cm，实际 %+v", plan.Openings)
+	if mine = openingsOnWall(plan.Openings, wallID); len(mine) != 1 || mine[0].Offset != 60 {
+		t.Fatalf("墙拉长后开口偏移应保持 60cm，实际 %+v", mine)
 	}
 
 	// 删墙 → 开口随之消失。
@@ -779,8 +807,8 @@ func TestCreateOpeningClampsWhenWallShrinks(t *testing.T) {
 		t.Fatalf("删墙应 204，实际 %d：%s", res.Code, res.Body.String())
 	}
 	plan = decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
-	if len(plan.Openings) != 0 {
-		t.Fatalf("删墙后开口应一并消失，实际 %+v", plan.Openings)
+	if left := openingsOnWall(plan.Openings, wallID); len(left) != 0 {
+		t.Fatalf("删墙后开口应一并消失，实际 %+v", left)
 	}
 }
 
@@ -810,7 +838,11 @@ func TestOpeningValidationAndDefaults(t *testing.T) {
 		t.Fatalf("开窗应 201，实际 %d：%s", res.Code, res.Body.String())
 	}
 	plan := decodePlan(t, res.Body.Bytes())
-	opening := plan.Openings[0]
+	mine := openingsOnWall(plan.Openings, wallID)
+	if len(mine) != 1 {
+		t.Fatalf("这面墙上应只有 1 个开口，实际 %+v", mine)
+	}
+	opening := mine[0]
 	if opening.Height != 120 || opening.Sill != 90 {
 		t.Fatalf("窗的默认高度/离地应为 120/90，实际 %.0f/%.0f", opening.Height, opening.Sill)
 	}
@@ -825,8 +857,9 @@ func TestOpeningValidationAndDefaults(t *testing.T) {
 		t.Fatalf("改偏移应 200，实际 %d：%s", res.Code, res.Body.String())
 	}
 	plan = decodePlan(t, res.Body.Bytes())
-	if plan.Openings[0].Offset != 120 || plan.Openings[0].Sill != 100 || plan.Openings[0].Height != 120 {
-		t.Fatalf("逐字段 PATCH 结果不对：%+v", plan.Openings[0])
+	mine = openingsOnWall(plan.Openings, wallID)
+	if len(mine) != 1 || mine[0].Offset != 120 || mine[0].Sill != 100 || mine[0].Height != 120 {
+		t.Fatalf("逐字段 PATCH 结果不对：%+v", mine)
 	}
 	// 删两次都 204
 	for i := 0; i < 2; i++ {

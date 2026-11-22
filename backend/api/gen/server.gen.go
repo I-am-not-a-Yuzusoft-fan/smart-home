@@ -561,6 +561,7 @@ type ItemInput struct {
 
 	// WallId 挂墙物品给出所在墙的 id。给了墙就以 `wallOffset` 定位，
 	// `x` / `y` / `rotation` 由服务端按墙算出来，传了也会被覆盖。
+	// 类型 `mount` 为 `wall` 的物品必填，否则 400。
 	WallId *openapi_types.UUID `json:"wallId,omitempty"`
 
 	// WallOffset 挂墙时必填：距墙 A 端点的偏移（厘米）
@@ -661,7 +662,8 @@ type ItemUpdate struct {
 	Rotation *float64                `json:"rotation,omitempty"`
 	Status   *ItemUpdateStatus       `json:"status,omitempty"`
 
-	// WallId 改成挂墙物品；空字符串表示脱离墙面、回到自由摆放
+	// WallId 改成挂墙物品；空字符串表示脱离墙面、回到自由摆放。
+	// `mount` 为 `wall` 的类型不接受空字符串（400）。
 	WallId *string `json:"wallId,omitempty"`
 
 	// WallOffset 与 wallId 一起给出；脱离墙面时忽略

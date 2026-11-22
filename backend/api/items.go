@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"strings"
@@ -90,6 +91,13 @@ func (s *Server) CreateItem(w http.ResponseWriter, r *http.Request) {
 	}
 	if typ.Kind == "device" && body.Status != nil {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, deviceStatusMessage)
+		return
+	}
+	// 挂墙类型（窗帘、壁挂空调）没有墙就没有位置：服务端兜底，
+	// 不依赖前端一定把落点吸到墙上——换个客户端或旧版页面也不会造出悬空物品。
+	if typ.Mount == "wall" && body.WallId == nil {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED,
+			fmt.Sprintf("「%s」只能挂在墙上：请把落点放到某面墙边", typ.Name))
 		return
 	}
 	// 挂墙物品：位置与朝向由墙决定，x/y/rotation 只是派生值。
@@ -262,6 +270,12 @@ func (s *Server) UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_t
 	}
 	switch {
 	case detach:
+		// 挂墙类型不能脱离墙面：窗帘飘在房间中间没有意义。
+		if typ, err := s.itemTypes.GetItemType(r.Context(), existing.TypeKey); err == nil && typ.Mount == "wall" {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED,
+				fmt.Sprintf("「%s」不能脱离墙面：请把它挪到另一面墙上", typ.Name))
+			return
+		}
 		// 空串 = 脱离墙面，回到自由摆放；位置保持当前值。
 		update.WallSet = true
 		update.WallID = nil
