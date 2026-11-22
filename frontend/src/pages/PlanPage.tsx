@@ -501,15 +501,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     const p = toWorld(raw)
     if (editing) {
       const anchor = editing.end === 'a' ? { x: editing.bx, y: editing.by } : { x: editing.ax, y: editing.ay }
-      // 拖动端点和画新墙不一样：画墙时正交是默认，拖端点时用户多半是想改角度。
-      // 所以默认自由旋转，只在线段接近水平/垂直时轻轻吸一下；按住 Shift 才强制正交。
-      const strict = e.evt.shiftKey
+      // 拖动端点默认自由旋转，只在线段接近水平/垂直时轻轻吸一下（8px）。
+      // `Shift` 在画墙和拖端点里都表示「不要吸附」——同一个修饰键必须是一个意思，
+      // 否则用户按 Shift 想画斜的，却被锁成正交。
+      const free = e.evt.shiftKey
       let sn = snap(p.x, p.y, {
-        anchor: strict ? anchor : undefined,
-        orthogonal: strict,
         ignoreWallId: editing.wallId,
       })
-      if (!strict) {
+      if (!free) {
         const tol = 8 / viewport.scale
         if (Math.abs(sn.y - anchor.y) <= tol) {
           sn = { ...sn, y: anchor.y }
@@ -1114,6 +1113,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 labelSize={labelSize}
                 centerX={center.x}
                 centerY={center.y}
+                onPick={setSelectedId}
+                onHover={setHoverId}
               />
             ))}
             {handles.map((h, i) => (
@@ -1224,9 +1225,25 @@ function WallLine({ wall, selected, hovered, scale }: WallShapeProps) {
   )
 }
 
-type WallLabelProps = WallShapeProps & { labelSize: number; centerX: number; centerY: number }
+type WallLabelProps = WallShapeProps & {
+  labelSize: number
+  centerX: number
+  centerY: number
+  onPick: (id: string) => void
+  onHover: (id: string | null) => void
+}
 
-function WallLabel({ wall, selected, hovered, scale, labelSize, centerX, centerY }: WallLabelProps) {
+function WallLabel({
+  wall,
+  selected,
+  hovered,
+  scale,
+  labelSize,
+  centerX,
+  centerY,
+  onPick,
+  onHover,
+}: WallLabelProps) {
   const midX = (wall.ax + wall.bx) / 2
   const midY = (wall.ay + wall.by) / 2
   const dx = wall.bx - wall.ax
@@ -1256,6 +1273,14 @@ function WallLabel({ wall, selected, hovered, scale, labelSize, centerX, centerY
       fillAfterStrokeEnabled
       offsetX={-4 / scale}
       offsetY={labelSize / 2}
+      // 标签离墙 17–52 px，超出几何命中区，只能自己接事件；
+      // cancelBubble 阻止冒泡到 Stage，否则 Stage 的 onMouseDown 会立刻把选中清掉。
+      onMouseDown={(e) => {
+        e.cancelBubble = true
+        onPick(wall.id)
+      }}
+      onMouseEnter={() => onHover(wall.id)}
+      onMouseLeave={() => onHover(null)}
     />
   )
 }
