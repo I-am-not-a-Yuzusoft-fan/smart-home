@@ -376,6 +376,33 @@ func TestWallMountedItemFollowsWall(t *testing.T) {
 	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/items/"+created.ID, "", admin) })
 }
 
+// 早期数据里可能有「类型要挂墙、wall_id 却是空」的窗帘（守卫上线前建的，或墙被删过）。
+// 旧客户端会直接给它 PATCH x/y，服务端必须拒绝，否则一次拖动就能把窗帘停在房间中间。
+func TestLegacyWallMountedItemCannotMoveOnFloor(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	pool := testPool(t)
+	_, walls := rectPlan(t, h, admin, 4000, 4000, 400)
+	defer cleanupRoom(t, pool, h, admin, "", walls)
+
+	created := createItem(t, h, admin, fmt.Sprintf(
+		`{"typeKey":"curtain","name":"旧窗帘","roomHash":null,"x":0,"y":0,"wallId":%q,"wallOffset":100}`, walls[0]))
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/items/"+created.ID, "", admin) })
+
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE item SET wall_id = NULL, wall_offset = NULL WHERE id = $1`, created.ID); err != nil {
+		t.Fatalf("清空 wall_id 失败：%v", err)
+	}
+
+	res := do(t, h, http.MethodPatch, "/api/items/"+created.ID, `{"x":4200,"y":4000}`, admin)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("旧数据窗帘改坐标应 400，实际 %d：%s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "要挂在墙上") {
+		t.Fatalf("文案应说明要挂墙：%s", res.Body.String())
+	}
+}
+
 // 挂墙类型没有墙就没有位置：服务端必须兜底，不能只靠前端把落点吸到墙上。
 func TestCreateWallMountedTypeNeedsWall(t *testing.T) {
 	h := newTestServer(t)

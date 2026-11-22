@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
-import { Circle, Group, Layer, Line, Rect, Stage, Text } from 'react-konva'
+import { Circle, Group, Layer, Line, Path, Rect, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
 import {
   ApiError,
@@ -440,6 +440,11 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   /** 平面图的几何中心，用来判断墙的哪一侧算"外侧"。 */
   /** 两级标注的第一级：共线且相接的墙合成一条链，出总长。 */
   const runs = useMemo(() => collinearRuns(plan.walls), [plan.walls])
+  /** 只有一面墙的链：它已经开始画外侧尺寸线，墙上的分段标签就重复了，让位。 */
+  const singleRunWallIds = useMemo(
+    () => new Set(runs.filter((run) => run.wallIds.length === 1).flatMap((run) => run.wallIds)),
+    [runs],
+  )
 
   const center = (() => {
     if (plan.corners.length === 0) return { x: 0, y: 0 }
@@ -934,7 +939,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     const y = Math.round(node.y())
     // 挂墙物品不报坐标：只报「挂到哪面墙、离起点多远」，位置与朝向交给后端按墙算。
     // 松手在房间中央（离任何墙都超过 40px）就退回原位——窗帘不能浮在空中。
-    if (item.wallId) {
+    // 判据用类型的 mount，而不是 item.wallId：旧数据里可能有一件「类型要挂墙、
+    // 但 wall_id 是空」的窗帘，按 wallId 判断会把它当成自由物品放到地上。
+    const mustBeOnWall = Boolean(item.wallId) || typeByKey.get(item.typeKey)?.mount === 'wall'
+    if (mustBeOnWall) {
       const anchor = nearestWallAnchor(planRef.current.walls, x, y, 40 / viewport.scale)
       if (!anchor) {
         node.position({ x: item.x, y: item.y })
@@ -1459,13 +1467,23 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           </Layer>
 
           {showDims ? (
-            <Layer listening={false}>
-              {runs.filter((run) => run.wallIds.length > 1).map((run) => (
+            <Layer>
+              {runs.map((run) => (
                 <RunDimension
                   key={`dim-${run.wallIds.join('-')}`}
                   run={run}
                   center={center}
                   scale={viewport.scale}
+                  thickness={Math.max(...run.wallIds.map((id) => wallsById.get(id)?.thickness ?? 10))}
+                  onPick={
+                    run.wallIds.length === 1
+                      ? () => {
+                          setSelectedId(run.wallIds[0])
+                          setSelectedItemId(null)
+                          setSelectedRoomHash(null)
+                        }
+                      : undefined
+                  }
                 />
               ))}
             </Layer>
@@ -1481,7 +1499,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 scale={viewport.scale}
               />
             ))}
-            {renderWalls.map((w) => (
+            {renderWalls
+              .filter((w) => !showDims || !singleRunWallIds.has(w.id))
+              .map((w) => (
               <WallLabel
                 key={`label-${w.id}`}
                 wall={w}
@@ -1560,6 +1580,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                   opening={opening}
                   wall={wall}
                   scale={viewport.scale}
+                  swing={swingSide(opening, wall, (x, y) => roomAt(x, y) !== null)}
                   onPick={() => {
                     setSelectedId(wall.id)
                     setSelectedItemId(null)
@@ -1682,28 +1703,46 @@ function WallLabel({
   const dy = wall.by - wall.ay
   const len = Math.hypot(dx, dy) || 1
   // 标签放到墙体朝外的一侧，避免压在房间填充上、也避免被画布边缘裁掉。
-  // 竖向墙的标签是横排的，要让开半个字宽，否则字会压在墙上。
+  //
+  // 间距不是拍出来的：文字框紧贴墙面 6px，再沿法线让开自己在法线方向上的半个尺寸——
+  // 横墙的法线是竖直的，让开半高；竖墙的法线是水平的，而数字是横排的，得让开半个字宽。
+  // 所以两种朝向看起来一样「贴」，只是让开的量不同。
   const vertical = Math.abs(dy) > Math.abs(dx)
-  const off = (vertical ? 52 : 17) / scale
-  let nx = (-dy / len) * off
-  let ny = (dx / len) * off
+  const text = formatCm(len)
+  // 外法线的单位向量，从户型中心指向墙外侧
+  let nx = -dy / len
+  let ny = dx / len
   if ((midX - centerX) * nx + (midY - centerY) * ny < 0) {
     nx = -nx
     ny = -ny
   }
   const tint = selected ? '#4f6bed' : hovered ? '#3f3f57' : '#5a5a70'
+  // 文字宽度得等 Konva 排完版才量得准：先用 0 占位（只差半帧），
+  // 量到真实宽度后再把标签推到「墙的外表面 + 6px」的位置。
+  // 从外表面而不是墙中线量：墙厚随缩放一起变粗，按中线算放大后数字会被墙盖住。
+  const labelRef = useRef<Konva.Text | null>(null)
+  useLayoutEffect(() => {
+    const node = labelRef.current
+    if (!node) return
+    const w = node.getTextWidth()
+    // 法线方向上的半尺寸：竖墙的法线是水平的，避开半个字宽；横墙避开半个字高
+    const halfExtent = vertical ? w / 2 : node.fontSize() / 2
+    const dist = (wall.thickness ?? 10) / 2 + halfExtent + 6 / scale
+    node.position({ x: midX + nx * dist, y: midY + ny * dist })
+    node.offsetX(w / 2)
+  })
   return (
     <Text
-      x={midX + nx}
-      y={midY + ny}
-      text={formatCm(len)}
+      ref={labelRef}
+      x={midX}
+      y={midY}
+      text={text}
       fontSize={labelSize}
       fill={tint}
       // 描一圈背景色，标签压在墙上时也能读清
       stroke="#fafafd"
       strokeWidth={3 / scale}
       fillAfterStrokeEnabled
-      offsetX={-4 / scale}
       offsetY={labelSize / 2}
       // 标签离墙 17–52 px，超出几何命中区，只能自己接事件；
       // cancelBubble 阻止冒泡到 Stage，否则 Stage 的 onMouseDown 会立刻把选中清掉。
@@ -1785,10 +1824,16 @@ function RunDimension({
   run,
   center,
   scale,
+  thickness,
+  onPick,
 }: {
   run: { a: { x: number; y: number }; b: { x: number; y: number }; total: number; horizontal: boolean }
   center: { x: number; y: number }
   scale: number
+  /** 这条链上最厚的一面墙：尺寸线要从墙的外表面往外量，否则放大后会被墙压住 */
+  thickness: number
+  /** 只有一面墙的链：数字就是这面墙的长度，把它做成点选墙的入口。 */
+  onPick?: () => void
 }) {
   const midX = (run.a.x + run.b.x) / 2
   const midY = (run.a.y + run.b.y) / 2
@@ -1799,8 +1844,10 @@ function RunDimension({
     : midX < center.x
       ? -1
       : 1
-  // 分段标签贴着墙（17 / 52 px），一级标注必须再往外一档，否则两个数字叠在一起
-  const offset = run.horizontal ? 52 / scale : 76 / scale
+  // 分段标签贴着墙（17 / 52 px），一级标注必须再往外一档，否则两个数字叠在一起。
+  // 单墙链没有内圈的分段数字，就贴着墙标——否则一面 4 米的墙会白留出两道空隙。
+  const offset =
+    thickness / 2 + (onPick ? (run.horizontal ? 17 : 52) : run.horizontal ? 52 : 76) / scale
 
   const x1 = run.a.x + (run.horizontal ? 0 : outward * offset)
   const y1 = run.a.y + (run.horizontal ? outward * offset : 0)
@@ -1808,38 +1855,95 @@ function RunDimension({
   const y2 = run.b.y + (run.horizontal ? outward * offset : 0)
 
   const text = run.total >= 100 ? `${(run.total / 100).toFixed(2)} m` : `${Math.round(run.total)} cm`
+  const fontPx = 11 / scale
+  const lineMidX = (x1 + x2) / 2
+  const lineMidY = (y1 + y2) / 2
+
+  // 尺寸数字的位置和朝向按《房屋建筑制图统一标准》GB/T 50001—2017 §11.2 来：
+  //  - 水平尺寸线：数字在尺寸线的**上方中部**，字头朝上、横排；
+  //  - 竖直尺寸线：数字在尺寸线的**左侧中部**，字头朝左、由下往上读，所以要逆时针转 90°。
+  // 宽度得等 Konva 排完版才量得准，先在 layout effect 里量再定位。
+  const textRef = useRef<Konva.Text | null>(null)
+  useLayoutEffect(() => {
+    const node = textRef.current
+    if (!node) return
+    const w = node.getTextWidth()
+    const h = node.fontSize()
+    if (run.horizontal) {
+      node.offsetX(w / 2)
+      node.offsetY(h)
+      node.position({ x: lineMidX, y: lineMidY - 4 / scale })
+    } else {
+      node.offsetX(w / 2)
+      node.offsetY(h / 2)
+      node.position({ x: lineMidX - 5 / scale - h / 2, y: lineMidY })
+    }
+  })
+
+  // 尺寸界线：从墙外表面留 4px 起，拉到尺寸线外 4px——图纸上不能只有一根孤零零的尺寸线。
+  const face = thickness / 2 + 4 / scale
+  const tail = 4 / scale
+  const witness = run.horizontal
+    ? [
+        [run.a.x, run.a.y + outward * face, run.a.x, y1 + outward * tail],
+        [run.b.x, run.b.y + outward * face, run.b.x, y2 + outward * tail],
+      ]
+    : [
+        [run.a.x + outward * face, run.a.y, x1 + outward * tail, run.a.y],
+        [run.b.x + outward * face, run.b.y, x2 + outward * tail, run.b.y],
+      ]
 
   return (
     <>
+      {witness.map((points, i) => (
+        <Line
+          key={`witness-${i}`}
+          points={points}
+          stroke="rgba(90, 100, 120, 0.45)"
+          strokeWidth={1 / scale}
+          listening={false}
+        />
+      ))}
       <Line
         points={[x1, y1, x2, y2]}
         stroke="rgba(90, 100, 120, 0.55)"
         strokeWidth={1 / scale}
         dash={[6 / scale, 4 / scale]}
       />
-      {/* 两端的短竖线，读起来才像尺寸线而不是一根多余的墙 */}
-      {run.horizontal ? (
-        <>
-          <Line points={[x1, y1 - 4 / scale, x1, y1 + 4 / scale]} stroke="rgba(90, 100, 120, 0.55)" strokeWidth={1 / scale} />
-          <Line points={[x2, y2 - 4 / scale, x2, y2 + 4 / scale]} stroke="rgba(90, 100, 120, 0.55)" strokeWidth={1 / scale} />
-        </>
-      ) : (
-        <>
-          <Line points={[x1 - 4 / scale, y1, x1 + 4 / scale, y1]} stroke="rgba(90, 100, 120, 0.55)" strokeWidth={1 / scale} />
-          <Line points={[x2 - 4 / scale, y2, x2 + 4 / scale, y2]} stroke="rgba(90, 100, 120, 0.55)" strokeWidth={1 / scale} />
-        </>
-      )}
+      {/* 起止符号：45° 中粗斜短线（GB/T 50001—2017 §11.3），比垂直小钩更像建筑图纸 */}
+      {[
+        [x1, y1],
+        [x2, y2],
+      ].map(([x, y], i) => (
+        <Line
+          key={`tick-${i}`}
+          points={[x - 3 / scale, y + 3 / scale, x + 3 / scale, y - 3 / scale]}
+          stroke="rgba(90, 100, 120, 0.8)"
+          strokeWidth={2 / scale}
+          listening={false}
+        />
+      ))}
       <Text
-        x={(x1 + x2) / 2}
-        y={(y1 + y2) / 2}
+        ref={textRef}
+        x={lineMidX}
+        y={lineMidY}
+        rotation={run.horizontal ? 0 : -90}
         text={text}
-        fontSize={11 / scale}
-        offsetX={(text.length * 3.2) / scale}
-        offsetY={-14 / scale}
+        fontSize={fontPx}
         fill="#5a6478"
         stroke="#fafafd"
         strokeWidth={3 / scale}
         fillAfterStrokeEnabled
+        listening={Boolean(onPick)}
+        onMouseDown={
+          onPick
+            ? (e) => {
+                // 数字在墙外 17–52 px，超出几何命中区，得自己接事件
+                e.cancelBubble = true
+                onPick()
+              }
+            : undefined
+        }
       />
     </>
   )
@@ -1856,15 +1960,35 @@ function RunDimension({
  * 门/窗：画成盖在墙线上的白色块。开着窗就是「洞」，关着窗是玻璃——
  * 这里只表达几何，不表达开关状态（那是 capability）。
  */
+/** 门往哪边开：优先开向房间里侧（探测点落在某个房间内），两侧都不是房间就默认 +y。 */
+function swingSide(
+  opening: Opening,
+  wall: Wall,
+  inside: (x: number, y: number) => boolean,
+): 1 | -1 {
+  const length = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay) || 1
+  const ux = (wall.bx - wall.ax) / length
+  const uy = (wall.by - wall.ay) / length
+  const midX = wall.ax + ux * (opening.offset + opening.width / 2)
+  const midY = wall.ay + uy * (opening.offset + opening.width / 2)
+  const probe = (wall.thickness || 10) / 2 + 25
+  // 门的局部 +y 在世界坐标里是墙法线 n = (-uy, ux)
+  if (inside(midX - uy * probe, midY + ux * probe)) return 1
+  if (inside(midX + uy * probe, midY - ux * probe)) return -1
+  return 1
+}
+
 function OpeningShape({
   opening,
   wall,
   scale,
+  swing,
   onPick,
 }: {
   opening: Opening
   wall: Wall
   scale: number
+  swing: 1 | -1
   onPick: () => void
 }) {
   const length = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay)
@@ -1904,13 +2028,25 @@ function OpeningShape({
           listening={false}
         />
       ) : (
-        <Line
-          points={[0, -thickness / 2, opening.width, -thickness / 2]}
-          stroke="#8a8a9e"
-          strokeWidth={1 / scale}
-          dash={[4 / scale, 3 / scale]}
-          listening={false}
-        />
+        <>
+          {/* 门扇：从合页（门洞起点）沿墙法线立起来，90° 全开。
+              门弧以合页为圆心、门宽为半径，从门洞另一侧扫到门扇端头——和制图规范一致。 */}
+          <Line
+            points={[0, 0, 0, swing * opening.width]}
+            stroke="#475569"
+            strokeWidth={2 / scale}
+            lineCap="round"
+            listening={false}
+          />
+          <Path
+            data={`M ${opening.width} 0 A ${opening.width} ${opening.width} 0 0 ${
+              swing > 0 ? 1 : 0
+            } 0 ${swing * opening.width}`}
+            stroke="#94a3b8"
+            strokeWidth={1 / scale}
+            listening={false}
+          />
+        </>
       )}
     </Group>
   )
@@ -1933,6 +2069,13 @@ function ItemShape({
 }) {
   const width = type?.defaultWidth ?? 60
   const depth = type?.defaultDepth ?? 60
+  // 标签是 Group 的兄弟节点（文字不能跟着物品转，否则 180° 的窗帘会倒过来），
+  // 所以拖动时它不会自己走：用同一个 Konva 节点的位置手推一下。
+  const labelRef = useRef<Konva.Text | null>(null)
+  function syncLabel(node: Konva.Node) {
+    const p = node.position()
+    labelRef.current?.position({ x: p.x - width / 2, y: p.y - 7 / scale })
+  }
   return (
     <>
       <Group
@@ -1955,7 +2098,12 @@ function ItemShape({
           onSelect()
         }}
         onDragStart={onSelect}
-        onDragEnd={onDragEnd}
+        onDragMove={(e) => syncLabel(e.target)}
+        onDragEnd={(e) => {
+          onDragEnd(e)
+          // 被拒绝的挂墙物品会在这里把节点挪回原位，标签也要跟着回。
+          syncLabel(e.target)
+        }}
       >
         <Rect
           width={width}
@@ -1968,6 +2116,7 @@ function ItemShape({
       </Group>
       {selected || width >= 40 ? (
         <Text
+          ref={labelRef}
           x={item.x - width / 2}
           y={item.y - 7 / scale}
           width={width}
