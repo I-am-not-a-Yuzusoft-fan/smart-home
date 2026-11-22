@@ -15,6 +15,10 @@ import {
   type Wall,
 } from '../api/client.ts'
 import TypeManager from '../components/TypeManager.tsx'
+import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from '../features/plan/edit.ts'
+import { distanceToSegment, type Seg } from '../features/plan/geometry.ts'
+import { DEFAULT_RULES, snap as snapTo, type Guide as SnapGuide, type SnapRule } from '../features/plan/snap.ts'
+import { collinearRuns } from '../features/plan/dimensions.ts'
 
 type Props = {
   user: SessionUser
@@ -34,6 +38,29 @@ const ZOOM_MAX = 4
 
 type Viewport = { scale: number; x: number; y: number }
 
+/** 墙属性面板的草稿值；一律用字符串，避免"输入 4." 时被数字回写打断。 */
+type WallForm = {
+  length: string
+  angle: string
+  thickness: string
+  ax: string
+  ay: string
+  bx: string
+  by: string
+}
+
+function newWallForm(w: Wall): WallForm {
+  return {
+    length: (wallLength(w) / 100).toFixed(2),
+    angle: wallAngle(w).toFixed(1),
+    thickness: String(tidy(w.thickness)),
+    ax: String(tidy(w.ax)),
+    ay: String(tidy(w.ay)),
+    bx: String(tidy(w.bx)),
+    by: String(tidy(w.by)),
+  }
+}
+
 type Draft = {
   /** 起点（世界坐标，已吸附） */
   ax: number
@@ -45,10 +72,7 @@ type Draft = {
 
 type Edit = { wallId: string; end: 'a' | 'b'; ax: number; ay: number; bx: number; by: number }
 
-type Guide =
-  | { kind: 'none' }
-  | { kind: 'point'; x: number; y: number }
-  | { kind: 'segment'; wall: Wall }
+type Guide = SnapGuide<Wall>
 
 type SnapResult = { x: number; y: number; guide: Guide }
 
@@ -76,11 +100,19 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [guide, setGuide] = useState<Guide>({ kind: 'none' })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showTypes, setShowTypes] = useState(false)
+  const [showDims, setShowDims] = useState(true)
   // 正在拖的端点：整段坐标都存下来，渲染预览时直接用，不必回头找 wall。
   const [editing, setEditing] = useState<Edit | null>(null)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [viewport, setViewport] = useState<Viewport>({ scale: 1, x: 0, y: 0 })
   const [spaceDown, setSpaceDown] = useState(false)
+  // 网格吸附默认关：户型以真实尺寸为准，网格是辅助对齐，不该在你没要求时替你改数字。
+  const [gridSnap, setGridSnap] = useState(false)
+  const [wallForm, setWallForm] = useState<WallForm | null>(null)
+  const [workSeg, setWorkSeg] = useState<Seg | null>(null)
+  const lengthRef = useRef<HTMLInputElement>(null)
+  // 刚画完一面墙时把焦点放到长度输入上，这样"画完就能输数字"不用先点一下。
+  const focusLengthRef = useRef(false)
   // 只接受"最后一次请求"的响应：连拖两面墙时，先发的请求可能后到，
   // 若整份覆盖就会把后画的墙抹掉（刷新才回来，用户以为丢了）。
   const writeSeq = useRef(0)
@@ -145,7 +177,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       maxX = Math.max(maxX, c.x)
       maxY = Math.max(maxY, c.y)
     }
-    const pad = 60
+    // 四级标注画在户型外侧，全览必须留出这一圈，否则尺寸线被裁在视口外
+    const pad = 96
     const bw = Math.max(maxX - minX, 1)
     const bh = Math.max(maxY - minY, 1)
     const scale = clamp(Math.min((size.width - pad * 2) / bw, (size.height - pad * 2) / bh), ZOOM_MIN, ZOOM_MAX)
@@ -215,6 +248,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }
 
   /** 平面图的几何中心，用来判断墙的哪一侧算"外侧"。 */
+  /** 两级标注的第一级：共线且相接的墙合成一条链，出总长。 */
+  const runs = useMemo(() => collinearRuns(plan.walls), [plan.walls])
+
   const center = (() => {
     if (plan.corners.length === 0) return { x: 0, y: 0 }
     let sx = 0
@@ -286,67 +322,38 @@ export default function PlanPage({ user, onSignedOut }: Props) {
    * 斜点，正交就"消失"了。正确的是求「过锚点的水平/竖直线」与目标墙的交点，
    * 既落在墙上、又保持 0°/90°。交点够不着（平行或落在段外）才退回自由拉。
    */
+  const snapRules = useMemo<SnapRule[]>(
+    () => DEFAULT_RULES.map((rule) => (rule.kind === 'grid' ? { ...rule, enabled: gridSnap } : rule)),
+    [gridSnap],
+  )
+
+  /**
+   * 吸附落点。规则本体在 `features/plan/snap.ts`：纯函数、可单测。
+   * 这里只把当前的端点、墙与缩放喂进去，并把「没命中」时补一次 1 厘米取整。
+   */
   function snap(
     x: number,
     y: number,
     opts: { anchor?: { x: number; y: number }; orthogonal?: boolean; ignoreWallId?: string } = {},
   ): SnapResult {
-    const radius = SNAP_PX / viewport.scale
-    let best: { x: number; y: number } | null = null
-    let bestDist = radius
-    for (const c of liveCorners) {
-      const d = Math.hypot(c.x - x, c.y - y)
-      if (d <= bestDist) {
-        bestDist = d
-        best = { x: c.x, y: c.y }
-      }
+    const out = snapTo<Wall>({
+      x,
+      y,
+      scale: viewport.scale,
+      corners: liveCorners,
+      walls: plan.walls,
+      anchor: opts.anchor ?? null,
+      orthogonal: opts.orthogonal ?? false,
+      gridCm: GRID_CM,
+      rules: snapRules,
+      ignoreWallId: opts.ignoreWallId,
+    })
+    const round = out.kind === 'none'
+    return {
+      x: round ? Math.round(out.x) : out.x,
+      y: round ? Math.round(out.y) : out.y,
+      guide: out.guide,
     }
-    if (best) return { x: best.x, y: best.y, guide: { kind: 'point', x: best.x, y: best.y } }
-
-    const anchor = opts.anchor
-    const axis: 'h' | 'v' | null =
-      anchor && opts.orthogonal
-        ? Math.abs(x - anchor.x) >= Math.abs(y - anchor.y)
-          ? 'h'
-          : 'v'
-        : null
-
-    let hitWall: Wall | null = null
-    let hitX = 0
-    let hitY = 0
-    let wallDist = radius
-    for (const w of plan.walls) {
-      if (w.id === opts.ignoreWallId) continue
-      if (axis && anchor) {
-        const cross = axisCross(anchor, axis, w)
-        if (!cross) continue
-        const d = axis === 'h' ? Math.abs(cross.x - x) : Math.abs(cross.y - y)
-        if (d < wallDist) {
-          wallDist = d
-          hitWall = w
-          hitX = cross.x
-          hitY = cross.y
-        }
-        continue
-      }
-      const foot = projectOnSegment(x, y, w)
-      if (!foot) continue
-      const d = Math.hypot(foot.x - x, foot.y - y)
-      if (d < wallDist) {
-        wallDist = d
-        hitWall = w
-        hitX = foot.x
-        hitY = foot.y
-      }
-    }
-    if (hitWall) {
-      return { x: hitX, y: hitY, guide: { kind: 'segment', wall: hitWall } }
-    }
-
-    if (anchor && axis === 'h') return { x: Math.round(x), y: anchor.y, guide: { kind: 'none' } }
-    if (anchor && axis === 'v') return { x: anchor.x, y: Math.round(y), guide: { kind: 'none' } }
-
-    return { x: Math.round(x), y: Math.round(y), guide: { kind: 'none' } }
   }
 
   function onMouseDown(e: Konva.KonvaEventObject<MouseEvent>) {
@@ -502,10 +509,16 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     const seq = ++writeSeq.current
     setSaving(true)
     try {
+      const before = new Set(plan.walls.map((w) => w.id))
       const next = await createWall({ ax: d.ax, ay: d.ay, bx: d.bx, by: d.by })
       if (seq === writeSeq.current) {
         setPlan(next)
         setError(null)
+        const created = next.walls.find((w) => !before.has(w.id))
+        if (created) {
+          focusLengthRef.current = true
+          setSelectedId(created.id)
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存失败')
@@ -526,6 +539,77 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** 改一个字段：先更新草稿字符串，再用纯函数换算，最后回填没在编辑的派生字段。 */
+  function updateWallField(field: keyof WallForm, raw: string) {
+    setWallForm((f) => (f ? { ...f, [field]: raw } : f))
+    const n = Number.parseFloat(raw)
+    if (!Number.isFinite(n) || !workSeg) return
+
+    let next = workSeg
+    if (field === 'length') next = withLength(workSeg, n * 100)
+    else if (field === 'angle') next = withAngle(workSeg, n)
+    else if (field === 'ax') next = withEndpoint(workSeg, 'a', n, workSeg.ay)
+    else if (field === 'ay') next = withEndpoint(workSeg, 'a', workSeg.ax, n)
+    else if (field === 'bx') next = withEndpoint(workSeg, 'b', n, workSeg.by)
+    else if (field === 'by') next = withEndpoint(workSeg, 'b', workSeg.bx, n)
+
+    setWorkSeg(next)
+    const movedPoint = field === 'ax' || field === 'ay' || field === 'bx' || field === 'by'
+    setWallForm((f) =>
+      f
+        ? {
+            ...f,
+            ...(field === 'length' ? {} : { length: (wallLength(next) / 100).toFixed(2) }),
+            ...(field === 'angle' ? {} : { angle: wallAngle(next).toFixed(1) }),
+            ...(movedPoint
+              ? {}
+              : { ax: String(tidy(next.ax)), ay: String(tidy(next.ay)), bx: String(tidy(next.bx)), by: String(tidy(next.by)) }),
+          }
+        : f,
+    )
+  }
+
+  /** 把面板上的数字写回库里。校验与拖动走同一条 PATCH，规则只有一份。 */
+  async function applyWallForm() {
+    if (!selected || !workSeg || !wallForm) return
+    if (wallLength(workSeg) < 1) {
+      setError('墙长不能小于 1 厘米')
+      return
+    }
+    const thickness = clamp(
+      Number.parseFloat(wallForm.thickness) || selected.thickness,
+      1,
+      100,
+    )
+    const seq = ++writeSeq.current
+    setSaving(true)
+    try {
+      const next = await updateWall(selected.id, {
+        ax: tidy(workSeg.ax),
+        ay: tidy(workSeg.ay),
+        bx: tidy(workSeg.bx),
+        by: tidy(workSeg.by),
+        thickness,
+      })
+      if (seq === writeSeq.current) {
+        setPlan(next)
+        setError(null)
+        const w = next.walls.find((x) => x.id === selected.id)
+        if (w) {
+          setWallForm(newWallForm(w))
+          setWorkSeg({ ax: w.ax, ay: w.ay, bx: w.bx, by: w.by })
+        }
+      }
+    } catch (e) {
+      const err = e as { status?: number; code?: string; message?: string }
+      if (err.status === 409) setError('这个位置已经有一面同样的墙了')
+      else if (err.status === 404) setError('这面墙已经被删除了')
+      else setError(e instanceof Error ? e.message : '保存失败')
     } finally {
       setSaving(false)
     }
@@ -603,6 +687,25 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
   const selected = plan.walls.find((w) => w.id === selectedId) ?? null
 
+  useEffect(() => {
+    if (!selected) {
+      setWallForm(null)
+      setWorkSeg(null)
+      return
+    }
+    setWallForm(newWallForm(selected))
+    setWorkSeg({ ax: selected.ax, ay: selected.ay, bx: selected.bx, by: selected.by })
+    if (focusLengthRef.current) {
+      focusLengthRef.current = false
+      requestAnimationFrame(() => {
+        lengthRef.current?.focus()
+        lengthRef.current?.select()
+      })
+    }
+    // 只在"选中了哪面墙"变化时重置；拖动同一面墙不该把用户正在输入的数字冲掉。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId])
+
   const handles = editing
     ? [
         { x: editing.ax, y: editing.ay },
@@ -626,6 +729,20 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         : plan.openWalls > 0
           ? `已识别 ${plan.rooms.length} 个房间；另有 ${plan.openWalls} 面墙没围上`
           : null
+
+  /** 面板里的一个数字输入。 */
+  const wallField = (label: string, value: string, onChange: (v: string) => void) => (
+    <label className="flex flex-col gap-0.5">
+      <span style={{ color: 'var(--color-muted)' }}>{label}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        inputMode="decimal"
+        className="w-full rounded px-1 py-0.5 text-xs"
+        style={{ border: '1px solid var(--color-border)', background: 'var(--color-bg)' }}
+      />
+    </label>
+  )
 
   return (
     <div className="flex h-full flex-col">
@@ -657,6 +774,51 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           )}
         </div>
         <div className="flex items-center gap-3 text-sm">
+          <button
+            onClick={() => setGridSnap((v) => !v)}
+            aria-pressed={gridSnap}
+            title={`吸附到 ${GRID_CM} 厘米网格`}
+            className="px-2 py-1 text-xs"
+            style={{
+              border: `1px solid ${gridSnap ? 'var(--color-primary)' : 'var(--color-border)'}`,
+              borderRadius: 'var(--radius-sm)',
+              background: gridSnap ? 'var(--color-primary-weak)' : 'var(--color-bg)',
+              color: gridSnap ? 'var(--color-primary)' : 'inherit',
+            }}
+          >
+            网格 {GRID_CM}cm
+          </button>
+          <button
+            onClick={() => setShowDims((v) => !v)}
+            className="px-2 py-1 text-xs"
+            style={{
+              border: `1px solid ${showDims ? 'var(--color-primary)' : 'var(--color-border)'}`,
+              borderRadius: 'var(--radius-sm)',
+              background: showDims ? 'var(--color-primary-weak)' : 'var(--color-bg)',
+              color: showDims ? 'var(--color-primary)' : 'inherit',
+            }}
+          >
+            尺寸标注
+          </button>
+          <button
+            onClick={() => {
+              const stage = stageRef.current
+              if (!stage) return
+              const url = stage.toDataURL({ pixelRatio: 2 })
+              const a = document.createElement('a')
+              a.href = url
+              a.download = `户型-${new Date().toISOString().slice(0, 10)}.png`
+              a.click()
+            }}
+            className="px-2 py-1 text-xs"
+            style={{
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--color-bg)',
+            }}
+          >
+            导出 PNG
+          </button>
           <button
             onClick={fitToContent}
             className="px-2 py-1 text-xs"
@@ -711,6 +873,58 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       )}
 
       <main ref={hostRef} className="relative flex-1 overflow-hidden">
+        {selected && wallForm && (
+          <div
+            className="absolute right-3 top-3 z-10 w-56 rounded p-3 text-xs"
+            style={{
+              background: 'var(--color-surface)',
+              border: '1px solid var(--color-border)',
+              boxShadow: '0 6px 20px rgba(0, 0, 0, 0.08)',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <span className="font-semibold">墙属性</span>
+              <button onClick={() => setSelectedId(null)} style={{ color: 'var(--color-muted)' }}>
+                关闭
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-0.5">
+                <span style={{ color: 'var(--color-muted)' }}>长度（米）</span>
+                <input
+                  ref={lengthRef}
+                  value={wallForm.length}
+                  onChange={(e) => updateWallField('length', e.target.value)}
+                  inputMode="decimal"
+                  className="w-full rounded px-1 py-0.5 text-xs"
+                  style={{ border: '1px solid var(--color-border)', background: 'var(--color-bg)' }}
+                />
+              </label>
+              {wallField('角度（°）', wallForm.angle, (v) => updateWallField('angle', v))}
+              {wallField('厚度（厘米）', wallForm.thickness, (v) => updateWallField('thickness', v))}
+              {wallField('起点 X', wallForm.ax, (v) => updateWallField('ax', v))}
+              {wallField('起点 Y', wallForm.ay, (v) => updateWallField('ay', v))}
+              {wallField('终点 X', wallForm.bx, (v) => updateWallField('bx', v))}
+              {wallField('终点 Y', wallForm.by, (v) => updateWallField('by', v))}
+            </div>
+            <p className="mt-2 leading-4" style={{ color: 'var(--color-muted)' }}>
+              改长度保持方向，改角度保持长度；坐标单位厘米。按 Esc 关闭画布操作。
+            </p>
+            <button
+              onClick={() => void applyWallForm()}
+              disabled={saving}
+              className="mt-2 w-full rounded py-1 text-xs"
+              style={{
+                background: 'var(--color-primary)',
+                color: '#fff',
+                opacity: saving ? 0.6 : 1,
+              }}
+            >
+              {saving ? '保存中…' : '应用'}
+            </button>
+          </div>
+        )}
         <Stage
           ref={stageRef}
           width={size.width}
@@ -738,6 +952,19 @@ export default function PlanPage({ user, onSignedOut }: Props) {
               <RoomShape key={room.hash} room={room} labelSize={13 / viewport.scale} />
             ))}
           </Layer>
+
+          {showDims ? (
+            <Layer listening={false}>
+              {runs.filter((run) => run.wallIds.length > 1).map((run) => (
+                <RunDimension
+                  key={`dim-${run.wallIds.join('-')}`}
+                  run={run}
+                  center={center}
+                  scale={viewport.scale}
+                />
+              ))}
+            </Layer>
+          ) : null}
 
           <Layer>
             {renderWalls.map((w) => (
@@ -924,50 +1151,10 @@ function clamp(v: number, min: number, max: number): number {
  *
  * 正交约束与墙线吸附同时开时用它：既吸到墙上，又保持 0°/90°。
  */
-function axisCross(
-  anchor: { x: number; y: number },
-  axis: 'h' | 'v',
-  w: Wall,
-): { x: number; y: number } | null {
-  if (axis === 'h') {
-    const dy = w.by - w.ay
-    if (Math.abs(dy) < 1e-6) return null
-    const t = (anchor.y - w.ay) / dy
-    if (t < -1e-6 || t > 1 + 1e-6) return null
-    return { x: w.ax + t * (w.bx - w.ax), y: anchor.y }
-  }
-  const dx = w.bx - w.ax
-  if (Math.abs(dx) < 1e-6) return null
-  const t = (anchor.x - w.ax) / dx
-  if (t < -1e-6 || t > 1 + 1e-6) return null
-  return { x: anchor.x, y: w.ay + t * (w.by - w.ay) }
-}
 
 /** 点到线段的最短距离（世界单位）。 */
-function distanceToSegment(x: number, y: number, w: Wall): number {
-  const dx = w.bx - w.ax
-  const dy = w.by - w.ay
-  const len2 = dx * dx + dy * dy
-  if (len2 === 0) return Math.hypot(x - w.ax, y - w.ay)
-  let t = ((x - w.ax) * dx + (y - w.ay) * dy) / len2
-  t = Math.min(Math.max(t, 0), 1)
-  return Math.hypot(x - (w.ax + t * dx), y - (w.ay + t * dy))
-}
 
 /** 点在线段上的垂足；垂足落在线段外就返回 null。 */
-function projectOnSegment(
-  x: number,
-  y: number,
-  w: Wall,
-): { x: number; y: number } | null {
-  const dx = w.bx - w.ax
-  const dy = w.by - w.ay
-  const len2 = dx * dx + dy * dy
-  if (len2 === 0) return null
-  const t = ((x - w.ax) * dx + (y - w.ay) * dy) / len2
-  if (t < 0 || t > 1) return null
-  return { x: w.ax + t * dx, y: w.ay + t * dy }
-}
 
 /**
  * 一个房间：半透明多边形 + 面积标签。
@@ -985,6 +1172,76 @@ function RoomShape({ room, labelSize }: { room: Room; labelSize: number }) {
     <>
       <Line points={points} closed fill="rgba(79,107,237,0.10)" stroke="rgba(79,107,237,0.35)" strokeWidth={1} />
       <Text x={cx} y={cy} text={label} fontSize={labelSize} fill="#3a4a8f" offsetX={labelSize * 1.4} />
+    </>
+  )
+}
+
+/**
+ * 一级标注：一条标注链的总长。
+ *
+ * 画在户型外侧，所以要先判断链在中心的哪一侧——把尺寸线放到外侧，
+ * 否则和室内的家具、设备图标挤在一起。
+ */
+function RunDimension({
+  run,
+  center,
+  scale,
+}: {
+  run: { a: { x: number; y: number }; b: { x: number; y: number }; total: number; horizontal: boolean }
+  center: { x: number; y: number }
+  scale: number
+}) {
+  const midX = (run.a.x + run.b.x) / 2
+  const midY = (run.a.y + run.b.y) / 2
+  const outward = run.horizontal
+    ? midY < center.y
+      ? -1
+      : 1
+    : midX < center.x
+      ? -1
+      : 1
+  // 分段标签贴着墙（17 / 52 px），一级标注必须再往外一档，否则两个数字叠在一起
+  const offset = run.horizontal ? 52 / scale : 76 / scale
+
+  const x1 = run.a.x + (run.horizontal ? 0 : outward * offset)
+  const y1 = run.a.y + (run.horizontal ? outward * offset : 0)
+  const x2 = run.b.x + (run.horizontal ? 0 : outward * offset)
+  const y2 = run.b.y + (run.horizontal ? outward * offset : 0)
+
+  const text = run.total >= 100 ? `${(run.total / 100).toFixed(2)} m` : `${Math.round(run.total)} cm`
+
+  return (
+    <>
+      <Line
+        points={[x1, y1, x2, y2]}
+        stroke="rgba(90, 100, 120, 0.55)"
+        strokeWidth={1 / scale}
+        dash={[6 / scale, 4 / scale]}
+      />
+      {/* 两端的短竖线，读起来才像尺寸线而不是一根多余的墙 */}
+      {run.horizontal ? (
+        <>
+          <Line points={[x1, y1 - 4 / scale, x1, y1 + 4 / scale]} stroke="rgba(90, 100, 120, 0.55)" strokeWidth={1 / scale} />
+          <Line points={[x2, y2 - 4 / scale, x2, y2 + 4 / scale]} stroke="rgba(90, 100, 120, 0.55)" strokeWidth={1 / scale} />
+        </>
+      ) : (
+        <>
+          <Line points={[x1 - 4 / scale, y1, x1 + 4 / scale, y1]} stroke="rgba(90, 100, 120, 0.55)" strokeWidth={1 / scale} />
+          <Line points={[x2 - 4 / scale, y2, x2 + 4 / scale, y2]} stroke="rgba(90, 100, 120, 0.55)" strokeWidth={1 / scale} />
+        </>
+      )}
+      <Text
+        x={(x1 + x2) / 2}
+        y={(y1 + y2) / 2}
+        text={text}
+        fontSize={11 / scale}
+        offsetX={(text.length * 3.2) / scale}
+        offsetY={-14 / scale}
+        fill="#5a6478"
+        stroke="#fafafd"
+        strokeWidth={3 / scale}
+        fillAfterStrokeEnabled
+      />
     </>
   )
 }
