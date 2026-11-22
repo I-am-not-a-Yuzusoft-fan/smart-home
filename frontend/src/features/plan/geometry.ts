@@ -40,6 +40,16 @@ export function distanceToSegment(x: number, y: number, s: Seg): number {
   return projectOnSegment(x, y, s).dist
 }
 
+/** 点到折线的最短距离（弧墙命中用）。 */
+export function distanceToPolyline(x: number, y: number, points: Pt[]): number {
+  let best = Infinity
+  for (let i = 1; i < points.length; i += 1) {
+    const d = distanceToSegment(x, y, { ax: points[i - 1].x, ay: points[i - 1].y, bx: points[i].x, by: points[i].y })
+    if (d < best) best = d
+  }
+  return best
+}
+
 /**
  * 过锚点的水平 / 竖直线与线段 `s` 的交点。
  *
@@ -160,4 +170,53 @@ export function nearestWallAnchor(
 /** 沿墙偏移要夹在 [0, 墙长 - 物品宽] 之间，否则物品会一半悬在墙外。 */
 export function clampWallOffset(offset: number, width: number, length: number): number {
   return clamp(offset, 0, Math.max(0, length - width))
+}
+
+/**
+ * 弧墙离散成折线顶点（不含两端）。
+ *
+ * 弧度为正时圆心落在弦的左侧（顺着 a→b 看），与后端 `control.ArcPolyline` 同一套公式；
+ * 两边算法必须一致，否则房间推导出的多边形和画布上画出来的弧对不上。
+ */
+export function arcPolyline(a: Pt, b: Pt, extentDeg: number): Pt[] {
+  const theta = (extentDeg * Math.PI) / 180
+  if (Math.abs(theta) < 1e-6) return []
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const d = Math.hypot(dx, dy)
+  if (d < 1e-9) return []
+  const h = d / 2 / Math.tan(theta / 2)
+  const mx = (a.x + b.x) / 2
+  const my = (a.y + b.y) / 2
+  const nx = -dy / d
+  const ny = dx / d
+  const cx = mx + nx * h
+  const cy = my + ny * h
+  const r = Math.hypot(a.x - cx, a.y - cy)
+  const start = Math.atan2(a.y - cy, a.x - cx)
+  const end = Math.atan2(b.y - cy, b.x - cx)
+  let delta = end - start
+  while (delta > Math.PI) delta -= 2 * Math.PI
+  while (delta < -Math.PI) delta += 2 * Math.PI
+  const steps = Math.max(2, Math.ceil(Math.abs(delta) / ((5 * Math.PI) / 180)))
+  const out: Pt[] = []
+  for (let i = 1; i < steps; i += 1) {
+    const ang = start + (delta * i) / steps
+    out.push({ x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang) })
+  }
+  return out
+}
+
+/** 弧墙的完整折线（含两端）。 */
+export function arcPoints(a: Pt, b: Pt, extentDeg: number): Pt[] {
+  return [a, ...arcPolyline(a, b, extentDeg), b]
+}
+
+/** 弧长（厘米）；0 弧度时等于弦长。 */
+export function arcLength(a: Pt, b: Pt, extentDeg: number): number {
+  const theta = Math.abs(extentDeg) * (Math.PI / 180)
+  const chord = Math.hypot(b.x - a.x, b.y - a.y)
+  if (theta < 1e-6) return chord
+  const r = chord / (2 * Math.sin(theta / 2))
+  return r * theta
 }

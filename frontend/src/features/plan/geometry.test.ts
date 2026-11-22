@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  arcLength,
+  arcPoints,
+  arcPolyline,
   axisCross,
   clamp,
   clampWallOffset,
@@ -141,5 +144,32 @@ describe('clampWallOffset', () => {
   })
   it('靠右超出时夹到墙长减物品宽', () => {
     expect(clampWallOffset(300, 200, 400)).toBe(200)
+  })
+})
+
+describe('弧墙几何', () => {
+  const a = { x: 0, y: 0 }
+  const b = { x: 100, y: 0 }
+
+  it('60° 弧的采样点落在同一个圆上，矢高约为 13.4', () => {
+    const pts = arcPolyline(a, b, 60)
+    expect(pts.length).toBeGreaterThan(2)
+    const mid = pts[Math.floor(pts.length / 2)]
+    expect(mid.y).toBeCloseTo(-13.4, 0)
+    for (const p of pts) {
+      expect(Math.hypot(p.x - 50, p.y - 86.6)).toBeCloseTo(100, 0)
+    }
+  })
+
+  it('直墙不产生采样点', () => {
+    expect(arcPolyline(a, b, 0)).toEqual([])
+    expect(arcPoints(a, b, 0)).toHaveLength(2)
+  })
+
+  it('弧长始终大于弦长，90° 时是 πr/2', () => {
+    expect(arcLength(a, b, 0)).toBeCloseTo(100, 6)
+    // 90°：弦 100 → r = 50/sin45 = 70.71，弧长 = r*π/2 = 111.07
+    expect(arcLength(a, b, 90)).toBeCloseTo(111.07, 1)
+    expect(arcLength(a, b, -90)).toBeCloseTo(111.07, 1)
   })
 })

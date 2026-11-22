@@ -55,6 +55,7 @@ func (p *PGPlan) LoadPlan(ctx context.Context) ([]PlanCorner, []PlanWall, error)
 			BX:        w.Bx,
 			BY:        w.By,
 			Thickness: w.Thickness,
+			ArcExtent: w.ArcExtent,
 		})
 	}
 	return outCorners, outWalls, nil
@@ -110,7 +111,7 @@ func (p *PGPlan) CreateWall(ctx context.Context, in WallInput) error {
 		return err
 	}
 
-	if _, err := q.InsertWall(ctx, storegen.InsertWallParams{A: a, B: b, Thickness: in.Thickness}); err != nil {
+	if _, err := q.InsertWall(ctx, storegen.InsertWallParams{A: a, B: b, Thickness: in.Thickness, ArcExtent: in.ArcExtent}); err != nil {
 		// 并发下别人刚好插进来：唯一索引挡住后按"已存在"处理，不算失败。
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -186,6 +187,7 @@ func (p *PGPlan) UpdateWall(ctx context.Context, id openapi_types.UUID, in WallI
 
 	if _, err := q.UpdateWall(ctx, storegen.UpdateWallParams{
 		ID: pgtype.UUID{Bytes: id, Valid: true}, A: a, B: b, Thickness: in.Thickness,
+		ArcExtent: in.ArcExtent,
 	}); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -275,6 +277,7 @@ func (p *PGPlan) ReplacePlan(ctx context.Context, version int64, walls []WallSna
 		id        *string
 		a, b      pgtype.UUID
 		thickness float64
+		arc       float64
 	}
 	planned := make([]plannedWall, 0, len(walls))
 	for _, w := range walls {
@@ -286,7 +289,7 @@ func (p *PGPlan) ReplacePlan(ctx context.Context, version int64, walls []WallSna
 		if err != nil {
 			return fmt.Errorf("写入端点: %w", err)
 		}
-		planned = append(planned, plannedWall{id: w.ID, a: aID, b: bID, thickness: w.Thickness})
+		planned = append(planned, plannedWall{id: w.ID, a: aID, b: bID, thickness: w.Thickness, arc: w.ArcExtent})
 	}
 
 	// 现存的墙：不在新列表里的删掉。
@@ -313,7 +316,7 @@ func (p *PGPlan) ReplacePlan(ctx context.Context, version int64, walls []WallSna
 	// 逐面墙：有 id 的更新，没 id 的插入。
 	for _, w := range planned {
 		if w.id == nil {
-			if _, err := q.InsertWall(ctx, storegen.InsertWallParams{A: w.a, B: w.b, Thickness: w.thickness}); err != nil {
+			if _, err := q.InsertWall(ctx, storegen.InsertWallParams{A: w.a, B: w.b, Thickness: w.thickness, ArcExtent: w.arc}); err != nil {
 				return fmt.Errorf("插入墙: %w", err)
 			}
 			continue
@@ -322,13 +325,13 @@ func (p *PGPlan) ReplacePlan(ctx context.Context, version int64, walls []WallSna
 		if err != nil {
 			return err
 		}
-		n, err := q.UpdateWallGeom(ctx, storegen.UpdateWallGeomParams{ID: id, A: w.a, B: w.b, Thickness: w.thickness})
+		n, err := q.UpdateWallGeom(ctx, storegen.UpdateWallGeomParams{ID: id, A: w.a, B: w.b, Thickness: w.thickness, ArcExtent: w.arc})
 		if err != nil {
 			return fmt.Errorf("更新墙: %w", err)
 		}
 		if n == 0 {
 			// 客户端认为存在、库里没有（别人删了）：按新墙插入，保住这次撤销的结果。
-			if err := q.InsertWallWithID(ctx, storegen.InsertWallWithIDParams{ID: id, A: w.a, B: w.b, Thickness: w.thickness}); err != nil {
+			if err := q.InsertWallWithID(ctx, storegen.InsertWallWithIDParams{ID: id, A: w.a, B: w.b, Thickness: w.thickness, ArcExtent: w.arc}); err != nil {
 				return fmt.Errorf("补插墙: %w", err)
 			}
 		}
@@ -412,6 +415,7 @@ func (p *PGPlan) GetWall(ctx context.Context, id openapi_types.UUID) (PlanWall, 
 		BX:        row.Bx,
 		BY:        row.By,
 		Thickness: row.Thickness,
+		ArcExtent: row.ArcExtent,
 	}, nil
 }
 
@@ -420,6 +424,9 @@ func (p *PGPlan) CreateOpening(ctx context.Context, in OpeningInput) (openapi_ty
 	wall, err := p.GetWall(ctx, in.WallID)
 	if err != nil {
 		return openapi_types.UUID{}, err
+	}
+	if math.Abs(wall.ArcExtent) >= 0.5 {
+		return openapi_types.UUID{}, ErrArcWall
 	}
 	length := math.Hypot(wall.BX-wall.AX, wall.BY-wall.AY)
 	// 允许 0.5 厘米的浮点误差：前端按墙长摆满整面墙时不该被 1e-9 卡住。
