@@ -123,7 +123,12 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
           ))}
         </select>
       </label>
-      {item.wallId ? (
+      {!item.wallId && type?.mount === 'wall' ? (
+        <p className="text-[11px]" style={{ color: '#b45309' }}>
+          这件「{type.name}」还没挂到墙上：把它拖到某面墙边（40 像素内）就会贴上去，
+          位置和朝向之后都跟着墙走。
+        </p>
+      ) : item.wallId ? (
         <>
           <label className="grid gap-1 text-[11px]">
             沿墙偏移（cm）

@@ -210,10 +210,19 @@ func (s *Server) UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_t
 		}
 	}
 	// 挂墙物品的位置是墙的函数：直接改 x/y 会让 wallOffset 与坐标对不上。
-	if existing.WallID != nil && body.WallId == nil && (body.X != nil || body.Y != nil || body.Rotation != nil) {
-		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED,
-			"挂墙物品的位置由墙决定：改 wallOffset 沿墙移动，或把 wallId 设为空串先脱离墙面")
-		return
+	// 另外类型要求挂墙的物品即使 wall_id 为空（早期数据、或墙被删后没重挂）也不能
+	// 用地板坐标摆放——否则旧客户端一次 PATCH x/y 就能把窗帘停到房间中间。
+	if body.WallId == nil && (body.X != nil || body.Y != nil || body.Rotation != nil) {
+		if existing.WallID != nil {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED,
+				"挂墙物品的位置由墙决定：改 wallOffset 沿墙移动，或把 wallId 设为空串先脱离墙面")
+			return
+		}
+		if typ, err := s.itemTypes.GetItemType(r.Context(), existing.TypeKey); err == nil && typ.Mount == "wall" {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED,
+				fmt.Sprintf("「%s」要挂在墙上：把它拖到某面墙边（40 像素内）就会贴上去", typ.Name))
+			return
+		}
 	}
 	if body.X != nil || body.Y != nil || body.Rotation != nil {
 		x, y, rotation := existing.X, existing.Y, existing.Rotation
