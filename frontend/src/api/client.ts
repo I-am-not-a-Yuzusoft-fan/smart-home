@@ -116,6 +116,76 @@ export const createWall = (input: { ax: number; ay: number; bx: number; by: numb
 /** 删一面墙。 */
 export const deleteWall = (id: string) => request<void>(`/api/walls/${id}`, { method: 'DELETE' })
 
+export type ItemKind = 'furniture' | 'device'
+export type ItemStatus = 'normal' | 'idle' | 'maintenance'
+
+/** 家具或设备实例；kind/roomName 由后端 join 出来。 */
+export type Item = {
+  id: string
+  typeKey: string
+  kind: ItemKind
+  name: string
+  roomHash?: string
+  roomName?: string
+  x: number
+  y: number
+  rotation: number
+  status?: ItemStatus
+  attrs?: Record<string, unknown>
+}
+
+export type ItemFilter = {
+  room?: string
+  kind?: ItemKind
+  q?: string
+}
+
+export type ItemInput = {
+  typeKey: string
+  name: string
+  roomHash?: string
+  x: number
+  y: number
+  rotation?: number
+  status?: ItemStatus
+  attrs?: Record<string, unknown>
+}
+
+export type ItemUpdate = {
+  name?: string
+  roomHash?: string
+  x?: number
+  y?: number
+  rotation?: number
+  status?: ItemStatus
+  attrs?: Record<string, unknown>
+}
+
+/** 物品列表；筛选条件为空时返回全部。 */
+export const listItems = (filter: ItemFilter = {}) => {
+  const params = new URLSearchParams()
+  if (filter.room) params.set('room', filter.room)
+  if (filter.kind) params.set('kind', filter.kind)
+  if (filter.q) params.set('q', filter.q)
+  const query = params.toString()
+  return request<Item[]>(`/api/items${query ? `?${query}` : ''}`)
+}
+
+/** 新建物品；拖入平面图时使用。 */
+export const createItem = (input: ItemInput) =>
+  request<Item>('/api/items', { method: 'POST', body: JSON.stringify(input) })
+
+/** 修改物品字段；只传需要改的字段。 */
+export const updateItem = (id: string, input: ItemUpdate) =>
+  request<Item>(`/api/items/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+
+/** 删除物品。 */
+export const deleteItem = (id: string) =>
+  request<void>(`/api/items/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
 /** 枚举能力的一个选项：value 入库，label 给人看。 */
 export type CapabilityOption = { value: string; label: string }
 

@@ -1,18 +1,27 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Circle, Layer, Line, Stage, Text } from 'react-konva'
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
+import { Circle, Layer, Line, Rect, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
 import {
   ApiError,
+  createItem,
   createWall,
+  deleteItem,
   deleteWall,
   getPlan,
+  listItems,
+  listItemTypes,
   logout,
+  updateItem,
   type Corner,
+  type Item,
+  type ItemType,
   type Plan,
   type Room,
   type SessionUser,
   type Wall,
 } from '../api/client.ts'
+import ItemInspector from '../components/ItemInspector.tsx'
+import ItemSidebar, { type ItemFilters } from '../components/ItemSidebar.tsx'
 import TypeManager from '../components/TypeManager.tsx'
 
 type Props = {
@@ -40,6 +49,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ width: 800, height: 600 })
   const [plan, setPlan] = useState<Plan>({ corners: [], walls: [], rooms: [], openWalls: 0 })
+  const [items, setItems] = useState<Item[]>([])
+  const [types, setTypes] = useState<ItemType[]>([])
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
+  const [filters, setFilters] = useState<ItemFilters>({ room: '', kind: '', q: '' })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -52,7 +65,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
   const load = useCallback(async () => {
     try {
-      setPlan(await getPlan())
+      const [nextPlan, nextItems, nextTypes] = await Promise.all([getPlan(), listItems(), listItemTypes()])
+      setPlan(nextPlan)
+      setItems(nextItems)
+      setTypes(nextTypes)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : '读取户型失败')
@@ -60,6 +76,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       setLoading(false)
     }
   }, [])
+
+  const typeByKey = useMemo(() => new Map(types.map((typ) => [typ.key, typ])), [types])
+  const selectedItem = items.find((item) => item.id === selectedItemId) ?? null
+  const selectedItemType = selectedItem ? typeByKey.get(selectedItem.typeKey) : undefined
 
   useEffect(() => {
     void load()
@@ -76,19 +96,23 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     return () => observer.disconnect()
   }, [])
 
-  // 删墙也支持键盘：选中后按 Delete / Backspace
+  // Delete / Backspace：优先删选中的物品，其次删墙。
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (selectedItemId) {
+        void removeItem(selectedItemId)
+        return
+      }
       if (selectedId) void removeWall(selectedId)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-    // removeWall 每次渲染都是新函数，但内部只用 setState 与 props，闭包安全
+    // 删除函数每次渲染都是新函数，但内部只用 setState 与 props，闭包安全
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId])
+  }, [selectedId, selectedItemId])
 
   // 只认"被墙引用"的端点：删墙后留下的孤立端点既不该画出来，也不该被吸附——
   // 否则用户会吸到一个看不见的点上，还以为是 bug。
@@ -123,6 +147,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   function onMouseDown() {
     const p = pointer()
     if (!p) return
+    setSelectedItemId(null)
     const s = snap(p.x, p.y)
     setDraft({ ax: s.x, ay: s.y, bx: s.x, by: s.y })
     setSelectedId(null)
@@ -196,6 +221,68 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     setSaving(false)
   }
 
+  async function removeItem(id: string) {
+    setSaving(true)
+    try {
+      await deleteItem(id)
+      setItems((current) => current.filter((item) => item.id !== id))
+      if (selectedItemId === id) setSelectedItemId(null)
+      setError(null)
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status === 404)) {
+        setError(e instanceof Error ? e.message : '删除物品失败')
+      } else {
+        setItems((current) => current.filter((item) => item.id !== id))
+        if (selectedItemId === id) setSelectedItemId(null)
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function updateItemFields(
+    id: string,
+    patch: { name?: string; roomHash?: string; x?: number; y?: number; rotation?: number },
+  ) {
+    const saved = await updateItem(id, patch)
+    setItems((current) => current.map((item) => (item.id === saved.id ? saved : item)))
+    setError(null)
+  }
+
+  async function onItemDragEnd(item: Item, e: Konva.KonvaEventObject<Event>) {
+    const node = e.target
+    const x = Math.round(node.x())
+    const y = Math.round(node.y())
+    setItems((current) => current.map((row) => (row.id === item.id ? { ...row, x, y } : row)))
+    try {
+      await updateItemFields(item.id, { x, y })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存物品位置失败')
+      void load()
+    }
+  }
+
+  async function onDropType(e: ReactDragEvent<HTMLElement>) {
+    e.preventDefault()
+    const typeKey = e.dataTransfer.getData('application/x-smart-home-type')
+    if (!typeKey) return
+    const typ = typeByKey.get(typeKey)
+    if (!typ) return
+    const host = hostRef.current
+    if (!host) return
+    const rect = host.getBoundingClientRect()
+    const x = Math.max(0, Math.min(5000, Math.round(e.clientX - rect.left)))
+    const y = Math.max(0, Math.min(5000, Math.round(e.clientY - rect.top)))
+    try {
+      const created = await createItem({ typeKey, name: typ.name, x, y, rotation: 0 })
+      setItems((current) => [...current, created])
+      setSelectedItemId(created.id)
+      setSelectedId(null)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '布放失败')
+    }
+  }
 
   async function onLogout() {
     try {
@@ -294,7 +381,28 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         </p>
       )}
 
-      <main ref={hostRef} className="relative flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1">
+        <ItemSidebar
+          types={types}
+          items={items}
+          rooms={plan.rooms}
+          filters={filters}
+          selectedItemId={selectedItemId}
+          onFiltersChange={(patch) => setFilters((current) => ({ ...current, ...patch }))}
+          onSelectItem={(id) => {
+            setSelectedItemId(id)
+            setSelectedId(null)
+          }}
+        />
+        <main
+          ref={hostRef}
+          className="relative min-w-0 flex-1 overflow-hidden"
+          onDragOver={(e) => {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'copy'
+          }}
+          onDrop={(e) => void onDropType(e)}
+        >
         <Stage
           ref={stageRef}
           width={size.width}
@@ -320,7 +428,10 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 key={w.id}
                 wall={w}
                 selected={w.id === selectedId}
-                onSelect={() => setSelectedId(w.id)}
+                onSelect={() => {
+                  setSelectedId(w.id)
+                  setSelectedItemId(null)
+                }}
               />
             ))}
             {draft && (
@@ -337,6 +448,22 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 lineCap="round"
               />
             )}
+          </Layer>
+
+          <Layer>
+            {items.map((item) => (
+              <ItemShape
+                key={item.id}
+                item={item}
+                type={typeByKey.get(item.typeKey)}
+                selected={item.id === selectedItemId}
+                onSelect={() => {
+                  setSelectedItemId(item.id)
+                  setSelectedId(null)
+                }}
+                onDragEnd={(e) => void onItemDragEnd(item, e)}
+              />
+            ))}
           </Layer>
 
           <Layer listening={false}>
@@ -375,10 +502,75 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             保存中…
           </div>
         )}
-      </main>
+        </main>
+        <ItemInspector
+          item={selectedItem}
+          type={selectedItemType}
+          rooms={plan.rooms}
+          onUpdate={updateItemFields}
+          onDelete={removeItem}
+        />
+      </div>
 
       {showTypes ? <TypeManager onClose={() => setShowTypes(false)} /> : null}
     </div>
+  )
+}
+
+function ItemShape({
+  item,
+  type,
+  selected,
+  onSelect,
+  onDragEnd,
+}: {
+  item: Item
+  type?: ItemType
+  selected: boolean
+  onSelect: () => void
+  onDragEnd: (e: Konva.KonvaEventObject<Event>) => void
+}) {
+  const width = type?.defaultWidth ?? 60
+  const depth = type?.defaultDepth ?? 60
+  return (
+    <>
+      <Rect
+        x={item.x}
+        y={item.y}
+        width={width}
+        height={depth}
+        rotation={item.rotation}
+        fill={item.kind === 'device' ? '#dbe6ff' : '#e8e1d4'}
+        stroke={selected ? '#4f6bed' : '#8a8a9e'}
+        strokeWidth={selected ? 2 : 1}
+        draggable
+        onMouseDown={(e) => {
+          e.cancelBubble = true
+        }}
+        onClick={(e) => {
+          e.cancelBubble = true
+          onSelect()
+        }}
+        onTap={(e) => {
+          e.cancelBubble = true
+          onSelect()
+        }}
+        onDragStart={onSelect}
+        onDragEnd={onDragEnd}
+      />
+      {selected || width >= 40 ? (
+        <Text
+          x={item.x + 4}
+          y={item.y + 4}
+          width={Math.max(width - 8, 20)}
+          text={item.name}
+          fontSize={11}
+          fill="#3a3a4d"
+          wrap="none"
+          listening={false}
+        />
+      ) : null}
+    </>
   )
 }
 

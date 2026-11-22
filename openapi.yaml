@@ -251,6 +251,114 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /api/items:
+    get:
+      operationId: listItems
+      summary: 列出物品（可按房间、类别、关键字筛选）
+      parameters:
+        - name: room
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 房间多边形哈希（来自 /api/plan 的 rooms[].hash）
+        - name: kind
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [furniture, device]
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+          description: 按名称关键字搜索（不区分大小写）
+      responses:
+        "200":
+          description: 物品列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Item"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+    post:
+      operationId: createItem
+      summary: 新建物品（家具或设备）
+      description: |
+        设备会按类型模板的 capabilities 初始化 capability_state；这是物品创建事务的一部分，
+        不经过命令链路。房间哈希必须来自当前已命名的房间。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItemInput"
+      responses:
+        "201":
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+  /api/items/{id}:
+    patch:
+      operationId: updateItem
+      summary: 修改物品名称、房间、坐标、旋转或装饰属性
+      description: 只更新请求里出现的字段；`roomHash` 传空字符串表示移出房间。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ItemUpdate"
+      responses:
+        "200":
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteItem
+      summary: 删除物品
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: 已删除
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
   securitySchemes:
     cookieAuth:
@@ -617,6 +725,108 @@ components:
           description: |
             乐观锁版本。修改 `capabilities` 时**必填**（否则 400）；服务端发现已被他人修改时返回 409。
             UI 保存时总是带上，避免用陈旧的能力数组覆盖别人刚加的能力项。
+    Item:
+      type: object
+      required: [id, typeKey, kind, name, x, y, rotation]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        typeKey:
+          type: string
+        kind:
+          type: string
+          enum: [furniture, device]
+        name:
+          type: string
+        roomHash:
+          type: string
+          description: 所属房间的多边形哈希；未分配时省略
+        roomName:
+          type: string
+          description: 房间显示名；房间还没有命名时省略
+        x:
+          type: number
+          format: double
+          description: 平面坐标（厘米）
+        y:
+          type: number
+          format: double
+        rotation:
+          type: number
+          format: double
+          description: 旋转角度（度）
+        status:
+          type: string
+          enum: [normal, idle, maintenance]
+          description: 仅家具使用；设备状态在 capability_state
+        attrs:
+          type: object
+          additionalProperties: true
+    ItemInput:
+      type: object
+      required: [typeKey, name, x, y]
+      additionalProperties: false
+      properties:
+        typeKey:
+          type: string
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        roomHash:
+          type: string
+          description: 仅允许当前已命名的房间
+        x:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 5000
+        y:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 5000
+        rotation:
+          type: number
+          format: double
+        status:
+          type: string
+          enum: [normal, idle, maintenance]
+        attrs:
+          type: object
+          additionalProperties: true
+    ItemUpdate:
+      type: object
+      additionalProperties: false
+      description: 只更新出现的字段；roomHash 传空字符串表示移出房间。
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        roomHash:
+          type: string
+        x:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 5000
+        y:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 5000
+        rotation:
+          type: number
+          format: double
+        status:
+          type: string
+          enum: [normal, idle, maintenance]
+        attrs:
+          type: object
+          additionalProperties: true
     Error:
       type: object
       required: [error]
