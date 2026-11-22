@@ -276,7 +276,7 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "请求体不是合法的 JSON")
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, decodeErrorMessage(err))
 		return false
 	}
 	// 一个请求只能有一个 JSON 值；`{...}{}` 这种尾巴不能静默放过。
@@ -286,6 +286,29 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// decodeErrorMessage 把解码错误翻成人能看懂的一句话。
+//
+// 三件事被混成过一句「请求体不是合法的 JSON」，最常踩的是中间那种：
+// 字段名拼错时用户以为少了个括号，绕半天才发现是自己写错了字段。
+func decodeErrorMessage(err error) string {
+	var unmarshalType *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &unmarshalType):
+		field := unmarshalType.Field
+		if field == "" {
+			return "请求体字段类型不对"
+		}
+		return fmt.Sprintf("字段 %q 的类型不对（期望 %s）", field, unmarshalType.Type.String())
+	case strings.HasPrefix(err.Error(), "json: unknown field "):
+		field := strings.Trim(strings.TrimPrefix(err.Error(), "json: unknown field "), `"`)
+		return fmt.Sprintf("请求体包含不支持的字段 %q", field)
+	case errors.Is(err, io.EOF):
+		return "请求体是空的"
+	default:
+		return "请求体不是合法的 JSON"
+	}
 }
 
 func itemTypeFromInput(in gen.ItemTypeInput) ItemType {

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api"
+	itemstore "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store"
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
 
@@ -48,6 +49,7 @@ func main() {
 		api.NewPGAccounts(store.New(pool)),
 		api.NewPGPlan(pool),
 		api.NewPGItemTypes(pool),
+		itemstore.NewItems(pool),
 		api.NewSessionCodec(cfg.sessionSecret, cfg.sessionTTL),
 		cfg.cookieSecure,
 		version,

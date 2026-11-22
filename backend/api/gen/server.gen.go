@@ -4,6 +4,7 @@
 package gen
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -84,6 +85,66 @@ func (e ErrorErrorCode) Valid() bool {
 	}
 }
 
+// Defines values for ItemKind.
+const (
+	ItemKindDevice    ItemKind = "device"
+	ItemKindFurniture ItemKind = "furniture"
+)
+
+// Valid indicates whether the value is a known member of the ItemKind enum.
+func (e ItemKind) Valid() bool {
+	switch e {
+	case ItemKindDevice:
+		return true
+	case ItemKindFurniture:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ItemStatus.
+const (
+	ItemStatusIdle        ItemStatus = "idle"
+	ItemStatusMaintenance ItemStatus = "maintenance"
+	ItemStatusNormal      ItemStatus = "normal"
+)
+
+// Valid indicates whether the value is a known member of the ItemStatus enum.
+func (e ItemStatus) Valid() bool {
+	switch e {
+	case ItemStatusIdle:
+		return true
+	case ItemStatusMaintenance:
+		return true
+	case ItemStatusNormal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ItemInputStatus.
+const (
+	ItemInputStatusIdle        ItemInputStatus = "idle"
+	ItemInputStatusMaintenance ItemInputStatus = "maintenance"
+	ItemInputStatusNormal      ItemInputStatus = "normal"
+)
+
+// Valid indicates whether the value is a known member of the ItemInputStatus enum.
+func (e ItemInputStatus) Valid() bool {
+	switch e {
+	case ItemInputStatusIdle:
+		return true
+	case ItemInputStatusMaintenance:
+		return true
+	case ItemInputStatusNormal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ItemTypeKind.
 const (
 	ItemTypeKindDevice    ItemTypeKind = "device"
@@ -114,6 +175,27 @@ func (e ItemTypeInputKind) Valid() bool {
 	case ItemTypeInputKindDevice:
 		return true
 	case ItemTypeInputKindFurniture:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ItemUpdateStatus.
+const (
+	ItemUpdateStatusIdle        ItemUpdateStatus = "idle"
+	ItemUpdateStatusMaintenance ItemUpdateStatus = "maintenance"
+	ItemUpdateStatusNormal      ItemUpdateStatus = "normal"
+)
+
+// Valid indicates whether the value is a known member of the ItemUpdateStatus enum.
+func (e ItemUpdateStatus) Valid() bool {
+	switch e {
+	case ItemUpdateStatusIdle:
+		return true
+	case ItemUpdateStatusMaintenance:
+		return true
+	case ItemUpdateStatusNormal:
 		return true
 	default:
 		return false
@@ -177,6 +259,24 @@ const (
 func (e Healthz200JSONResponseBodyStatus) Valid() bool {
 	switch e {
 	case Ok:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListItemsParamsKind.
+const (
+	ListItemsParamsKindDevice    ListItemsParamsKind = "device"
+	ListItemsParamsKindFurniture ListItemsParamsKind = "furniture"
+)
+
+// Valid indicates whether the value is a known member of the ListItemsParamsKind enum.
+func (e ListItemsParamsKind) Valid() bool {
+	switch e {
+	case ListItemsParamsKindDevice:
+		return true
+	case ListItemsParamsKindFurniture:
 		return true
 	default:
 		return false
@@ -250,6 +350,56 @@ type Error struct {
 // IMPORT_VALIDATION_FAILED
 type ErrorErrorCode string
 
+// Item defines model for Item.
+type Item struct {
+	Attrs *map[string]interface{} `json:"attrs,omitempty"`
+	Id    openapi_types.UUID      `json:"id"`
+	Kind  ItemKind                `json:"kind"`
+	Name  string                  `json:"name"`
+
+	// RoomHash 所属房间的多边形哈希；未分配时省略
+	RoomHash *string `json:"roomHash,omitempty"`
+
+	// RoomName 房间显示名；房间还没有命名时省略
+	RoomName *string `json:"roomName,omitempty"`
+
+	// Rotation 绕物品中心旋转的角度（度，顺时针为正）
+	Rotation float64 `json:"rotation"`
+
+	// Status 仅家具使用；设备状态在 capability_state
+	Status  *ItemStatus `json:"status,omitempty"`
+	TypeKey string      `json:"typeKey"`
+
+	// X 物品中心点的平面坐标 X（厘米）
+	X float64 `json:"x"`
+
+	// Y 物品中心点的平面坐标 Y（厘米）
+	Y float64 `json:"y"`
+}
+
+// ItemKind defines model for Item.Kind.
+type ItemKind string
+
+// ItemStatus 仅家具使用；设备状态在 capability_state
+type ItemStatus string
+
+// ItemInput defines model for ItemInput.
+type ItemInput struct {
+	Attrs *map[string]interface{} `json:"attrs,omitempty"`
+	Name  string                  `json:"name"`
+
+	// RoomHash 仅允许当前已命名的房间
+	RoomHash *string          `json:"roomHash,omitempty"`
+	Rotation *float64         `json:"rotation,omitempty"`
+	Status   *ItemInputStatus `json:"status,omitempty"`
+	TypeKey  string           `json:"typeKey"`
+	X        float64          `json:"x"`
+	Y        float64          `json:"y"`
+}
+
+// ItemInputStatus defines model for ItemInput.Status.
+type ItemInputStatus string
+
 // ItemType defines model for ItemType.
 type ItemType struct {
 	Capabilities []Capability `json:"capabilities"`
@@ -312,6 +462,20 @@ type ItemTypeUpdate struct {
 	Icons *string `json:"icons,omitempty"`
 	Name  *string `json:"name,omitempty"`
 }
+
+// ItemUpdate 只更新出现的字段；roomHash 传空字符串表示移出房间。
+type ItemUpdate struct {
+	Attrs    *map[string]interface{} `json:"attrs,omitempty"`
+	Name     *string                 `json:"name,omitempty"`
+	RoomHash *string                 `json:"roomHash,omitempty"`
+	Rotation *float64                `json:"rotation,omitempty"`
+	Status   *ItemUpdateStatus       `json:"status,omitempty"`
+	X        *float64                `json:"x,omitempty"`
+	Y        *float64                `json:"y,omitempty"`
+}
+
+// ItemUpdateStatus defines model for ItemUpdate.Status.
+type ItemUpdateStatus string
 
 // LoginRequest defines model for LoginRequest.
 type LoginRequest struct {
@@ -418,6 +582,19 @@ type Unauthenticated = Error
 // Healthz200JSONResponseBodyStatus defines parameters for Healthz.
 type Healthz200JSONResponseBodyStatus string
 
+// ListItemsParams defines parameters for ListItems.
+type ListItemsParams struct {
+	// Room 房间多边形哈希（来自 /api/plan 的 rooms[].hash）
+	Room *string              `form:"room,omitempty" json:"room,omitempty"`
+	Kind *ListItemsParamsKind `form:"kind,omitempty" json:"kind,omitempty"`
+
+	// Q 按名称关键字搜索（不区分大小写）
+	Q *string `form:"q,omitempty" json:"q,omitempty"`
+}
+
+// ListItemsParamsKind defines parameters for ListItems.
+type ListItemsParamsKind string
+
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
@@ -426,6 +603,12 @@ type CreateItemTypeJSONRequestBody = ItemTypeInput
 
 // UpdateItemTypeJSONRequestBody defines body for UpdateItemType for application/json ContentType.
 type UpdateItemTypeJSONRequestBody = ItemTypeUpdate
+
+// CreateItemJSONRequestBody defines body for CreateItem for application/json ContentType.
+type CreateItemJSONRequestBody = ItemInput
+
+// UpdateItemJSONRequestBody defines body for UpdateItem for application/json ContentType.
+type UpdateItemJSONRequestBody = ItemUpdate
 
 // CreateWallJSONRequestBody defines body for CreateWall for application/json ContentType.
 type CreateWallJSONRequestBody = WallInput
@@ -456,6 +639,18 @@ type ServerInterface interface {
 	// UpdateItemType 修改类型模板（仅管理员）
 	// (PATCH /api/item-types/{key})
 	UpdateItemType(w http.ResponseWriter, r *http.Request, key string)
+	// ListItems 列出物品（可按房间、类别、关键字筛选）
+	// (GET /api/items)
+	ListItems(w http.ResponseWriter, r *http.Request, params ListItemsParams)
+	// CreateItem 新建物品（家具或设备）
+	// (POST /api/items)
+	CreateItem(w http.ResponseWriter, r *http.Request)
+	// DeleteItem 删除物品
+	// (DELETE /api/items/{id})
+	DeleteItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// UpdateItem 修改物品名称、房间、坐标、旋转或装饰属性
+	// (PATCH /api/items/{id})
+	UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// GetPlan 取当前户型（端点与墙）
 	// (GET /api/plan)
 	GetPlan(w http.ResponseWriter, r *http.Request)
@@ -516,6 +711,30 @@ func (_ Unimplemented) DeleteItemType(w http.ResponseWriter, r *http.Request, ke
 // UpdateItemType 修改类型模板（仅管理员）
 // (PATCH /api/item-types/{key})
 func (_ Unimplemented) UpdateItemType(w http.ResponseWriter, r *http.Request, key string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ListItems 列出物品（可按房间、类别、关键字筛选）
+// (GET /api/items)
+func (_ Unimplemented) ListItems(w http.ResponseWriter, r *http.Request, params ListItemsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// CreateItem 新建物品（家具或设备）
+// (POST /api/items)
+func (_ Unimplemented) CreateItem(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// DeleteItem 删除物品
+// (DELETE /api/items/{id})
+func (_ Unimplemented) DeleteItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateItem 修改物品名称、房间、坐标、旋转或装饰属性
+// (PATCH /api/items/{id})
+func (_ Unimplemented) UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -673,6 +892,131 @@ func (siw *ServerInterfaceWrapper) UpdateItemType(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateItemType(w, r, key)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListItems operation middleware
+func (siw *ServerInterfaceWrapper) ListItems(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListItemsParams
+
+	// ------------- Optional query parameter "room" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "room", r.URL.Query(), &params.Room, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "room"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "room", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "kind" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "kind", r.URL.Query(), &params.Kind, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "kind"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", r.URL.Query(), &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "q"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "q", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListItems(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateItem operation middleware
+func (siw *ServerInterfaceWrapper) CreateItem(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateItem(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteItem operation middleware
+func (siw *ServerInterfaceWrapper) DeleteItem(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteItem(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateItem operation middleware
+func (siw *ServerInterfaceWrapper) UpdateItem(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateItem(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -881,6 +1225,18 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/api/item-types/{key}", wrapper.UpdateItemType)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/items", wrapper.ListItems)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/items", wrapper.CreateItem)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/api/items/{id}", wrapper.DeleteItem)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/api/items/{id}", wrapper.UpdateItem)
 	})
 
 	return r

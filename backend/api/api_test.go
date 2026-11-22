@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api"
+	itemstore "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store"
 	storegen "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
 
@@ -42,6 +43,7 @@ func newTestServer(t *testing.T) http.Handler {
 		api.NewPGAccounts(storegen.New(pool)),
 		api.NewPGPlan(pool),
 		api.NewPGItemTypes(pool),
+		itemstore.NewItems(pool),
 		api.NewSessionCodec("test-secret", time.Hour),
 		false,
 		"test",
