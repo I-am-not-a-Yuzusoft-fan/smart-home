@@ -29,6 +29,9 @@ type Item struct {
 	Rotation float64
 	Status   *string
 	Attrs    json.RawMessage
+	// 挂墙物品：位置由 (wallId, wallOffset) 定位，x/y/rotation 是服务端算出来的派生值。
+	WallID     *uuid.UUID
+	WallOffset *float64
 }
 
 // ItemFilter 是列表筛选条件；nil 表示不限。
@@ -54,6 +57,8 @@ type ItemCreate struct {
 	Status   *string
 	Attrs    json.RawMessage
 	States   []InitialState
+	WallID     *uuid.UUID
+	WallOffset *float64
 }
 
 // ItemUpdate 是逐字段 PATCH 的输入。
@@ -70,6 +75,9 @@ type ItemUpdate struct {
 	Status      string
 	AttrsSet    bool
 	Attrs       json.RawMessage
+	WallSet     bool
+	WallID      *uuid.UUID
+	WallOffset  *float64
 }
 
 // Items 是物品的 PostgreSQL 存储。
@@ -94,7 +102,7 @@ func (s *Items) ListItems(ctx context.Context, filter ItemFilter) ([]Item, error
 	}
 	out := make([]Item, 0, len(rows))
 	for _, row := range rows {
-		item, err := itemFromRow(row.ID, row.TypeKey, row.Kind, row.Name, row.RoomHash, row.RoomName, row.X, row.Y, row.Rotation, row.Status, row.Attrs)
+		item, err := itemFromRow(row.ID, row.TypeKey, row.Kind, row.Name, row.RoomHash, row.RoomName, row.X, row.Y, row.Rotation, row.Status, row.Attrs, row.WallID, row.WallOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -111,7 +119,7 @@ func (s *Items) GetItem(ctx context.Context, id uuid.UUID) (Item, error) {
 	if err != nil {
 		return Item{}, err
 	}
-	return itemFromRow(row.ID, row.TypeKey, row.Kind, row.Name, row.RoomHash, row.RoomName, row.X, row.Y, row.Rotation, row.Status, row.Attrs)
+	return itemFromRow(row.ID, row.TypeKey, row.Kind, row.Name, row.RoomHash, row.RoomName, row.X, row.Y, row.Rotation, row.Status, row.Attrs, row.WallID, row.WallOffset)
 }
 
 // CreateItem 在一个事务里写 item 与初始 capability_state。
@@ -134,8 +142,10 @@ func (s *Items) CreateItem(ctx context.Context, in ItemCreate) (Item, error) {
 		X:        in.X,
 		Y:        in.Y,
 		Rotation: in.Rotation,
-		Status:   textValue(in.Status),
-		Attrs:    rawAttrs,
+		Status:     textValue(in.Status),
+		Attrs:      rawAttrs,
+		WallID:     uuidPtrValue(in.WallID),
+		WallOffset: floatPtrValue(in.WallOffset),
 	})
 	if err != nil {
 		return Item{}, err
@@ -159,7 +169,7 @@ func (s *Items) CreateItem(ctx context.Context, in ItemCreate) (Item, error) {
 	if err := tx.Commit(ctx); err != nil {
 		return Item{}, err
 	}
-	return itemFromRow(row.ID, row.TypeKey, row.Kind, row.Name, row.RoomHash, row.RoomName, row.X, row.Y, row.Rotation, row.Status, row.Attrs)
+	return itemFromRow(row.ID, row.TypeKey, row.Kind, row.Name, row.RoomHash, row.RoomName, row.X, row.Y, row.Rotation, row.Status, row.Attrs, row.WallID, row.WallOffset)
 }
 
 func (s *Items) UpdateItem(ctx context.Context, in ItemUpdate) (Item, error) {
@@ -173,10 +183,13 @@ func (s *Items) UpdateItem(ctx context.Context, in ItemUpdate) (Item, error) {
 		X:         in.X,
 		Y:         in.Y,
 		Rotation:  in.Rotation,
-		StatusSet: in.StatusSet,
-		Status:    in.Status,
-		AttrsSet:  in.AttrsSet,
-		Attrs:     in.Attrs,
+		StatusSet:  in.StatusSet,
+		Status:     in.Status,
+		AttrsSet:   in.AttrsSet,
+		Attrs:      in.Attrs,
+		WallSet:    in.WallSet,
+		WallID:     uuidPtrValue(in.WallID),
+		WallOffset: floatPtrValue(in.WallOffset),
 	})
 	if err != nil {
 		return Item{}, err
@@ -191,7 +204,7 @@ func (s *Items) DeleteItem(ctx context.Context, id uuid.UUID) (int64, error) {
 	return s.q.DeleteItem(ctx, pgUUID(id))
 }
 
-func itemFromRow(id pgtype.UUID, typeKey, kind, name string, roomHash, roomName pgtype.Text, x, y, rotation float64, status pgtype.Text, attrs json.RawMessage) (Item, error) {
+func itemFromRow(id pgtype.UUID, typeKey, kind, name string, roomHash, roomName pgtype.Text, x, y, rotation float64, status pgtype.Text, attrs json.RawMessage, wallID pgtype.UUID, wallOffset pgtype.Float8) (Item, error) {
 	itemID, err := uuid.FromBytes(id.Bytes[:])
 	if err != nil {
 		return Item{}, err
@@ -206,8 +219,10 @@ func itemFromRow(id pgtype.UUID, typeKey, kind, name string, roomHash, roomName 
 		X:        x,
 		Y:        y,
 		Rotation: rotation,
-		Status:   fromPGText(status),
-		Attrs:    attrs,
+		Status:     fromPGText(status),
+		Attrs:      attrs,
+		WallID:     uuidPtrFromPG(wallID),
+		WallOffset: floatPtrFromPG(wallOffset),
 	}, nil
 }
 
@@ -224,6 +239,36 @@ func fromPGText(v pgtype.Text) *string {
 	}
 	s := v.String
 	return &s
+}
+
+func uuidPtrValue(v *uuid.UUID) pgtype.UUID {
+	if v == nil {
+		return pgtype.UUID{}
+	}
+	return pgtype.UUID{Bytes: [16]byte(*v), Valid: true}
+}
+
+func uuidPtrFromPG(v pgtype.UUID) *uuid.UUID {
+	if !v.Valid {
+		return nil
+	}
+	id := uuid.UUID(v.Bytes)
+	return &id
+}
+
+func floatPtrValue(v *float64) pgtype.Float8 {
+	if v == nil {
+		return pgtype.Float8{}
+	}
+	return pgtype.Float8{Float64: *v, Valid: true}
+}
+
+func floatPtrFromPG(v pgtype.Float8) *float64 {
+	if !v.Valid {
+		return nil
+	}
+	f := v.Float64
+	return &f
 }
 
 func pgUUID(id uuid.UUID) pgtype.UUID {

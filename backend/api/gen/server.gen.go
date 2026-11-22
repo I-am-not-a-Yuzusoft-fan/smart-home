@@ -163,6 +163,27 @@ func (e ItemTypeKind) Valid() bool {
 	}
 }
 
+// Defines values for ItemTypeMount.
+const (
+	ItemTypeMountCeiling ItemTypeMount = "ceiling"
+	ItemTypeMountFloor   ItemTypeMount = "floor"
+	ItemTypeMountWall    ItemTypeMount = "wall"
+)
+
+// Valid indicates whether the value is a known member of the ItemTypeMount enum.
+func (e ItemTypeMount) Valid() bool {
+	switch e {
+	case ItemTypeMountCeiling:
+		return true
+	case ItemTypeMountFloor:
+		return true
+	case ItemTypeMountWall:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ItemTypeInputKind.
 const (
 	ItemTypeInputKindDevice    ItemTypeInputKind = "device"
@@ -175,6 +196,48 @@ func (e ItemTypeInputKind) Valid() bool {
 	case ItemTypeInputKindDevice:
 		return true
 	case ItemTypeInputKindFurniture:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ItemTypeInputMount.
+const (
+	ItemTypeInputMountCeiling ItemTypeInputMount = "ceiling"
+	ItemTypeInputMountFloor   ItemTypeInputMount = "floor"
+	ItemTypeInputMountWall    ItemTypeInputMount = "wall"
+)
+
+// Valid indicates whether the value is a known member of the ItemTypeInputMount enum.
+func (e ItemTypeInputMount) Valid() bool {
+	switch e {
+	case ItemTypeInputMountCeiling:
+		return true
+	case ItemTypeInputMountFloor:
+		return true
+	case ItemTypeInputMountWall:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ItemTypeUpdateMount.
+const (
+	ItemTypeUpdateMountCeiling ItemTypeUpdateMount = "ceiling"
+	ItemTypeUpdateMountFloor   ItemTypeUpdateMount = "floor"
+	ItemTypeUpdateMountWall    ItemTypeUpdateMount = "wall"
+)
+
+// Valid indicates whether the value is a known member of the ItemTypeUpdateMount enum.
+func (e ItemTypeUpdateMount) Valid() bool {
+	switch e {
+	case ItemTypeUpdateMountCeiling:
+		return true
+	case ItemTypeUpdateMountFloor:
+		return true
+	case ItemTypeUpdateMountWall:
 		return true
 	default:
 		return false
@@ -196,6 +259,42 @@ func (e ItemUpdateStatus) Valid() bool {
 	case ItemUpdateStatusMaintenance:
 		return true
 	case ItemUpdateStatusNormal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OpeningKind.
+const (
+	OpeningKindDoor   OpeningKind = "door"
+	OpeningKindWindow OpeningKind = "window"
+)
+
+// Valid indicates whether the value is a known member of the OpeningKind enum.
+func (e OpeningKind) Valid() bool {
+	switch e {
+	case OpeningKindDoor:
+		return true
+	case OpeningKindWindow:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OpeningInputKind.
+const (
+	OpeningInputKindDoor   OpeningInputKind = "door"
+	OpeningInputKindWindow OpeningInputKind = "window"
+)
+
+// Valid indicates whether the value is a known member of the OpeningInputKind enum.
+func (e OpeningInputKind) Valid() bool {
+	switch e {
+	case OpeningInputKindDoor:
+		return true
+	case OpeningInputKindWindow:
 		return true
 	default:
 		return false
@@ -430,6 +529,12 @@ type Item struct {
 	Status  *ItemStatus `json:"status,omitempty"`
 	TypeKey string      `json:"typeKey"`
 
+	// WallId 挂在哪面墙上；落地物品省略
+	WallId *openapi_types.UUID `json:"wallId,omitempty"`
+
+	// WallOffset 距墙 A 端点的偏移（厘米）；挂墙时与 wallId 同时出现
+	WallOffset *float64 `json:"wallOffset,omitempty"`
+
 	// X 物品中心点的平面坐标 X（厘米）
 	X float64 `json:"x"`
 
@@ -453,8 +558,15 @@ type ItemInput struct {
 	Rotation *float64         `json:"rotation,omitempty"`
 	Status   *ItemInputStatus `json:"status,omitempty"`
 	TypeKey  string           `json:"typeKey"`
-	X        float64          `json:"x"`
-	Y        float64          `json:"y"`
+
+	// WallId 挂墙物品给出所在墙的 id。给了墙就以 `wallOffset` 定位，
+	// `x` / `y` / `rotation` 由服务端按墙算出来，传了也会被覆盖。
+	WallId *openapi_types.UUID `json:"wallId,omitempty"`
+
+	// WallOffset 挂墙时必填：距墙 A 端点的偏移（厘米）
+	WallOffset *float64 `json:"wallOffset,omitempty"`
+	X          float64  `json:"x"`
+	Y          float64  `json:"y"`
 }
 
 // ItemInputStatus defines model for ItemInput.Status.
@@ -482,11 +594,19 @@ type ItemType struct {
 	// Key 稳定标识，创建后不可重命名
 	Key  string       `json:"key"`
 	Kind ItemTypeKind `json:"kind"`
-	Name string       `json:"name"`
+
+	// Mount 默认挂在哪：`floor` 落地、`wall` 贴墙（需 `wallId` + `wallOffset` 定位）、
+	// `ceiling` 吸顶。窗帘、壁挂空调是 wall，吸顶灯是 ceiling。
+	Mount ItemTypeMount `json:"mount"`
+	Name  string        `json:"name"`
 }
 
 // ItemTypeKind defines model for ItemType.Kind.
 type ItemTypeKind string
+
+// ItemTypeMount 默认挂在哪：`floor` 落地、`wall` 贴墙（需 `wallId` + `wallOffset` 定位）、
+// `ceiling` 吸顶。窗帘、壁挂空调是 wall，吸顶灯是 ceiling。
+type ItemTypeMount string
 
 // ItemTypeInput defines model for ItemTypeInput.
 type ItemTypeInput struct {
@@ -499,11 +619,17 @@ type ItemTypeInput struct {
 	Icons *string           `json:"icons,omitempty"`
 	Key   string            `json:"key"`
 	Kind  ItemTypeInputKind `json:"kind"`
-	Name  string            `json:"name"`
+
+	// Mount 省略表示 floor
+	Mount *ItemTypeInputMount `json:"mount,omitempty"`
+	Name  string              `json:"name"`
 }
 
 // ItemTypeInputKind defines model for ItemTypeInput.Kind.
 type ItemTypeInputKind string
+
+// ItemTypeInputMount 省略表示 floor
+type ItemTypeInputMount string
 
 // ItemTypeUpdate 所有字段可选；capabilities 省略表示不修改能力结构。
 type ItemTypeUpdate struct {
@@ -519,9 +645,13 @@ type ItemTypeUpdate struct {
 	Driver *string `json:"driver,omitempty"`
 
 	// Icons 图标名（Lucide 命名空间内）；空串与不填等价，表示没有图标
-	Icons *string `json:"icons,omitempty"`
-	Name  *string `json:"name,omitempty"`
+	Icons *string              `json:"icons,omitempty"`
+	Mount *ItemTypeUpdateMount `json:"mount,omitempty"`
+	Name  *string              `json:"name,omitempty"`
 }
+
+// ItemTypeUpdateMount defines model for ItemTypeUpdate.Mount.
+type ItemTypeUpdateMount string
 
 // ItemUpdate 只更新出现的字段；roomHash 传空字符串表示移出房间。
 type ItemUpdate struct {
@@ -530,8 +660,14 @@ type ItemUpdate struct {
 	RoomHash *string                 `json:"roomHash,omitempty"`
 	Rotation *float64                `json:"rotation,omitempty"`
 	Status   *ItemUpdateStatus       `json:"status,omitempty"`
-	X        *float64                `json:"x,omitempty"`
-	Y        *float64                `json:"y,omitempty"`
+
+	// WallId 改成挂墙物品；空字符串表示脱离墙面、回到自由摆放
+	WallId *string `json:"wallId,omitempty"`
+
+	// WallOffset 与 wallId 一起给出；脱离墙面时忽略
+	WallOffset *float64 `json:"wallOffset,omitempty"`
+	X          *float64 `json:"x,omitempty"`
+	Y          *float64 `json:"y,omitempty"`
 }
 
 // ItemUpdateStatus defines model for ItemUpdate.Status.
@@ -545,12 +681,55 @@ type LoginRequest struct {
 	Username string `json:"username"`
 }
 
+// Opening defines model for Opening.
+type Opening struct {
+	Height float64            `json:"height"`
+	Id     openapi_types.UUID `json:"id"`
+	Kind   OpeningKind        `json:"kind"`
+
+	// Offset 距墙 A 端点的偏移（厘米）
+	Offset float64 `json:"offset"`
+
+	// Sill 离地高度（厘米）；门为 0
+	Sill   float64            `json:"sill"`
+	WallId openapi_types.UUID `json:"wallId"`
+	Width  float64            `json:"width"`
+}
+
+// OpeningKind defines model for Opening.Kind.
+type OpeningKind string
+
+// OpeningInput defines model for OpeningInput.
+type OpeningInput struct {
+	Height *float64           `json:"height,omitempty"`
+	Kind   OpeningInputKind   `json:"kind"`
+	Offset float64            `json:"offset"`
+	Sill   *float64           `json:"sill,omitempty"`
+	WallId openapi_types.UUID `json:"wallId"`
+	Width  float64            `json:"width"`
+}
+
+// OpeningInputKind defines model for OpeningInput.Kind.
+type OpeningInputKind string
+
+// OpeningPatch 只改出现的字段。
+type OpeningPatch struct {
+	Height *float64 `json:"height,omitempty"`
+	Offset *float64 `json:"offset,omitempty"`
+	Sill   *float64 `json:"sill,omitempty"`
+	Width  *float64 `json:"width,omitempty"`
+}
+
 // Plan defines model for Plan.
 type Plan struct {
 	Corners []Corner `json:"corners"`
 
 	// OpenWalls 没有参与任何闭合区域的墙数；大于 0 时前端提示「还有墙没围上」
 	OpenWalls int `json:"openWalls"`
+
+	// Openings 门与窗。和挂墙物品一样用「墙 + 沿墙偏移」定位，
+	// 墙移动或改长后偏移不变、世界坐标跟着墙走。
+	Openings []Opening `json:"openings"`
 
 	// Rooms 由墙的闭环推导出来的房间。前端只渲染，不自己推导。
 	// 墙没围成闭环时这里是空数组，`openWalls` 会给出提示依据。
@@ -718,6 +897,12 @@ type CreateItemJSONRequestBody = ItemInput
 // UpdateItemJSONRequestBody defines body for UpdateItem for application/json ContentType.
 type UpdateItemJSONRequestBody = ItemUpdate
 
+// CreateOpeningJSONRequestBody defines body for CreateOpening for application/json ContentType.
+type CreateOpeningJSONRequestBody = OpeningInput
+
+// UpdateOpeningJSONRequestBody defines body for UpdateOpening for application/json ContentType.
+type UpdateOpeningJSONRequestBody = OpeningPatch
+
 // ReplacePlanJSONRequestBody defines body for ReplacePlan for application/json ContentType.
 type ReplacePlanJSONRequestBody = PlanInput
 
@@ -768,6 +953,15 @@ type ServerInterface interface {
 	// UpdateItem 修改物品名称、房间、坐标、旋转或装饰属性
 	// (PATCH /api/items/{id})
 	UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// CreateOpening 在墙上开一个门或窗
+	// (POST /api/openings)
+	CreateOpening(w http.ResponseWriter, r *http.Request)
+	// DeleteOpening 删掉一个开口
+	// (DELETE /api/openings/{openingId})
+	DeleteOpening(w http.ResponseWriter, r *http.Request, openingId openapi_types.UUID)
+	// UpdateOpening 调整开口的位置或尺寸
+	// (PATCH /api/openings/{openingId})
+	UpdateOpening(w http.ResponseWriter, r *http.Request, openingId openapi_types.UUID)
 	// GetPlan 取当前户型（端点与墙）
 	// (GET /api/plan)
 	GetPlan(w http.ResponseWriter, r *http.Request)
@@ -864,6 +1058,24 @@ func (_ Unimplemented) DeleteItem(w http.ResponseWriter, r *http.Request, id ope
 // UpdateItem 修改物品名称、房间、坐标、旋转或装饰属性
 // (PATCH /api/items/{id})
 func (_ Unimplemented) UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// CreateOpening 在墙上开一个门或窗
+// (POST /api/openings)
+func (_ Unimplemented) CreateOpening(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// DeleteOpening 删掉一个开口
+// (DELETE /api/openings/{openingId})
+func (_ Unimplemented) DeleteOpening(w http.ResponseWriter, r *http.Request, openingId openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateOpening 调整开口的位置或尺寸
+// (PATCH /api/openings/{openingId})
+func (_ Unimplemented) UpdateOpening(w http.ResponseWriter, r *http.Request, openingId openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1179,6 +1391,72 @@ func (siw *ServerInterfaceWrapper) UpdateItem(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// CreateOpening operation middleware
+func (siw *ServerInterfaceWrapper) CreateOpening(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateOpening(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteOpening operation middleware
+func (siw *ServerInterfaceWrapper) DeleteOpening(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "openingId" -------------
+	var openingId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "openingId", chi.URLParam(r, "openingId"), &openingId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "openingId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteOpening(w, r, openingId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateOpening operation middleware
+func (siw *ServerInterfaceWrapper) UpdateOpening(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "openingId" -------------
+	var openingId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "openingId", chi.URLParam(r, "openingId"), &openingId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "openingId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateOpening(w, r, openingId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetPlan operation middleware
 func (siw *ServerInterfaceWrapper) GetPlan(w http.ResponseWriter, r *http.Request) {
 
@@ -1470,6 +1748,15 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/api/rooms/{hash}", wrapper.UpdateRoomName)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/openings", wrapper.CreateOpening)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/api/openings/{openingId}", wrapper.DeleteOpening)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/api/openings/{openingId}", wrapper.UpdateOpening)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/item-types", wrapper.ListItemTypes)

@@ -109,3 +109,55 @@ export function pointInPolygon(p: Pt, ring: Pt[]): boolean {
   }
   return inside
 }
+
+/** 带 id 的墙；挂墙物品与门窗都靠它把世界坐标换成「墙 + 沿墙偏移」。 */
+export type AnchoredWall = Seg & { id: string }
+
+export type WallAnchor = {
+  wallId: string
+  /** 距墙 A 端点的偏移（厘米） */
+  offset: number
+  /** 墙的朝向（度，屏幕坐标下顺时针为正） */
+  rotation: number
+  x: number
+  y: number
+  dist: number
+  length: number
+}
+
+/**
+ * 找离 (x,y) 最近的那面墙，并把落点投影成沿墙偏移。
+ *
+ * 挂墙物品的 x/y 是派生值：拖窗帘时前端只报「挂到哪面墙、离起点多远」，
+ * 坐标交给后端按墙算，这样墙一转，窗帘自动跟着转。
+ * maxDist 是宽容半径（屏幕像素 / 视口缩放），超出返回 null。
+ */
+export function nearestWallAnchor(
+  walls: AnchoredWall[],
+  x: number,
+  y: number,
+  maxDist = Infinity,
+): WallAnchor | null {
+  let best: WallAnchor | null = null
+  for (const wall of walls) {
+    const p = projectOnSegment(x, y, wall)
+    if (p.dist > maxDist) continue
+    if (best && p.dist >= best.dist) continue
+    const length = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay)
+    best = {
+      wallId: wall.id,
+      offset: p.t * length,
+      rotation: (Math.atan2(wall.by - wall.ay, wall.bx - wall.ax) * 180) / Math.PI,
+      x: p.x,
+      y: p.y,
+      dist: p.dist,
+      length,
+    }
+  }
+  return best
+}
+
+/** 沿墙偏移要夹在 [0, 墙长 - 物品宽] 之间，否则物品会一半悬在墙外。 */
+export function clampWallOffset(offset: number, width: number, length: number): number {
+  return clamp(offset, 0, Math.max(0, length - width))
+}

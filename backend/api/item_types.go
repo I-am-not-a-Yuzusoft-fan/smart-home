@@ -26,6 +26,8 @@ type ItemType struct {
 	Capabilities        []Capability
 	CapabilitiesVersion int
 	Driver              *string
+	// Mount 决定默认挂在哪：floor 落地、wall 贴墙、ceiling 吸顶。
+	Mount string
 }
 
 // Capability 是类型级能力定义。它没有值，值在 capability_state。
@@ -91,6 +93,8 @@ type ItemTypePatch struct {
 	Width    float64
 	DepthSet bool
 	Depth    float64
+	MountSet bool
+	Mount    string
 
 	CapabilitiesSet bool
 	Capabilities    []Capability
@@ -319,6 +323,10 @@ func itemTypeFromInput(in gen.ItemTypeInput) ItemType {
 	if in.DefaultDepth != nil {
 		depth = float64(*in.DefaultDepth)
 	}
+	mount := "floor"
+	if in.Mount != nil {
+		mount = string(*in.Mount)
+	}
 	capabilities := make([]Capability, 0, len(in.Capabilities))
 	for _, c := range in.Capabilities {
 		capabilities = append(capabilities, capabilityFromGen(c))
@@ -330,6 +338,7 @@ func itemTypeFromInput(in gen.ItemTypeInput) ItemType {
 		Icons:        in.Icons,
 		DefaultWidth: width,
 		DefaultDepth: depth,
+		Mount:        mount,
 		Capabilities: capabilities,
 		Driver:       in.Driver,
 	}
@@ -342,6 +351,9 @@ func applyItemTypeUpdate(existing ItemType, in gen.ItemTypeUpdate) ItemType {
 	}
 	if in.Icons != nil {
 		out.Icons = in.Icons
+	}
+	if in.Mount != nil {
+		out.Mount = string(*in.Mount)
 	}
 	if in.DefaultWidth != nil {
 		out.DefaultWidth = float64(*in.DefaultWidth)
@@ -382,6 +394,10 @@ func itemTypePatchFromGen(in gen.ItemTypeUpdate) ItemTypePatch {
 	if in.DefaultDepth != nil {
 		patch.DepthSet = true
 		patch.Depth = float64(*in.DefaultDepth)
+	}
+	if in.Mount != nil {
+		patch.MountSet = true
+		patch.Mount = string(*in.Mount)
 	}
 	if in.Capabilities != nil {
 		patch.CapabilitiesSet = true
@@ -455,6 +471,7 @@ func toGenItemType(in ItemType) gen.ItemType {
 		Icons:               in.Icons,
 		DefaultWidth:        in.DefaultWidth,
 		DefaultDepth:        in.DefaultDepth,
+		Mount:               gen.ItemTypeMount(in.Mount),
 		Capabilities:        capabilities,
 		CapabilitiesVersion: in.CapabilitiesVersion,
 		Driver:              in.Driver,
@@ -516,6 +533,9 @@ func validateItemType(in ItemType) (string, bool) {
 	}
 	if in.Kind == "furniture" && in.Driver != nil && *in.Driver != "" {
 		return "只有 device 类型可以设置 driver", false
+	}
+	if in.Mount != "floor" && in.Mount != "wall" && in.Mount != "ceiling" {
+		return "mount 只能是 floor、wall 或 ceiling", false
 	}
 
 	seen := make(map[string]bool, len(in.Capabilities))

@@ -276,6 +276,73 @@ paths:
           description: 已清除
         "401":
           $ref: "#/components/responses/Unauthenticated"
+  /api/openings:
+    post:
+      operationId: createOpening
+      summary: 在墙上开一个门或窗
+      description: |
+        开口用「墙 + 沿墙偏移」定位：`offset` 是距墙 A 端点的厘米数，
+        `offset + width` 不能超过墙长。`height` / `sill` 省略时按类型给默认值
+        （门 210/0，窗 120/90）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpeningInput"
+      responses:
+        "201":
+          description: 已创建，返回最新的整份户型
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/openings/{openingId}:
+    parameters:
+      - name: openingId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: updateOpening
+      summary: 调整开口的位置或尺寸
+      description: 只改出现的字段；`offset + width` 仍受墙长约束，越界返回 400。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpeningPatch"
+      responses:
+        "200":
+          description: 已保存，返回最新的整份户型
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteOpening
+      summary: 删掉一个开口
+      description: 幂等：本来就不存在也返回 204。
+      responses:
+        "204":
+          description: 已删除
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
   /api/item-types:
     get:
       operationId: listItemTypes
@@ -632,7 +699,7 @@ components:
           format: double
     Plan:
       type: object
-      required: [corners, walls, rooms, openWalls, staleRooms, version]
+      required: [corners, walls, openings, rooms, openWalls, staleRooms, version]
       properties:
         corners:
           type: array
@@ -642,6 +709,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Wall"
+        openings:
+          type: array
+          description: |
+            门与窗。和挂墙物品一样用「墙 + 沿墙偏移」定位，
+            墙移动或改长后偏移不变、世界坐标跟着墙走。
+          items:
+            $ref: "#/components/schemas/Opening"
         rooms:
           type: array
           description: |
@@ -836,9 +910,91 @@ components:
         history:
           type: boolean
           description: 值变化时是否写 state_history
+    Opening:
+      type: object
+      required: [id, wallId, kind, offset, width, height, sill]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        wallId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [door, window]
+        offset:
+          type: number
+          format: double
+          description: 距墙 A 端点的偏移（厘米）
+        width:
+          type: number
+          format: double
+        height:
+          type: number
+          format: double
+        sill:
+          type: number
+          format: double
+          description: 离地高度（厘米）；门为 0
+    OpeningInput:
+      type: object
+      required: [wallId, kind, offset, width]
+      additionalProperties: false
+      properties:
+        wallId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [door, window]
+        offset:
+          type: number
+          format: double
+          minimum: 0
+        width:
+          type: number
+          format: double
+          minimum: 10
+          maximum: 500
+        height:
+          type: number
+          format: double
+          minimum: 10
+          maximum: 500
+        sill:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 500
+    OpeningPatch:
+      type: object
+      additionalProperties: false
+      description: 只改出现的字段。
+      properties:
+        offset:
+          type: number
+          format: double
+          minimum: 0
+        width:
+          type: number
+          format: double
+          minimum: 10
+          maximum: 500
+        height:
+          type: number
+          format: double
+          minimum: 10
+          maximum: 500
+        sill:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 500
     ItemType:
       type: object
-      required: [key, kind, name, defaultWidth, defaultDepth, capabilities, capabilitiesVersion]
+      required: [key, kind, name, defaultWidth, defaultDepth, mount, capabilities, capabilitiesVersion]
       additionalProperties: false
       properties:
         key:
@@ -860,6 +1016,12 @@ components:
           type: number
           format: double
           description: 平面图默认深度（厘米）
+        mount:
+          type: string
+          enum: [floor, wall, ceiling]
+          description: |
+            默认挂在哪：`floor` 落地、`wall` 贴墙（需 `wallId` + `wallOffset` 定位）、
+            `ceiling` 吸顶。窗帘、壁挂空调是 wall，吸顶灯是 ceiling。
         capabilities:
           type: array
           items:
@@ -898,6 +1060,10 @@ components:
           format: double
           minimum: 1
           maximum: 5000
+        mount:
+          type: string
+          enum: [floor, wall, ceiling]
+          description: 省略表示 floor
         capabilities:
           type: array
           items:
@@ -930,6 +1096,9 @@ components:
           format: double
           minimum: 1
           maximum: 5000
+        mount:
+          type: string
+          enum: [floor, wall, ceiling]
         capabilities:
           type: array
           items:
@@ -982,6 +1151,14 @@ components:
         attrs:
           type: object
           additionalProperties: true
+        wallId:
+          type: string
+          format: uuid
+          description: 挂在哪面墙上；落地物品省略
+        wallOffset:
+          type: number
+          format: double
+          description: 距墙 A 端点的偏移（厘米）；挂墙时与 wallId 同时出现
     ItemInput:
       type: object
       required: [typeKey, name, x, y]
@@ -1015,6 +1192,17 @@ components:
         attrs:
           type: object
           additionalProperties: true
+        wallId:
+          type: string
+          format: uuid
+          description: |
+            挂墙物品给出所在墙的 id。给了墙就以 `wallOffset` 定位，
+            `x` / `y` / `rotation` 由服务端按墙算出来，传了也会被覆盖。
+        wallOffset:
+          type: number
+          format: double
+          minimum: 0
+          description: 挂墙时必填：距墙 A 端点的偏移（厘米）
     ItemUpdate:
       type: object
       additionalProperties: false
@@ -1045,6 +1233,14 @@ components:
         attrs:
           type: object
           additionalProperties: true
+        wallId:
+          type: string
+          description: 改成挂墙物品；空字符串表示脱离墙面、回到自由摆放
+        wallOffset:
+          type: number
+          format: double
+          minimum: 0
+          description: 与 wallId 一起给出；脱离墙面时忽略
     Error:
       type: object
       required: [error]

@@ -31,7 +31,7 @@ func (p *PGItemTypes) ListItemTypes(ctx context.Context) ([]ItemType, error) {
 	}
 	out := make([]ItemType, 0, len(rows))
 	for _, row := range rows {
-		typ, err := itemTypeFromRow(row.Key, row.Kind, row.Name, row.Icons, row.DefaultWidth, row.DefaultDepth, row.Capabilities, row.CapabilitiesVersion, row.Driver)
+		typ, err := itemTypeFromRow(row.Key, row.Kind, row.Name, row.Icons, row.DefaultWidth, row.DefaultDepth, row.Mount, row.Capabilities, row.CapabilitiesVersion, row.Driver)
 		if err != nil {
 			return nil, err
 		}
@@ -48,7 +48,7 @@ func (p *PGItemTypes) GetItemType(ctx context.Context, key string) (ItemType, er
 	if err != nil {
 		return ItemType{}, err
 	}
-	return itemTypeFromRow(row.Key, row.Kind, row.Name, row.Icons, row.DefaultWidth, row.DefaultDepth, row.Capabilities, row.CapabilitiesVersion, row.Driver)
+	return itemTypeFromRow(row.Key, row.Kind, row.Name, row.Icons, row.DefaultWidth, row.DefaultDepth, row.Mount, row.Capabilities, row.CapabilitiesVersion, row.Driver)
 }
 
 func (p *PGItemTypes) CreateItemType(ctx context.Context, in ItemType) (ItemType, error) {
@@ -65,6 +65,7 @@ func (p *PGItemTypes) CreateItemType(ctx context.Context, in ItemType) (ItemType
 		DefaultDepth: in.DefaultDepth,
 		Capabilities: capabilities,
 		Driver:       toPGText(in.Driver),
+		Mount:        toPGText(&in.Mount),
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -73,7 +74,7 @@ func (p *PGItemTypes) CreateItemType(ctx context.Context, in ItemType) (ItemType
 		}
 		return ItemType{}, err
 	}
-	return itemTypeFromRow(row.Key, row.Kind, row.Name, row.Icons, row.DefaultWidth, row.DefaultDepth, row.Capabilities, row.CapabilitiesVersion, row.Driver)
+	return itemTypeFromRow(row.Key, row.Kind, row.Name, row.Icons, row.DefaultWidth, row.DefaultDepth, row.Mount, row.Capabilities, row.CapabilitiesVersion, row.Driver)
 }
 
 func (p *PGItemTypes) UpdateItemType(ctx context.Context, key string, patch ItemTypePatch) (ItemType, error) {
@@ -99,6 +100,8 @@ func (p *PGItemTypes) UpdateItemType(ctx context.Context, key string, patch Item
 		Capabilities:    capabilities,
 		DriverSet:       patch.DriverSet,
 		Driver:          patch.Driver,
+		MountSet:        patch.MountSet,
+		Mount:           toPGText(&patch.Mount),
 		VersionSet:      patch.VersionSet,
 		ExpectedVersion: int32(patch.ExpectedVersion),
 	})
@@ -111,7 +114,7 @@ func (p *PGItemTypes) UpdateItemType(ctx context.Context, key string, patch Item
 	if err != nil {
 		return ItemType{}, err
 	}
-	return itemTypeFromRow(row.Key, row.Kind, row.Name, row.Icons, row.DefaultWidth, row.DefaultDepth, row.Capabilities, row.CapabilitiesVersion, row.Driver)
+	return itemTypeFromRow(row.Key, row.Kind, row.Name, row.Icons, row.DefaultWidth, row.DefaultDepth, row.Mount, row.Capabilities, row.CapabilitiesVersion, row.Driver)
 }
 
 func (p *PGItemTypes) DeleteItemType(ctx context.Context, key string) (int64, error) {
@@ -127,7 +130,7 @@ func (p *PGItemTypes) CountItemsByType(ctx context.Context, key string) (int64, 
 	return p.queries.CountItemsByType(ctx, key)
 }
 
-func itemTypeFromRow(key, kind, name string, icons pgtype.Text, width, depth float64, rawCapabilities json.RawMessage, version int32, driver pgtype.Text) (ItemType, error) {
+func itemTypeFromRow(key, kind, name string, icons pgtype.Text, width, depth float64, mount string, rawCapabilities json.RawMessage, version int32, driver pgtype.Text) (ItemType, error) {
 	capabilities := make([]Capability, 0)
 	if len(rawCapabilities) > 0 && string(rawCapabilities) != "null" {
 		if err := json.Unmarshal(rawCapabilities, &capabilities); err != nil {
@@ -141,6 +144,7 @@ func itemTypeFromRow(key, kind, name string, icons pgtype.Text, width, depth flo
 		Icons:               fromPGText(icons),
 		DefaultWidth:        width,
 		DefaultDepth:        depth,
+		Mount:               mount,
 		Capabilities:        capabilities,
 		CapabilitiesVersion: int(version),
 		Driver:              fromPGText(driver),

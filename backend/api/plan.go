@@ -48,10 +48,47 @@ type WallInput struct {
 	Thickness float64
 }
 
+// PlanOpening 是一个门或窗。和挂墙物品一样用「墙 + 沿墙偏移」定位，
+// 墙被拖动或改长后偏移不变、世界坐标跟着墙走。
+type PlanOpening struct {
+	ID     openapi_types.UUID
+	WallID openapi_types.UUID
+	Kind   string
+	Offset float64
+	Width  float64
+	Height float64
+	Sill   float64
+}
+
+// OpeningInput 是开门/开窗的输入；Height、Sill 省略时按类型给默认值。
+type OpeningInput struct {
+	WallID openapi_types.UUID
+	Kind   string
+	Offset float64
+	Width  float64
+	Height *float64
+	Sill   *float64
+}
+
+// OpeningPatchInput 是逐字段 PATCH 的输入。
+type OpeningPatchInput struct {
+	OffsetSet bool
+	Offset    float64
+	WidthSet  bool
+	Width     float64
+	HeightSet bool
+	Height    float64
+	SillSet   bool
+	Sill      float64
+}
+
 // 改墙时的两种失败：墙不存在、改完与别的墙重合。
 var (
 	ErrWallNotFound = errors.New("墙不存在")
 	ErrWallConflict = errors.New("改完与另一面墙重合")
+	// ErrOpeningNotFound 开口不存在；ErrOpeningTooWide 开口超出墙长。
+	ErrOpeningNotFound = errors.New("开口不存在")
+	ErrOpeningTooWide  = errors.New("开口超出墙的范围")
 	// ErrPlanConflict 版本号过期：别处已经改过这份户型。
 	ErrPlanConflict = errors.New("plan version conflict")
 )
@@ -90,6 +127,36 @@ type PlanStore interface {
 	UpsertRoomName(ctx context.Context, hash, name, kind string) error
 	// DeleteRoomName 清掉某个哈希上的名字；本来就没有也返回 0，不算错。
 	DeleteRoomName(ctx context.Context, hash string) (int64, error)
+	// LoadOpenings 读全部门窗，随 Plan 一次返回，前端不必再发一次请求。
+	LoadOpenings(ctx context.Context) ([]PlanOpening, error)
+	// GetWall 读单面墙的端点：挂墙物品与门窗换算位置时要用。
+	GetWall(ctx context.Context, id openapi_types.UUID) (PlanWall, error)
+	CreateOpening(ctx context.Context, in OpeningInput) (openapi_types.UUID, error)
+	UpdateOpening(ctx context.Context, id openapi_types.UUID, in OpeningPatchInput) error
+	DeleteOpening(ctx context.Context, id openapi_types.UUID) (int64, error)
+}
+
+// placeOnWall 把「沿墙偏移」换算成世界坐标与朝向，并把偏移夹进墙内。
+// 物品/开口比墙还宽时偏移取 0——宁可压在墙上，也不要跑到墙外。
+func placeOnWall(w PlanWall, offset, width float64) (x, y, rotation, clamped float64) {
+	dx, dy := w.BX-w.AX, w.BY-w.AY
+	length := math.Hypot(dx, dy)
+	if length == 0 {
+		return w.AX, w.AY, 0, 0
+	}
+	maxOffset := math.Max(0, length-width)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	ux, uy := dx/length, dy/length
+	x = w.AX + ux*offset
+	y = w.AY + uy*offset
+	// atan2 在屏幕坐标系（y 向下）里正好是顺时针为正，与 rotation 的约定一致。
+	rotation = math.Atan2(dy, dx) * 180 / math.Pi
+	return x, y, rotation, offset
 }
 
 // roomGoneMessage 是房间哈希对不上时的统一文案：墙改过、别人改过、页面太旧，
@@ -215,6 +282,102 @@ func (s *Server) DeleteWall(w http.ResponseWriter, r *http.Request, wallID opena
 }
 
 // readPlan 读一次全量户型并投影成契约里的形状。
+// CreateOpening 在墙上开一个门或窗。
+func (s *Server) CreateOpening(w http.ResponseWriter, r *http.Request) {
+	var body gen.OpeningInput
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	kind := string(body.Kind)
+	if kind != "door" && kind != "window" {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "kind 只能是 door 或 window")
+		return
+	}
+	if body.Width < 10 || body.Width > 500 {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "开口宽度必须在 10–500 厘米之间")
+		return
+	}
+	if body.Height != nil && (*body.Height < 10 || *body.Height > 500) {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "开口高度必须在 10–500 厘米之间")
+		return
+	}
+	_, err := s.plan.CreateOpening(r.Context(), OpeningInput{
+		WallID: body.WallId,
+		Kind:   kind,
+		Offset: body.Offset,
+		Width:  body.Width,
+		Height: body.Height,
+		Sill:   body.Sill,
+	})
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrWallNotFound):
+		writeError(w, http.StatusNotFound, gen.NOTFOUND, "没有这面墙")
+		return
+	case errors.Is(err, ErrOpeningTooWide):
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "开口超出了这面墙的范围")
+		return
+	default:
+		s.log.Error("开洞失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "保存失败")
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	plan, err := s.readPlan(r.Context())
+	if err != nil {
+		s.log.Error("读取户型失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取户型失败")
+		return
+	}
+	writeJSON(w, http.StatusCreated, plan)
+}
+
+// UpdateOpening 调整开口的位置或尺寸。
+func (s *Server) UpdateOpening(w http.ResponseWriter, r *http.Request, openingID openapi_types.UUID) {
+	var body gen.OpeningPatch
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	in := OpeningPatchInput{}
+	if body.Offset != nil {
+		in.OffsetSet, in.Offset = true, float64(*body.Offset)
+	}
+	if body.Width != nil {
+		in.WidthSet, in.Width = true, float64(*body.Width)
+	}
+	if body.Height != nil {
+		in.HeightSet, in.Height = true, float64(*body.Height)
+	}
+	if body.Sill != nil {
+		in.SillSet, in.Sill = true, float64(*body.Sill)
+	}
+	err := s.plan.UpdateOpening(r.Context(), openingID, in)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrOpeningNotFound):
+		writeError(w, http.StatusNotFound, gen.NOTFOUND, "开口不存在")
+		return
+	case errors.Is(err, ErrOpeningTooWide):
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "开口超出了这面墙的范围")
+		return
+	default:
+		s.log.Error("改开口失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "保存失败")
+		return
+	}
+	s.writePlan(w, r)
+}
+
+// DeleteOpening 删掉一个开口，幂等。
+func (s *Server) DeleteOpening(w http.ResponseWriter, r *http.Request, openingID openapi_types.UUID) {
+	if _, err := s.plan.DeleteOpening(r.Context(), openingID); err != nil {
+		s.log.Error("删开口失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "删除失败")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 	corners, walls, err := s.plan.LoadPlan(ctx)
 	if err != nil {
@@ -270,6 +433,23 @@ func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 		plan.Rooms = append(plan.Rooms, room)
 	}
 	plan.OpenWalls = derived.OpenWalls
+
+	openings, err := s.plan.LoadOpenings(ctx)
+	if err != nil {
+		return gen.Plan{}, err
+	}
+	plan.Openings = make([]gen.Opening, 0, len(openings))
+	for _, o := range openings {
+		plan.Openings = append(plan.Openings, gen.Opening{
+			Id:     o.ID,
+			WallId: o.WallID,
+			Kind:   gen.OpeningKind(o.Kind),
+			Offset: o.Offset,
+			Width:  o.Width,
+			Height: o.Height,
+			Sill:   o.Sill,
+		})
+	}
 
 	// 失配的名字：墙改过之后哈希变了，旧名字不该悄悄消失，也不能自动挂到
 	// 形状不同的房间上——单列出来让用户自己决定重命名还是清掉。

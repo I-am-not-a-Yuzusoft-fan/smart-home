@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -23,8 +24,10 @@ type itemResponse struct {
 	X        float64        `json:"x"`
 	Y        float64        `json:"y"`
 	Rotation float64        `json:"rotation"`
-	Status   *string        `json:"status"`
-	Attrs    map[string]any `json:"attrs"`
+	Status     *string        `json:"status"`
+	Attrs      map[string]any `json:"attrs"`
+	WallID     *string        `json:"wallId"`
+	WallOffset *float64       `json:"wallOffset"`
 }
 
 func listItems(t *testing.T, h http.Handler, cookie *http.Cookie, query string) []itemResponse {
@@ -303,5 +306,119 @@ func TestFurnitureKeepsStatus(t *testing.T) {
 	w := do(t, h, http.MethodPatch, "/api/items/"+item.ID, `{"status":"maintenance"}`, admin)
 	if w.Code != http.StatusOK {
 		t.Fatalf("家具改 status 应 200，实际 %d：%s", w.Code, w.Body.String())
+	}
+}
+
+// 挂墙物品的坐标是派生的：贴着墙、随墙转、随墙挪，脱离后回到自由摆放。
+func TestWallMountedItemFollowsWall(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	_, walls := rectPlan(t, h, admin, 4000, 4000, 400)
+	defer cleanupRoom(t, testPool(t), h, admin, "", walls)
+	wallID := walls[0] // (4000,4000) → (4400,4000)
+
+	created := createItem(t, h, admin, fmt.Sprintf(
+		`{"typeKey":"curtain","name":"测试窗帘","roomHash":null,"x":0,"y":0,"wallId":%q,"wallOffset":120}`, wallID))
+	if created.WallID == nil || *created.WallID != wallID {
+		t.Fatalf("窗帘应记下 wallId，实际 %+v", created)
+	}
+	if created.WallOffset == nil || *created.WallOffset != 120 {
+		t.Fatalf("窗帘的 wallOffset 应为 120，实际 %+v", created.WallOffset)
+	}
+	if created.X != 4120 || created.Y != 4000 {
+		t.Fatalf("贴墙后坐标应由墙算出 (4120,4000)，实际 (%.1f,%.1f)", created.X, created.Y)
+	}
+
+	// 挂墙物品不能直接改坐标
+	res := do(t, h, http.MethodPatch, "/api/items/"+created.ID, `{"x":100}`, admin)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("直接改挂墙物品坐标应 400，实际 %d：%s", res.Code, res.Body.String())
+	}
+
+	// 墙转 90° → 物品跟着转、跟到新位置
+	res = do(t, h, http.MethodPatch, "/api/walls/"+wallID,
+		`{"ax":4000,"ay":4000,"bx":4000,"by":4350,"thickness":10}`, admin)
+	if res.Code != http.StatusOK {
+		t.Fatalf("转墙应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+	items := listItems(t, h, admin, "")
+	var got *itemResponse
+	for i := range items {
+		if items[i].ID == created.ID {
+			got = &items[i]
+		}
+	}
+	if got == nil {
+		t.Fatal("转墙后物品不见了")
+	}
+	if got.X != 4000 || got.Y != 4120 || got.Rotation != 90 {
+		t.Fatalf("转墙后物品应在 (4000,4120)、转 90°，实际 (%.1f,%.1f) %.0f°", got.X, got.Y, got.Rotation)
+	}
+
+	// 沿墙移动只改 wallOffset
+	res = do(t, h, http.MethodPatch, "/api/items/"+created.ID, `{"wallOffset":60}`, admin)
+	if res.Code != http.StatusOK {
+		t.Fatalf("改 wallOffset 应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+	var moved itemResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &moved); err != nil {
+		t.Fatalf("改 wallOffset 响应不是 JSON：%v", err)
+	}
+	if moved.X != 4000 || moved.Y != 4060 {
+		t.Fatalf("wallOffset 60 时应在 (4000,4060)，实际 (%.1f,%.1f)", moved.X, moved.Y)
+	}
+
+	// 空串 = 脱离墙面，位置保持不变
+	res = do(t, h, http.MethodPatch, "/api/items/"+created.ID, `{"wallId":""}`, admin)
+	if res.Code != http.StatusOK {
+		t.Fatalf("脱离墙面应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+	var detached itemResponse
+	if err := json.Unmarshal(res.Body.Bytes(), &detached); err != nil {
+		t.Fatalf("脱离响应不是 JSON：%v", err)
+	}
+	if detached.WallID != nil || detached.WallOffset != nil {
+		t.Fatalf("脱离后不应再有 wallId/wallOffset：%+v", detached)
+	}
+	if detached.X != 4000 || detached.Y != 4060 {
+		t.Fatalf("脱离时位置应保持 (4000,4060)，实际 (%.1f,%.1f)", detached.X, detached.Y)
+	}
+	// 自由摆放后又能直接改坐标了
+	res = do(t, h, http.MethodPatch, "/api/items/"+created.ID, `{"x":4100,"y":4100}`, admin)
+	if res.Code != http.StatusOK {
+		t.Fatalf("脱离后改坐标应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/items/"+created.ID, "", admin) })
+}
+
+// 删墙时挂在上面的物品跟着删，库里不会留下指向不存在墙的孤儿行。
+func TestDeleteWallCascadesMountedItems(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+	_, walls := rectPlan(t, h, admin, 4400, 4400, 400)
+	defer cleanupRoom(t, testPool(t), h, admin, "", walls[1:])
+	wallID := walls[0]
+
+	created := createItem(t, h, admin, fmt.Sprintf(
+		`{"typeKey":"curtain","name":"级联窗帘","roomHash":null,"x":0,"y":0,"wallId":%q,"wallOffset":50}`, wallID))
+
+	res := do(t, h, http.MethodDelete, "/api/walls/"+wallID, "", admin)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("删墙应 204，实际 %d：%s", res.Code, res.Body.String())
+	}
+	for _, item := range listItems(t, h, admin, "") {
+		if item.ID == created.ID {
+			t.Fatalf("删墙后挂墙物品应一并删除，实际还在：%+v", item)
+		}
+	}
+
+	pool := testPool(t)
+	var orphans int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM item WHERE wall_id IS NOT NULL AND wall_offset IS NULL`).Scan(&orphans); err != nil {
+		t.Fatalf("查孤儿行失败：%v", err)
+	}
+	if orphans != 0 {
+		t.Fatalf("不应存在 wall_id 有值但 wall_offset 为空的行，实际 %d", orphans)
 	}
 }

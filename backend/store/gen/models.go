@@ -64,10 +64,12 @@ type Item struct {
 	Y        float64     `json:"y"`
 	Rotation float64     `json:"rotation"`
 	// 仅家具使用（正常/闲置/维修）；设备不读此列，避免第二份真相
-	Status    pgtype.Text        `json:"status"`
-	Attrs     json.RawMessage    `json:"attrs"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Status     pgtype.Text        `json:"status"`
+	Attrs      json.RawMessage    `json:"attrs"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	WallID     pgtype.UUID        `json:"wall_id"`
+	WallOffset pgtype.Float8      `json:"wall_offset"`
 }
 
 // 类型模板：capabilities 是能力元数据数组，同时驱动前端表单、后端校验、模拟器行为、图标映射
@@ -83,6 +85,7 @@ type ItemType struct {
 	Driver              pgtype.Text        `json:"driver"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	Mount               string             `json:"mount"`
 }
 
 // 场景：definition 是步骤树的整棵树 JSONB（编辑器保存/撤销/复制都是一次写）

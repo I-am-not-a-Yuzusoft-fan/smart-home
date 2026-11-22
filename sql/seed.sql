@@ -45,6 +45,10 @@ INSERT INTO item_type (key, kind, name, icons, default_width, default_depth, cap
   ('door_sensor', 'device', '门磁', 'sensor', 6, 6,
    '[{"key":"open","name":"开合","type":"bool","writable":false,"history":true,"default":false}]'::jsonb, 'simulator');
 
+-- 挂墙与吸顶：mount 决定物品默认贴在哪面（0002 引入），其余类型落地。
+UPDATE item_type SET mount = 'wall' WHERE key = 'curtain';
+UPDATE item_type SET mount = 'ceiling' WHERE key = 'ceiling_light';
+
 -- 平面图：一个 400×300 cm 的闭合矩形（客厅），墙端点被相邻墙共享
 INSERT INTO corner (id, x, y) VALUES
   ('00000000-0000-4000-8000-000000000101',   0,   0),
@@ -67,15 +71,15 @@ INSERT INTO room_name (polygon_hash, name, kind) VALUES
   ('2a6c15cc655eea79', '客厅', 'living');
 
 -- 物品：家具与设备同表；坐标为平面坐标（cm）
-INSERT INTO item (id, type_key, name, room_hash, x, y, rotation) VALUES
-  ('00000000-0000-4000-8000-000000000301', 'ceiling_light', '客厅主灯', '2a6c15cc655eea79', 200, 150, 0),
-  ('00000000-0000-4000-8000-000000000302', 'ac',            '客厅空调', '2a6c15cc655eea79', 260,  20, 0),
-  ('00000000-0000-4000-8000-000000000303', 'curtain',       '客厅窗帘', '2a6c15cc655eea79', 200, 290, 0),
-  ('00000000-0000-4000-8000-000000000304', 'sensor_th',     '客厅温湿度', '2a6c15cc655eea79', 380, 250, 0),
-  ('00000000-0000-4000-8000-000000000305', 'sensor_lux',    '客厅光照',  '2a6c15cc655eea79', 380, 150, 0),
-  ('00000000-0000-4000-8000-000000000306', 'sensor_pir',    '客厅人体',  '2a6c15cc655eea79', 200,  40, 0),
-  ('00000000-0000-4000-8000-000000000401', 'sofa',          '三人沙发',  '2a6c15cc655eea79', 120, 120, 0),
-  ('00000000-0000-4000-8000-000000000402', 'table',         '茶几',      '2a6c15cc655eea79', 120, 200, 0)
+INSERT INTO item (id, type_key, name, room_hash, x, y, rotation, wall_id, wall_offset) VALUES
+  ('00000000-0000-4000-8000-000000000301', 'ceiling_light', '客厅主灯', '2a6c15cc655eea79', 200, 150, 0, NULL, NULL),
+  ('00000000-0000-4000-8000-000000000302', 'ac',            '客厅空调', '2a6c15cc655eea79', 260,  20, 0, NULL, NULL),
+  ('00000000-0000-4000-8000-000000000303', 'curtain',       '客厅窗帘', '2a6c15cc655eea79', 200, 300, 180, '00000000-0000-4000-8000-000000000203', 200),
+  ('00000000-0000-4000-8000-000000000304', 'sensor_th',     '客厅温湿度', '2a6c15cc655eea79', 380, 250, 0, NULL, NULL),
+  ('00000000-0000-4000-8000-000000000305', 'sensor_lux',    '客厅光照',  '2a6c15cc655eea79', 380, 150, 0, NULL, NULL),
+  ('00000000-0000-4000-8000-000000000306', 'sensor_pir',    '客厅人体',  '2a6c15cc655eea79', 200,  40, 0, NULL, NULL),
+  ('00000000-0000-4000-8000-000000000401', 'sofa',          '三人沙发',  '2a6c15cc655eea79', 120, 120, 0, NULL, NULL),
+  ('00000000-0000-4000-8000-000000000402', 'table',         '茶几',      '2a6c15cc655eea79', 120, 200, 0, NULL, NULL)
 ON CONFLICT (id) DO NOTHING;
 
 -- 初始状态：设备当前值与只读传感器的读数

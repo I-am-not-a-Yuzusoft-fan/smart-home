@@ -114,3 +114,59 @@ SET name = EXCLUDED.name,
 
 -- name: DeleteRoomName :execrows
 DELETE FROM room_name WHERE polygon_hash = $1;
+
+-- name: ListOpenings :many
+-- 开口用「墙 + 沿墙偏移」定位；渲染时前端按墙角度换算到世界坐标。
+SELECT o.id, o.wall_id, o.kind, o."offset", o.width, o.height, o.sill
+FROM opening o
+ORDER BY o.wall_id, o."offset", o.id;
+
+-- name: GetOpening :one
+SELECT o.id, o.wall_id, o.kind, o."offset", o.width, o.height, o.sill
+FROM opening o
+WHERE o.id = $1;
+
+-- name: InsertOpening :one
+INSERT INTO opening (wall_id, kind, "offset", width, height, sill)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id;
+
+-- name: UpdateOpening :execrows
+UPDATE opening
+SET "offset" = $2, width = $3, height = $4, sill = $5
+WHERE id = $1;
+
+-- name: DeleteOpening :execrows
+DELETE FROM opening WHERE id = $1;
+
+-- name: GetWallByID :one
+-- 单个墙的端点坐标：挂墙物品与门窗换算位置时要用。
+SELECT w.id, w.a, w.b, w.thickness,
+       ca.x AS ax, ca.y AS ay, cb.x AS bx, cb.y AS by
+FROM wall w
+JOIN corner ca ON ca.id = w.a
+JOIN corner cb ON cb.id = w.b
+WHERE w.id = $1;
+
+-- name: ListItemsOnWall :many
+-- 改墙后要重算位置与朝向：带上物品宽度，偏移超出新墙长时才好夹住。
+SELECT i.id, i.wall_offset, t.default_width
+FROM item i
+JOIN item_type t ON t.key = i.type_key
+WHERE i.wall_id = $1
+ORDER BY i.created_at, i.id;
+
+-- name: UpdateItemPlacement :exec
+UPDATE item
+SET x = $2, y = $3, rotation = $4, wall_offset = $5, updated_at = now()
+WHERE id = $1;
+
+-- name: ListOpeningsOnWall :many
+-- 墙改长之后开口要夹回墙内，否则门会一半悬在墙外。
+SELECT id, "offset", width
+FROM opening
+WHERE wall_id = $1
+ORDER BY "offset", id;
+
+-- name: UpdateOpeningOffset :exec
+UPDATE opening SET "offset" = $2 WHERE id = $1;

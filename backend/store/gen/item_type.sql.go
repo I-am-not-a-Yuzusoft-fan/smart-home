@@ -57,7 +57,7 @@ func (q *Queries) DeleteItemType(ctx context.Context, key string) (int64, error)
 }
 
 const getItemType = `-- name: GetItemType :one
-SELECT key, kind, name, icons, default_width, default_depth,
+SELECT key, kind, name, icons, default_width, default_depth, mount,
        capabilities, capabilities_version, driver
 FROM item_type
 WHERE key = $1
@@ -70,6 +70,7 @@ type GetItemTypeRow struct {
 	Icons               pgtype.Text     `json:"icons"`
 	DefaultWidth        float64         `json:"default_width"`
 	DefaultDepth        float64         `json:"default_depth"`
+	Mount               string          `json:"mount"`
 	Capabilities        json.RawMessage `json:"capabilities"`
 	CapabilitiesVersion int32           `json:"capabilities_version"`
 	Driver              pgtype.Text     `json:"driver"`
@@ -85,6 +86,7 @@ func (q *Queries) GetItemType(ctx context.Context, key string) (GetItemTypeRow, 
 		&i.Icons,
 		&i.DefaultWidth,
 		&i.DefaultDepth,
+		&i.Mount,
 		&i.Capabilities,
 		&i.CapabilitiesVersion,
 		&i.Driver,
@@ -94,9 +96,9 @@ func (q *Queries) GetItemType(ctx context.Context, key string) (GetItemTypeRow, 
 
 const insertItemType = `-- name: InsertItemType :one
 INSERT INTO item_type (key, kind, name, icons, default_width, default_depth,
-                       capabilities, capabilities_version, driver)
-VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8)
-RETURNING key, kind, name, icons, default_width, default_depth,
+                       capabilities, capabilities_version, driver, mount)
+VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, COALESCE($9::text, 'floor'))
+RETURNING key, kind, name, icons, default_width, default_depth, mount,
           capabilities, capabilities_version, driver
 `
 
@@ -109,6 +111,7 @@ type InsertItemTypeParams struct {
 	DefaultDepth float64         `json:"default_depth"`
 	Capabilities json.RawMessage `json:"capabilities"`
 	Driver       pgtype.Text     `json:"driver"`
+	Mount        pgtype.Text     `json:"mount"`
 }
 
 type InsertItemTypeRow struct {
@@ -118,6 +121,7 @@ type InsertItemTypeRow struct {
 	Icons               pgtype.Text     `json:"icons"`
 	DefaultWidth        float64         `json:"default_width"`
 	DefaultDepth        float64         `json:"default_depth"`
+	Mount               string          `json:"mount"`
 	Capabilities        json.RawMessage `json:"capabilities"`
 	CapabilitiesVersion int32           `json:"capabilities_version"`
 	Driver              pgtype.Text     `json:"driver"`
@@ -133,6 +137,7 @@ func (q *Queries) InsertItemType(ctx context.Context, arg InsertItemTypeParams) 
 		arg.DefaultDepth,
 		arg.Capabilities,
 		arg.Driver,
+		arg.Mount,
 	)
 	var i InsertItemTypeRow
 	err := row.Scan(
@@ -142,6 +147,7 @@ func (q *Queries) InsertItemType(ctx context.Context, arg InsertItemTypeParams) 
 		&i.Icons,
 		&i.DefaultWidth,
 		&i.DefaultDepth,
+		&i.Mount,
 		&i.Capabilities,
 		&i.CapabilitiesVersion,
 		&i.Driver,
@@ -150,7 +156,7 @@ func (q *Queries) InsertItemType(ctx context.Context, arg InsertItemTypeParams) 
 }
 
 const listItemTypes = `-- name: ListItemTypes :many
-SELECT key, kind, name, icons, default_width, default_depth,
+SELECT key, kind, name, icons, default_width, default_depth, mount,
        capabilities, capabilities_version, driver
 FROM item_type
 ORDER BY kind, key
@@ -163,6 +169,7 @@ type ListItemTypesRow struct {
 	Icons               pgtype.Text     `json:"icons"`
 	DefaultWidth        float64         `json:"default_width"`
 	DefaultDepth        float64         `json:"default_depth"`
+	Mount               string          `json:"mount"`
 	Capabilities        json.RawMessage `json:"capabilities"`
 	CapabilitiesVersion int32           `json:"capabilities_version"`
 	Driver              pgtype.Text     `json:"driver"`
@@ -184,6 +191,7 @@ func (q *Queries) ListItemTypes(ctx context.Context) ([]ListItemTypesRow, error)
 			&i.Icons,
 			&i.DefaultWidth,
 			&i.DefaultDepth,
+			&i.Mount,
 			&i.Capabilities,
 			&i.CapabilitiesVersion,
 			&i.Driver,
@@ -215,11 +223,13 @@ SET name = CASE WHEN $1::boolean THEN $2::text ELSE name END,
       THEN 1 ELSE 0 END,
     driver = CASE WHEN $11::boolean
                   THEN NULLIF($12::text, '') ELSE driver END,
+    mount = CASE WHEN $13::boolean
+                 THEN $14::text ELSE mount END,
     updated_at = now()
-WHERE key = $13
-  AND (NOT $14::boolean
-       OR capabilities_version = $15::integer)
-RETURNING key, kind, name, icons, default_width, default_depth,
+WHERE key = $15
+  AND (NOT $16::boolean
+       OR capabilities_version = $17::integer)
+RETURNING key, kind, name, icons, default_width, default_depth, mount,
           capabilities, capabilities_version, driver
 `
 
@@ -236,6 +246,8 @@ type UpdateItemTypeParams struct {
 	Capabilities    json.RawMessage `json:"capabilities"`
 	DriverSet       bool            `json:"driver_set"`
 	Driver          string          `json:"driver"`
+	MountSet        bool            `json:"mount_set"`
+	Mount           pgtype.Text     `json:"mount"`
 	Key             string          `json:"key"`
 	VersionSet      bool            `json:"version_set"`
 	ExpectedVersion int32           `json:"expected_version"`
@@ -248,6 +260,7 @@ type UpdateItemTypeRow struct {
 	Icons               pgtype.Text     `json:"icons"`
 	DefaultWidth        float64         `json:"default_width"`
 	DefaultDepth        float64         `json:"default_depth"`
+	Mount               string          `json:"mount"`
 	Capabilities        json.RawMessage `json:"capabilities"`
 	CapabilitiesVersion int32           `json:"capabilities_version"`
 	Driver              pgtype.Text     `json:"driver"`
@@ -269,6 +282,8 @@ func (q *Queries) UpdateItemType(ctx context.Context, arg UpdateItemTypeParams) 
 		arg.Capabilities,
 		arg.DriverSet,
 		arg.Driver,
+		arg.MountSet,
+		arg.Mount,
 		arg.Key,
 		arg.VersionSet,
 		arg.ExpectedVersion,
@@ -281,6 +296,7 @@ func (q *Queries) UpdateItemType(ctx context.Context, arg UpdateItemTypeParams) 
 		&i.Icons,
 		&i.DefaultWidth,
 		&i.DefaultDepth,
+		&i.Mount,
 		&i.Capabilities,
 		&i.CapabilitiesVersion,
 		&i.Driver,

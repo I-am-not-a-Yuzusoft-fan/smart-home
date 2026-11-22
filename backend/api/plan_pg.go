@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -195,6 +196,14 @@ func (p *PGPlan) UpdateWall(ctx context.Context, id openapi_types.UUID, in WallI
 	if err := q.DeleteOrphanCorners(ctx); err != nil {
 		return err
 	}
+	// 挂在这面墙上的物品跟着一起挪：位置按新的端点重算，偏移超出新墙长时夹住。
+	if err := repositionWallItems(ctx, q, id, in); err != nil {
+		return fmt.Errorf("重算挂墙物品: %w", err)
+	}
+	// 开口同理：墙变短时把门/窗夹回墙内，不然门会一半悬空。
+	if err := clampWallOpenings(ctx, q, id, in); err != nil {
+		return fmt.Errorf("夹紧墙上的开口: %w", err)
+	}
 	// 每个改动都要 +1 版本号：撤销/重做靠它做乐观并发。
 	if _, err := q.BumpPlanVersion(ctx); err != nil {
 		return fmt.Errorf("递增版本号: %w", err)
@@ -362,4 +371,216 @@ func (p *PGPlan) UpsertRoomName(ctx context.Context, hash, name, kind string) er
 // DeleteRoomName 清掉某个哈希上的名字。返回 0 行也当成功——"之后没有名字"就是调用方要的。
 func (p *PGPlan) DeleteRoomName(ctx context.Context, hash string) (int64, error) {
 	return p.queries.DeleteRoomName(ctx, hash)
+}
+
+// LoadOpenings 读全部门窗。开口很少，随 Plan 一次返回，省一次往返。
+func (p *PGPlan) LoadOpenings(ctx context.Context) ([]PlanOpening, error) {
+	rows, err := p.queries.ListOpenings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PlanOpening, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, PlanOpening{
+			ID:     apiUUID(row.ID),
+			WallID: apiUUID(row.WallID),
+			Kind:   row.Kind,
+			Offset: row.Offset,
+			Width:  row.Width,
+			Height: row.Height,
+			Sill:   row.Sill,
+		})
+	}
+	return out, nil
+}
+
+// GetWall 读单面墙的端点坐标。
+func (p *PGPlan) GetWall(ctx context.Context, id openapi_types.UUID) (PlanWall, error) {
+	row, err := p.queries.GetWallByID(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PlanWall{}, ErrWallNotFound
+	}
+	if err != nil {
+		return PlanWall{}, err
+	}
+	return PlanWall{
+		ID:        apiUUID(row.ID),
+		AID:       apiUUID(row.A),
+		BID:       apiUUID(row.B),
+		AX:        row.Ax,
+		AY:        row.Ay,
+		BX:        row.Bx,
+		BY:        row.By,
+		Thickness: row.Thickness,
+	}, nil
+}
+
+// CreateOpening 校验「开口在墙内」后插入；默认值按类型给：门 210/0，窗 120/90。
+func (p *PGPlan) CreateOpening(ctx context.Context, in OpeningInput) (openapi_types.UUID, error) {
+	wall, err := p.GetWall(ctx, in.WallID)
+	if err != nil {
+		return openapi_types.UUID{}, err
+	}
+	length := math.Hypot(wall.BX-wall.AX, wall.BY-wall.AY)
+	// 允许 0.5 厘米的浮点误差：前端按墙长摆满整面墙时不该被 1e-9 卡住。
+	if in.Offset < 0 || in.Width <= 0 || in.Offset+in.Width > length+0.5 {
+		return openapi_types.UUID{}, ErrOpeningTooWide
+	}
+	height, sill := 210.0, 0.0
+	if in.Kind == "window" {
+		height, sill = 120, 90
+	}
+	if in.Height != nil {
+		height = *in.Height
+	}
+	if in.Sill != nil {
+		sill = *in.Sill
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return openapi_types.UUID{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := p.queries.WithTx(tx)
+
+	id, err := q.InsertOpening(ctx, storegen.InsertOpeningParams{
+		WallID: pgtype.UUID{Bytes: in.WallID, Valid: true},
+		Kind:   in.Kind,
+		Offset: in.Offset,
+		Width:  in.Width,
+		Height: height,
+		Sill:   sill,
+	})
+	if err != nil {
+		return openapi_types.UUID{}, err
+	}
+	if _, err := q.BumpPlanVersion(ctx); err != nil {
+		return openapi_types.UUID{}, fmt.Errorf("递增版本号: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return openapi_types.UUID{}, err
+	}
+	return apiUUID(id), nil
+}
+
+// UpdateOpening 逐字段合并后再校验一次，越界直接拒绝。
+func (p *PGPlan) UpdateOpening(ctx context.Context, id openapi_types.UUID, in OpeningPatchInput) error {
+	existing, err := p.queries.GetOpening(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrOpeningNotFound
+	}
+	if err != nil {
+		return err
+	}
+	wall, err := p.GetWall(ctx, apiUUID(existing.WallID))
+	if err != nil {
+		return err
+	}
+	offset, width, height, sill := existing.Offset, existing.Width, existing.Height, existing.Sill
+	if in.OffsetSet {
+		offset = in.Offset
+	}
+	if in.WidthSet {
+		width = in.Width
+	}
+	if in.HeightSet {
+		height = in.Height
+	}
+	if in.SillSet {
+		sill = in.Sill
+	}
+	length := math.Hypot(wall.BX-wall.AX, wall.BY-wall.AY)
+	if offset < 0 || width <= 0 || offset+width > length+0.5 {
+		return ErrOpeningTooWide
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := p.queries.WithTx(tx)
+	if _, err := q.UpdateOpening(ctx, storegen.UpdateOpeningParams{
+		ID:     pgtype.UUID{Bytes: id, Valid: true},
+		Offset: offset,
+		Width:  width,
+		Height: height,
+		Sill:   sill,
+	}); err != nil {
+		return err
+	}
+	if _, err := q.BumpPlanVersion(ctx); err != nil {
+		return fmt.Errorf("递增版本号: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// DeleteOpening 幂等删除；真的删掉了才 +1 版本号。
+func (p *PGPlan) DeleteOpening(ctx context.Context, id openapi_types.UUID) (int64, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := p.queries.WithTx(tx)
+	rows, err := q.DeleteOpening(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		return 0, err
+	}
+	if rows > 0 {
+		if _, err := q.BumpPlanVersion(ctx); err != nil {
+			return 0, fmt.Errorf("递增版本号: %w", err)
+		}
+	}
+	return rows, tx.Commit(ctx)
+}
+
+// repositionWallItems 在墙改完之后重算挂墙物品的世界坐标与朝向。
+// 物品的 x/y/rotation 是派生值，唯一真相是 (wall_id, wall_offset)。
+func repositionWallItems(ctx context.Context, q *storegen.Queries, wallID openapi_types.UUID, in WallInput) error {
+	items, err := q.ListItemsOnWall(ctx, pgtype.UUID{Bytes: wallID, Valid: true})
+	if err != nil {
+		return err
+	}
+	wall := PlanWall{AX: in.AX, AY: in.AY, BX: in.BX, BY: in.BY}
+	for _, it := range items {
+		offset := 0.0
+		if it.WallOffset.Valid {
+			offset = it.WallOffset.Float64
+		}
+		x, y, rotation, clamped := placeOnWall(wall, offset, it.DefaultWidth)
+		if err := q.UpdateItemPlacement(ctx, storegen.UpdateItemPlacementParams{
+			ID:         it.ID,
+			X:          x,
+			Y:          y,
+			Rotation:   rotation,
+			WallOffset: pgtype.Float8{Float64: clamped, Valid: true},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// clampWallOpenings 把墙上的门窗夹回新的墙长范围内。
+// 墙变长时不动它们（偏移仍然有效），变短时才夹。
+func clampWallOpenings(ctx context.Context, q *storegen.Queries, wallID openapi_types.UUID, in WallInput) error {
+	rows, err := q.ListOpeningsOnWall(ctx, pgtype.UUID{Bytes: wallID, Valid: true})
+	if err != nil {
+		return err
+	}
+	length := math.Hypot(in.BX-in.AX, in.BY-in.AY)
+	for _, row := range rows {
+		maxOffset := math.Max(0, length-row.Width)
+		if row.Offset <= maxOffset {
+			continue
+		}
+		if err := q.UpdateOpeningOffset(ctx, storegen.UpdateOpeningOffsetParams{
+			ID: row.ID, Offset: maxOffset,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }

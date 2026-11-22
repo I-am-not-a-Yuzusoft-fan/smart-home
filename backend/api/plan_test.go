@@ -35,6 +35,15 @@ type planBody struct {
 		Hash string `json:"hash"`
 		Name string `json:"name"`
 	} `json:"staleRooms"`
+	Openings []struct {
+		ID     string  `json:"id"`
+		WallID string  `json:"wallId"`
+		Kind   string  `json:"kind"`
+		Offset float64 `json:"offset"`
+		Width  float64 `json:"width"`
+		Height float64 `json:"height"`
+		Sill   float64 `json:"sill"`
+	} `json:"openings"`
 	OpenWalls int   `json:"openWalls"`
 	Version   int64 `json:"version"`
 	Walls     []struct {
@@ -553,8 +562,10 @@ func rectPlan(t *testing.T, h http.Handler, cookie *http.Cookie, x0, y0, size fl
 // 残留的行会让下次跑同一个方框的用例读到旧名字。
 func cleanupRoom(t *testing.T, pool *pgxpool.Pool, h http.Handler, cookie *http.Cookie, hash string, walls []string) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), `DELETE FROM room_name WHERE polygon_hash = $1`, hash); err != nil {
-		t.Errorf("清理房间名失败：%v", err)
+	if hash != "" {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM room_name WHERE polygon_hash = $1`, hash); err != nil {
+			t.Errorf("清理房间名失败：%v", err)
+		}
 	}
 	for _, id := range walls {
 		do(t, h, http.MethodDelete, "/api/walls/"+id, "", cookie)
@@ -715,6 +726,113 @@ func TestClearStaleRoomNameIsAllowed(t *testing.T) {
 	for _, s := range plan.StaleRooms {
 		if s.Hash == hash {
 			t.Fatalf("清理之后不该还在 staleRooms 里：%+v", plan.StaleRooms)
+		}
+	}
+}
+
+// 门窗是挂在墙上的：墙变短时要夹回墙内，墙变长时保持原来的偏移。
+func TestCreateOpeningClampsWhenWallShrinks(t *testing.T) {
+	h := newTestServer(t)
+	cookie := loginAs(t, h, "zhang")
+	_, walls := rectPlan(t, h, cookie, 3000, 3000, 400)
+	defer cleanupRoom(t, testPool(t), h, cookie, "", walls)
+	wallID := walls[0]
+
+	res := do(t, h, http.MethodPost, "/api/openings",
+		fmt.Sprintf(`{"wallId":%q,"kind":"door","offset":100,"width":90}`, wallID), cookie)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("开门应 201，实际 %d：%s", res.Code, res.Body.String())
+	}
+	plan := decodePlan(t, res.Body.Bytes())
+	if len(plan.Openings) != 1 || plan.Openings[0].Offset != 100 || plan.Openings[0].Kind != "door" {
+		t.Fatalf("开口没有按 100cm 偏移创建：%+v", plan.Openings)
+	}
+	if plan.Openings[0].Height != 210 || plan.Openings[0].Sill != 0 {
+		t.Fatalf("门的默认高度/离地应为 210/0，实际 %.0f/%.0f", plan.Openings[0].Height, plan.Openings[0].Sill)
+	}
+
+	// 墙从 400 缩到 150：offset+width 超出，应被夹到 150-90=60。
+	res = do(t, h, http.MethodPatch, "/api/walls/"+wallID,
+		`{"ax":3000,"ay":3000,"bx":3150,"by":3000,"thickness":10}`, cookie)
+	if res.Code != http.StatusOK {
+		t.Fatalf("改墙应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+	plan = decodePlan(t, res.Body.Bytes())
+	if len(plan.Openings) != 1 || plan.Openings[0].Offset != 60 {
+		t.Fatalf("墙缩短后开口应夹到 60cm，实际 %+v", plan.Openings)
+	}
+
+	// 再拉回 400：夹紧是不可逆的（开口不会自己漂回去）。
+	res = do(t, h, http.MethodPatch, "/api/walls/"+wallID,
+		`{"ax":3000,"ay":3000,"bx":3400,"by":3000,"thickness":10}`, cookie)
+	if res.Code != http.StatusOK {
+		t.Fatalf("改墙应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+	plan = decodePlan(t, res.Body.Bytes())
+	if len(plan.Openings) != 1 || plan.Openings[0].Offset != 60 {
+		t.Fatalf("墙拉长后开口偏移应保持 60cm，实际 %+v", plan.Openings)
+	}
+
+	// 删墙 → 开口随之消失。
+	res = do(t, h, http.MethodDelete, "/api/walls/"+wallID, "", cookie)
+	if res.Code != http.StatusNoContent {
+		t.Fatalf("删墙应 204，实际 %d：%s", res.Code, res.Body.String())
+	}
+	plan = decodePlan(t, do(t, h, http.MethodGet, "/api/plan", "", cookie).Body.Bytes())
+	if len(plan.Openings) != 0 {
+		t.Fatalf("删墙后开口应一并消失，实际 %+v", plan.Openings)
+	}
+}
+
+func TestOpeningValidationAndDefaults(t *testing.T) {
+	h := newTestServer(t)
+	cookie := loginAs(t, h, "zhang")
+	_, walls := rectPlan(t, h, cookie, 3600, 3600, 400)
+	defer cleanupRoom(t, testPool(t), h, cookie, "", walls)
+	wallID := walls[0]
+
+	// 超出墙长
+	res := do(t, h, http.MethodPost, "/api/openings",
+		fmt.Sprintf(`{"wallId":%q,"kind":"window","offset":350,"width":200}`, wallID), cookie)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("开口超出墙长应 400，实际 %d：%s", res.Code, res.Body.String())
+	}
+	// 墙不存在
+	res = do(t, h, http.MethodPost, "/api/openings",
+		`{"wallId":"00000000-0000-0000-0000-000000000000","kind":"door","offset":0,"width":90}`, cookie)
+	if res.Code != http.StatusNotFound {
+		t.Fatalf("墙不存在应 404，实际 %d：%s", res.Code, res.Body.String())
+	}
+	// 窗户默认 120/90
+	res = do(t, h, http.MethodPost, "/api/openings",
+		fmt.Sprintf(`{"wallId":%q,"kind":"window","offset":80,"width":150}`, wallID), cookie)
+	if res.Code != http.StatusCreated {
+		t.Fatalf("开窗应 201，实际 %d：%s", res.Code, res.Body.String())
+	}
+	plan := decodePlan(t, res.Body.Bytes())
+	opening := plan.Openings[0]
+	if opening.Height != 120 || opening.Sill != 90 {
+		t.Fatalf("窗的默认高度/离地应为 120/90，实际 %.0f/%.0f", opening.Height, opening.Sill)
+	}
+
+	// PATCH 之后仍要过校验
+	res = do(t, h, http.MethodPatch, "/api/openings/"+opening.ID, `{"width":500}`, cookie)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("改宽超出墙长应 400，实际 %d：%s", res.Code, res.Body.String())
+	}
+	res = do(t, h, http.MethodPatch, "/api/openings/"+opening.ID, `{"offset":120,"sill":100}`, cookie)
+	if res.Code != http.StatusOK {
+		t.Fatalf("改偏移应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+	plan = decodePlan(t, res.Body.Bytes())
+	if plan.Openings[0].Offset != 120 || plan.Openings[0].Sill != 100 || plan.Openings[0].Height != 120 {
+		t.Fatalf("逐字段 PATCH 结果不对：%+v", plan.Openings[0])
+	}
+	// 删两次都 204
+	for i := 0; i < 2; i++ {
+		res = do(t, h, http.MethodDelete, "/api/openings/"+opening.ID, "", cookie)
+		if res.Code != http.StatusNoContent {
+			t.Fatalf("第 %d 次删开口应 204，实际 %d：%s", i+1, res.Code, res.Body.String())
 		}
 	}
 }

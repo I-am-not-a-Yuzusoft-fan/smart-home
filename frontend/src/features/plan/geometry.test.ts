@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import { axisCross, clamp, distanceToSegment, pointInPolygon, projectOnSegment } from './geometry'
+import {
+  axisCross,
+  clamp,
+  clampWallOffset,
+  distanceToSegment,
+  nearestWallAnchor,
+  pointInPolygon,
+  projectOnSegment,
+} from './geometry'
 
 describe('clamp', () => {
   it('夹在区间内', () => {
@@ -97,5 +105,41 @@ describe('pointInPolygon', () => {
   it('不足三个点不构成多边形', () => {
     expect(pointInPolygon({ x: 0, y: 0 }, [])).toBe(false)
     expect(pointInPolygon({ x: 0, y: 0 }, [{ x: 0, y: 0 }, { x: 10, y: 10 }])).toBe(false)
+  })
+})
+
+describe('nearestWallAnchor', () => {
+  const walls = [
+    { id: 'bottom', ax: 0, ay: 300, bx: 400, by: 300 },
+    { id: 'left', ax: 0, ay: 0, bx: 0, by: 300 },
+  ]
+
+  it('投影到最近的墙上并给出沿墙偏移', () => {
+    const anchor = nearestWallAnchor(walls, 120, 320)
+    expect(anchor).not.toBeNull()
+    expect(anchor!.wallId).toBe('bottom')
+    expect(anchor!.offset).toBeCloseTo(120)
+    expect(anchor!.y).toBeCloseTo(300)
+    expect(anchor!.rotation).toBeCloseTo(0)
+  })
+
+  it('超出宽容半径就不吸', () => {
+    expect(nearestWallAnchor(walls, 200, 200, 40)).toBeNull()
+    expect(nearestWallAnchor(walls, 200, 290, 40)!.wallId).toBe('bottom')
+  })
+
+  it('两端之外会夹到端点', () => {
+    const anchor = nearestWallAnchor(walls, -50, 280)!
+    expect(anchor.wallId).toBe('left')
+    expect(anchor.offset).toBeCloseTo(280)
+  })
+})
+
+describe('clampWallOffset', () => {
+  it('物品比墙宽时夹到 0', () => {
+    expect(clampWallOffset(50, 200, 150)).toBe(0)
+  })
+  it('靠右超出时夹到墙长减物品宽', () => {
+    expect(clampWallOffset(300, 200, 400)).toBe(200)
   })
 })
