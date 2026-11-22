@@ -847,12 +847,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   return (
     <div className="flex h-full flex-col">
       <header
-        className="flex items-center justify-between px-4 py-3"
+        className="flex min-w-0 items-center justify-between gap-4 px-4 py-3"
         style={{ background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' }}
       >
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-base font-semibold">平面图</h1>
-          <span className="text-xs" style={{ color: 'var(--color-muted)' }}>
+        <div className="flex min-w-0 items-baseline gap-3">
+          <h1 className="shrink-0 whitespace-nowrap text-base font-semibold">平面图</h1>
+          <span className="truncate text-xs" style={{ color: 'var(--color-muted)' }}>
             {loading
               ? '读取中…'
               : `按住拖动画墙（${plan.walls.length} 面）· 点墙选中后按 Delete 删除 · 空格/中键平移 · 滚轮缩放 · Shift 自由角度`}
@@ -861,7 +861,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             <button
               onClick={() => void removeWall(selected.id)}
               disabled={saving}
-              className="px-2 py-1 text-xs"
+              className="whitespace-nowrap px-2 py-1 text-xs"
               style={{
                 border: '1px solid var(--color-danger)',
                 borderRadius: 'var(--radius-sm)',
@@ -878,7 +878,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             onClick={() => setGridSnap((v) => !v)}
             aria-pressed={gridSnap}
             title={`吸附到 ${GRID_CM} 厘米网格`}
-            className="px-2 py-1 text-xs"
+            className="whitespace-nowrap px-2 py-1 text-xs"
             style={{
               border: `1px solid ${gridSnap ? 'var(--color-primary)' : 'var(--color-border)'}`,
               borderRadius: 'var(--radius-sm)',
@@ -890,7 +890,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           </button>
           <button
             onClick={() => setShowDims((v) => !v)}
-            className="px-2 py-1 text-xs"
+            className="whitespace-nowrap px-2 py-1 text-xs"
             style={{
               border: `1px solid ${showDims ? 'var(--color-primary)' : 'var(--color-border)'}`,
               borderRadius: 'var(--radius-sm)',
@@ -910,7 +910,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
               a.download = `户型-${new Date().toISOString().slice(0, 10)}.png`
               a.click()
             }}
-            className="px-2 py-1 text-xs"
+            className="whitespace-nowrap px-2 py-1 text-xs"
             style={{
               border: '1px solid var(--color-border)',
               borderRadius: 'var(--radius-sm)',
@@ -923,7 +923,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             onClick={() => void undo()}
             disabled={history.past.length === 0 || saving}
             title="撤销（Ctrl/Cmd+Z）"
-            className="px-2 py-1 text-xs"
+            className="whitespace-nowrap px-2 py-1 text-xs"
             style={{
               border: '1px solid var(--color-border)',
               borderRadius: 'var(--radius-sm)',
@@ -937,7 +937,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             onClick={() => void redo()}
             disabled={history.future.length === 0 || saving}
             title="重做（Ctrl/Cmd+Shift+Z）"
-            className="px-2 py-1 text-xs"
+            className="whitespace-nowrap px-2 py-1 text-xs"
             style={{
               border: '1px solid var(--color-border)',
               borderRadius: 'var(--radius-sm)',
@@ -949,7 +949,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           </button>
           <button
             onClick={fitToContent}
-            className="px-2 py-1 text-xs"
+            className="whitespace-nowrap px-2 py-1 text-xs"
             style={{
               border: '1px solid var(--color-border)',
               borderRadius: 'var(--radius-sm)',
@@ -964,7 +964,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           {user.role === 'admin' ? (
             <button
               onClick={() => setShowTypes(true)}
-              className="px-2 py-1 text-xs"
+              className="whitespace-nowrap px-2 py-1 text-xs"
               style={{
                 border: '1px solid var(--color-border)',
                 borderRadius: 'var(--radius-sm)',
@@ -982,7 +982,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           </span>
           <button
             onClick={onLogout}
-            className="px-2 py-1 text-xs"
+            className="whitespace-nowrap px-2 py-1 text-xs"
             style={{
               border: '1px solid var(--color-border)',
               borderRadius: 'var(--radius-sm)',
