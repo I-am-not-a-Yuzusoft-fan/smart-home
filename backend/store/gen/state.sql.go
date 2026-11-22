@@ -49,6 +49,18 @@ func (q *Queries) CompleteCommand(ctx context.Context, arg CompleteCommandParams
 	return err
 }
 
+const deleteOpening = `-- name: DeleteOpening :execrows
+DELETE FROM opening WHERE id = $1
+`
+
+func (q *Queries) DeleteOpening(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOpening, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOrphanCorners = `-- name: DeleteOrphanCorners :exec
 DELETE FROM corner c
 WHERE NOT EXISTS (SELECT 1 FROM wall w WHERE w.a = c.id OR w.b = c.id)
@@ -90,6 +102,37 @@ DELETE FROM wall WHERE id = $1
 func (q *Queries) DeleteWallByID(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteWallByID, id)
 	return err
+}
+
+const getOpening = `-- name: GetOpening :one
+SELECT o.id, o.wall_id, o.kind, o."offset", o.width, o.height, o.sill
+FROM opening o
+WHERE o.id = $1
+`
+
+type GetOpeningRow struct {
+	ID     pgtype.UUID `json:"id"`
+	WallID pgtype.UUID `json:"wall_id"`
+	Kind   string      `json:"kind"`
+	Offset float64     `json:"offset"`
+	Width  float64     `json:"width"`
+	Height float64     `json:"height"`
+	Sill   float64     `json:"sill"`
+}
+
+func (q *Queries) GetOpening(ctx context.Context, id pgtype.UUID) (GetOpeningRow, error) {
+	row := q.db.QueryRow(ctx, getOpening, id)
+	var i GetOpeningRow
+	err := row.Scan(
+		&i.ID,
+		&i.WallID,
+		&i.Kind,
+		&i.Offset,
+		&i.Width,
+		&i.Height,
+		&i.Sill,
+	)
+	return i, err
 }
 
 const getPlanVersion = `-- name: GetPlanVersion :one
@@ -140,6 +183,43 @@ func (q *Queries) GetWall(ctx context.Context, id pgtype.UUID) (GetWallRow, erro
 	row := q.db.QueryRow(ctx, getWall, id)
 	var i GetWallRow
 	err := row.Scan(&i.A, &i.B)
+	return i, err
+}
+
+const getWallByID = `-- name: GetWallByID :one
+SELECT w.id, w.a, w.b, w.thickness,
+       ca.x AS ax, ca.y AS ay, cb.x AS bx, cb.y AS by
+FROM wall w
+JOIN corner ca ON ca.id = w.a
+JOIN corner cb ON cb.id = w.b
+WHERE w.id = $1
+`
+
+type GetWallByIDRow struct {
+	ID        pgtype.UUID `json:"id"`
+	A         pgtype.UUID `json:"a"`
+	B         pgtype.UUID `json:"b"`
+	Thickness float64     `json:"thickness"`
+	Ax        float64     `json:"ax"`
+	Ay        float64     `json:"ay"`
+	Bx        float64     `json:"bx"`
+	By        float64     `json:"by"`
+}
+
+// 单个墙的端点坐标：挂墙物品与门窗换算位置时要用。
+func (q *Queries) GetWallByID(ctx context.Context, id pgtype.UUID) (GetWallByIDRow, error) {
+	row := q.db.QueryRow(ctx, getWallByID, id)
+	var i GetWallByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.A,
+		&i.B,
+		&i.Thickness,
+		&i.Ax,
+		&i.Ay,
+		&i.Bx,
+		&i.By,
+	)
 	return i, err
 }
 
@@ -217,6 +297,35 @@ func (q *Queries) InsertHistory(ctx context.Context, arg InsertHistoryParams) er
 	return err
 }
 
+const insertOpening = `-- name: InsertOpening :one
+INSERT INTO opening (wall_id, kind, "offset", width, height, sill)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id
+`
+
+type InsertOpeningParams struct {
+	WallID pgtype.UUID `json:"wall_id"`
+	Kind   string      `json:"kind"`
+	Offset float64     `json:"offset"`
+	Width  float64     `json:"width"`
+	Height float64     `json:"height"`
+	Sill   float64     `json:"sill"`
+}
+
+func (q *Queries) InsertOpening(ctx context.Context, arg InsertOpeningParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, insertOpening,
+		arg.WallID,
+		arg.Kind,
+		arg.Offset,
+		arg.Width,
+		arg.Height,
+		arg.Sill,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const insertWall = `-- name: InsertWall :one
 INSERT INTO wall (a, b, thickness)
 VALUES ($1, $2, $3)
@@ -280,6 +389,120 @@ func (q *Queries) ListCorners(ctx context.Context) ([]ListCornersRow, error) {
 	for rows.Next() {
 		var i ListCornersRow
 		if err := rows.Scan(&i.ID, &i.X, &i.Y); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listItemsOnWall = `-- name: ListItemsOnWall :many
+SELECT i.id, i.wall_offset, t.default_width
+FROM item i
+JOIN item_type t ON t.key = i.type_key
+WHERE i.wall_id = $1
+ORDER BY i.created_at, i.id
+`
+
+type ListItemsOnWallRow struct {
+	ID           pgtype.UUID   `json:"id"`
+	WallOffset   pgtype.Float8 `json:"wall_offset"`
+	DefaultWidth float64       `json:"default_width"`
+}
+
+// 改墙后要重算位置与朝向：带上物品宽度，偏移超出新墙长时才好夹住。
+func (q *Queries) ListItemsOnWall(ctx context.Context, wallID pgtype.UUID) ([]ListItemsOnWallRow, error) {
+	rows, err := q.db.Query(ctx, listItemsOnWall, wallID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListItemsOnWallRow
+	for rows.Next() {
+		var i ListItemsOnWallRow
+		if err := rows.Scan(&i.ID, &i.WallOffset, &i.DefaultWidth); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOpenings = `-- name: ListOpenings :many
+SELECT o.id, o.wall_id, o.kind, o."offset", o.width, o.height, o.sill
+FROM opening o
+ORDER BY o.wall_id, o."offset", o.id
+`
+
+type ListOpeningsRow struct {
+	ID     pgtype.UUID `json:"id"`
+	WallID pgtype.UUID `json:"wall_id"`
+	Kind   string      `json:"kind"`
+	Offset float64     `json:"offset"`
+	Width  float64     `json:"width"`
+	Height float64     `json:"height"`
+	Sill   float64     `json:"sill"`
+}
+
+// 开口用「墙 + 沿墙偏移」定位；渲染时前端按墙角度换算到世界坐标。
+func (q *Queries) ListOpenings(ctx context.Context) ([]ListOpeningsRow, error) {
+	rows, err := q.db.Query(ctx, listOpenings)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOpeningsRow
+	for rows.Next() {
+		var i ListOpeningsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WallID,
+			&i.Kind,
+			&i.Offset,
+			&i.Width,
+			&i.Height,
+			&i.Sill,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOpeningsOnWall = `-- name: ListOpeningsOnWall :many
+SELECT id, "offset", width
+FROM opening
+WHERE wall_id = $1
+ORDER BY "offset", id
+`
+
+type ListOpeningsOnWallRow struct {
+	ID     pgtype.UUID `json:"id"`
+	Offset float64     `json:"offset"`
+	Width  float64     `json:"width"`
+}
+
+// 墙改长之后开口要夹回墙内，否则门会一半悬在墙外。
+func (q *Queries) ListOpeningsOnWall(ctx context.Context, wallID pgtype.UUID) ([]ListOpeningsOnWallRow, error) {
+	rows, err := q.db.Query(ctx, listOpeningsOnWall, wallID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOpeningsOnWallRow
+	for rows.Next() {
+		var i ListOpeningsOnWallRow
+		if err := rows.Scan(&i.ID, &i.Offset, &i.Width); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -438,6 +661,73 @@ func (q *Queries) LockPlanVersion(ctx context.Context) (int64, error) {
 	var version int64
 	err := row.Scan(&version)
 	return version, err
+}
+
+const updateItemPlacement = `-- name: UpdateItemPlacement :exec
+UPDATE item
+SET x = $2, y = $3, rotation = $4, wall_offset = $5, updated_at = now()
+WHERE id = $1
+`
+
+type UpdateItemPlacementParams struct {
+	ID         pgtype.UUID   `json:"id"`
+	X          float64       `json:"x"`
+	Y          float64       `json:"y"`
+	Rotation   float64       `json:"rotation"`
+	WallOffset pgtype.Float8 `json:"wall_offset"`
+}
+
+func (q *Queries) UpdateItemPlacement(ctx context.Context, arg UpdateItemPlacementParams) error {
+	_, err := q.db.Exec(ctx, updateItemPlacement,
+		arg.ID,
+		arg.X,
+		arg.Y,
+		arg.Rotation,
+		arg.WallOffset,
+	)
+	return err
+}
+
+const updateOpening = `-- name: UpdateOpening :execrows
+UPDATE opening
+SET "offset" = $2, width = $3, height = $4, sill = $5
+WHERE id = $1
+`
+
+type UpdateOpeningParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Offset float64     `json:"offset"`
+	Width  float64     `json:"width"`
+	Height float64     `json:"height"`
+	Sill   float64     `json:"sill"`
+}
+
+func (q *Queries) UpdateOpening(ctx context.Context, arg UpdateOpeningParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateOpening,
+		arg.ID,
+		arg.Offset,
+		arg.Width,
+		arg.Height,
+		arg.Sill,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateOpeningOffset = `-- name: UpdateOpeningOffset :exec
+UPDATE opening SET "offset" = $2 WHERE id = $1
+`
+
+type UpdateOpeningOffsetParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Offset float64     `json:"offset"`
+}
+
+func (q *Queries) UpdateOpeningOffset(ctx context.Context, arg UpdateOpeningOffsetParams) error {
+	_, err := q.db.Exec(ctx, updateOpeningOffset, arg.ID, arg.Offset)
+	return err
 }
 
 const updateWall = `-- name: UpdateWall :execrows

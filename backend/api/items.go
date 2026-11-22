@@ -92,6 +92,35 @@ func (s *Server) CreateItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, deviceStatusMessage)
 		return
 	}
+	// 挂墙物品：位置与朝向由墙决定，x/y/rotation 只是派生值。
+	placeX, placeY, placeRot := float64(body.X), float64(body.Y), 0.0
+	if body.Rotation != nil {
+		placeRot = float64(*body.Rotation)
+	}
+	var wallID *uuid.UUID
+	var wallOffset *float64
+	if body.WallId != nil {
+		wall, err := s.plan.GetWall(r.Context(), *body.WallId)
+		if err != nil {
+			if errors.Is(err, ErrWallNotFound) {
+				writeError(w, http.StatusNotFound, gen.NOTFOUND, "没有这面墙")
+				return
+			}
+			s.log.ErrorContext(r.Context(), "读取墙失败", "err", err)
+			writeError(w, http.StatusInternalServerError, gen.INTERNAL, "创建物品失败")
+			return
+		}
+		offset := 0.0
+		if body.WallOffset != nil {
+			offset = *body.WallOffset
+		}
+		x, y, rotation, clamped := placeOnWall(wall, offset, typ.DefaultWidth)
+		placeX, placeY, placeRot = x, y, rotation
+		wallOffset = &clamped
+		id := uuid.UUID(*body.WallId)
+		wallID = &id
+	}
+
 	roomHash, msg, ok := s.normalizeRoomHash(r.Context(), body.RoomHash)
 	if !ok {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
@@ -102,20 +131,18 @@ func (s *Server) CreateItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "attrs 必须是 JSON 对象")
 		return
 	}
-	rotation := 0.0
-	if body.Rotation != nil {
-		rotation = float64(*body.Rotation)
-	}
 	item, err := s.items.CreateItem(r.Context(), itemstore.ItemCreate{
 		TypeKey:  typ.Key,
 		Name:     strings.TrimSpace(body.Name),
 		RoomHash: roomHash,
-		X:        float64(body.X),
-		Y:        float64(body.Y),
-		Rotation: rotation,
-		Status:   itemStatusValue(body.Status),
-		Attrs:    attrs,
-		States:   initialStates(typ.Capabilities),
+		X:          placeX,
+		Y:          placeY,
+		Rotation:   placeRot,
+		Status:     itemStatusValue(body.Status),
+		Attrs:      attrs,
+		States:     initialStates(typ.Capabilities),
+		WallID:     wallID,
+		WallOffset: wallOffset,
 	})
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "创建物品失败", "err", err)
@@ -174,6 +201,12 @@ func (s *Server) UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_t
 			update.RoomHash = *roomHash
 		}
 	}
+	// 挂墙物品的位置是墙的函数：直接改 x/y 会让 wallOffset 与坐标对不上。
+	if existing.WallID != nil && body.WallId == nil && (body.X != nil || body.Y != nil || body.Rotation != nil) {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED,
+			"挂墙物品的位置由墙决定：改 wallOffset 沿墙移动，或把 wallId 设为空串先脱离墙面")
+		return
+	}
 	if body.X != nil || body.Y != nil || body.Rotation != nil {
 		x, y, rotation := existing.X, existing.Y, existing.Rotation
 		if body.X != nil {
@@ -209,6 +242,58 @@ func (s *Server) UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_t
 		}
 		update.AttrsSet = true
 		update.Attrs = attrs
+	}
+
+	// 墙上物品的三种写入：给定 wallId 重新贴墙、wallId 空串脱离、只给 wallOffset 沿墙挪。
+	detach := body.WallId != nil && *body.WallId == ""
+	var targetWall *openapi_types.UUID
+	if body.WallId != nil && !detach {
+		parsed, err := uuid.Parse(*body.WallId)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "wallId 不是合法的 uuid")
+			return
+		}
+		u := openapi_types.UUID(parsed)
+		targetWall = &u
+	}
+	if targetWall == nil && body.WallOffset != nil && existing.WallID != nil {
+		id := openapi_types.UUID(*existing.WallID)
+		targetWall = &id
+	}
+	switch {
+	case detach:
+		// 空串 = 脱离墙面，回到自由摆放；位置保持当前值。
+		update.WallSet = true
+		update.WallID = nil
+		update.WallOffset = nil
+	case targetWall != nil:
+		wall, err := s.plan.GetWall(r.Context(), *targetWall)
+		if err != nil {
+			if errors.Is(err, ErrWallNotFound) {
+				writeError(w, http.StatusNotFound, gen.NOTFOUND, "没有这面墙")
+				return
+			}
+			s.log.ErrorContext(r.Context(), "读取墙失败", "err", err)
+			writeError(w, http.StatusInternalServerError, gen.INTERNAL, "更新物品失败")
+			return
+		}
+		typ, err := s.itemTypes.GetItemType(r.Context(), existing.TypeKey)
+		if err != nil {
+			s.log.ErrorContext(r.Context(), "读取类型失败", "err", err)
+			writeError(w, http.StatusInternalServerError, gen.INTERNAL, "更新物品失败")
+			return
+		}
+		offset := 0.0
+		if body.WallOffset != nil {
+			offset = *body.WallOffset
+		}
+		x, y, rotation, clamped := placeOnWall(wall, offset, typ.DefaultWidth)
+		wallUUID := uuid.UUID(*targetWall)
+		update.WallSet = true
+		update.WallID = &wallUUID
+		update.WallOffset = &clamped
+		update.PositionSet = true
+		update.X, update.Y, update.Rotation = x, y, rotation
 	}
 
 	updated, err := s.items.UpdateItem(r.Context(), update)
@@ -395,7 +480,18 @@ func toGenItem(item itemstore.Item) (gen.Item, error) {
 		X:        item.X,
 		Y:        item.Y,
 		Rotation: item.Rotation,
-		Status:   status,
-		Attrs:    attrs,
+		Status:     status,
+		Attrs:      attrs,
+		WallId:     uuidPtr(item.WallID),
+		WallOffset: item.WallOffset,
 	}, nil
+}
+
+// uuidPtr 把 store 层的可空 uuid 投成契约里的可空字段。
+func uuidPtr(id *uuid.UUID) *openapi_types.UUID {
+	if id == nil {
+		return nil
+	}
+	v := openapi_types.UUID(*id)
+	return &v
 }

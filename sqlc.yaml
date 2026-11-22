@@ -1,6 +1,9 @@
 version: "2"
 sql:
-  - schema: "sql/0001_init.sql"
+  # 全部迁移按顺序喂给 sqlc：加一版就往这里补一个文件名（0001 建表、0002 墙面挂件）。
+  - schema:
+      - "sql/0001_init.sql"
+      - "sql/0002_mount_and_openings.sql"
     queries: "sql/queries"
     engine: "postgresql"
     gen:

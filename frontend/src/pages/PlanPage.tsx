@@ -4,9 +4,11 @@ import type Konva from 'konva'
 import {
   ApiError,
   createItem,
+  createOpening,
   clearRoomName,
   createWall,
   deleteItem,
+  deleteOpening,
   deleteWall,
   getPlan,
   listItems,
@@ -18,6 +20,7 @@ import {
   type Corner,
   type Item,
   type ItemType,
+  type Opening,
   type Plan,
   type Room,
   type RoomKind,
@@ -28,7 +31,13 @@ import ItemInspector from '../components/ItemInspector.tsx'
 import ItemSidebar, { type ItemFilters } from '../components/ItemSidebar.tsx'
 import TypeManager from '../components/TypeManager.tsx'
 import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from '../features/plan/edit.ts'
-import { distanceToSegment, pointInPolygon, type Seg } from '../features/plan/geometry.ts'
+import {
+  clampWallOffset,
+  distanceToSegment,
+  nearestWallAnchor,
+  pointInPolygon,
+  type Seg,
+} from '../features/plan/geometry.ts'
 import { DEFAULT_RULES, snap as snapTo, type Guide as SnapGuide, type SnapRule } from '../features/plan/snap.ts'
 import { collinearRuns } from '../features/plan/dimensions.ts'
 import { replacePlan, type WallSnapshot } from '../api/client.ts'
@@ -115,6 +124,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     corners: [],
     walls: [],
     rooms: [],
+    openings: [],
     openWalls: 0,
     staleRooms: [],
     version: 0,
@@ -807,6 +817,17 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }
 
   async function removeWall(id: string) {
+    // 开口与挂墙物品是级联删除的（issue #8 二选一里选了级联）：
+    // 删之前把数量说清楚，别让用户以为是只删一面墙。
+    const openingCount = plan.openings.filter((o) => o.wallId === id).length
+    const itemCount = items.filter((it) => it.wallId === id).length
+    if (openingCount + itemCount > 0) {
+      const parts = [
+        openingCount > 0 ? `${openingCount} 个门窗` : '',
+        itemCount > 0 ? `${itemCount} 件挂墙物品` : '',
+      ].filter(Boolean)
+      if (!window.confirm(`这面墙上还有 ${parts.join('、')}，删墙会把它们一起删掉。继续？`)) return
+    }
     const seq = ++writeSeq.current
     const snapshot = snapshotOf(plan)
     setSaving(true)
@@ -859,9 +880,47 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     }
   }
 
+  /** 在当前选中的墙上开一个门/窗；位置默认居中。 */
+  async function addOpening(kind: 'door' | 'window') {
+    if (!selected) return
+    const length = wallLength(selected)
+    const width = kind === 'door' ? 90 : 150
+    const offset = Math.max(0, Math.round(length / 2 - width / 2))
+    setSaving(true)
+    try {
+      setPlan(await createOpening({ wallId: selected.id, kind, offset, width }))
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '开洞失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function removeOpening(id: string) {
+    setSaving(true)
+    try {
+      await deleteOpening(id)
+      setPlan(await getPlan())
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '删除开口失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function updateItemFields(
     id: string,
-    patch: { name?: string; roomHash?: string; x?: number; y?: number; rotation?: number },
+    patch: {
+      name?: string
+      roomHash?: string
+      x?: number
+      y?: number
+      rotation?: number
+      wallId?: string
+      wallOffset?: number
+    },
   ) {
     const saved = await updateItem(id, patch)
     setItems((current) => current.map((item) => (item.id === saved.id ? saved : item)))
@@ -873,6 +932,30 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     // Stage 已经应用了视口变换，子节点的 x/y 就是世界坐标（厘米），不用再换算。
     const x = Math.round(node.x())
     const y = Math.round(node.y())
+    // 挂墙物品不报坐标：只报「挂到哪面墙、离起点多远」，位置与朝向交给后端按墙算。
+    // 松手在房间中央（离任何墙都超过 40px）就退回原位——窗帘不能浮在空中。
+    if (item.wallId) {
+      const anchor = nearestWallAnchor(planRef.current.walls, x, y, 40 / viewport.scale)
+      if (!anchor) {
+        node.position({ x: item.x, y: item.y })
+        setError('挂墙物品要贴着墙放：拖到某面墙的 40 像素以内')
+        return
+      }
+      const width = typeByKey.get(item.typeKey)?.defaultWidth ?? 60
+      const offset = clampWallOffset(anchor.offset, width, anchor.length)
+      setSaving(true)
+      try {
+        const saved = await updateItem(item.id, { wallId: anchor.wallId, wallOffset: offset })
+        setItems((current) => current.map((row) => (row.id === item.id ? saved : row)))
+        setError(null)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '保存物品位置失败')
+        void load()
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
     setItems((current) => current.map((row) => (row.id === item.id ? { ...row, x, y } : row)))
     try {
       await updateItemFields(item.id, { x, y })
@@ -895,6 +978,34 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     const world = toWorld({ x: e.clientX - rect.left, y: e.clientY - rect.top })
     const x = Math.max(0, Math.min(5000, Math.round(world.x)))
     const y = Math.max(0, Math.min(5000, Math.round(world.y)))
+    // 挂墙物品：落点必须在墙边 40 像素内，否则拒绝——窗帘凭空立在地板中间没有意义。
+    if (typ.mount === 'wall') {
+      const anchor = nearestWallAnchor(planRef.current.walls, world.x, world.y, 40 / viewport.scale)
+      if (!anchor) {
+        setError(`「${typ.name}」要挂在墙上：把落点放到某面墙的 40 像素以内`)
+        return
+      }
+      const offset = clampWallOffset(anchor.offset, typ.defaultWidth, anchor.length)
+      try {
+        const created = await createItem({
+          typeKey,
+          name: typ.name,
+          x: anchor.x,
+          y: anchor.y,
+          rotation: anchor.rotation,
+          wallId: anchor.wallId,
+          wallOffset: offset,
+        })
+        setItems((current) => [...current, created])
+        setSelectedItemId(created.id)
+        setSelectedId(null)
+        setSelectedRoomHash(null)
+        setError(null)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '布放失败')
+      }
+      return
+    }
     try {
       const created = await createItem({ typeKey, name: typ.name, x, y, rotation: 0 })
       setItems((current) => [...current, created])
@@ -978,6 +1089,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         ]
       : []
   const labelSize = 12 / viewport.scale
+  const wallOpenings = selected ? plan.openings.filter((o) => o.wallId === selected.id) : []
+  const wallsById = useMemo(() => new Map(plan.walls.map((w) => [w.id, w])), [plan.walls])
 
   // 有墙但推不出房间时的提示文案：空户型和"画了墙但没围上"要说不同的话，
   // 否则用户画了三面墙回到刷新，会以为房间功能坏了。
@@ -1259,6 +1372,51 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             >
               {saving ? '保存中…' : '应用'}
             </button>
+
+            <div className="mt-3 pt-2" style={{ borderTop: '1px solid var(--color-border)' }}>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="font-semibold">门窗</span>
+                <span className="flex gap-1">
+                  <button
+                    onClick={() => void addOpening('door')}
+                    disabled={saving}
+                    className="rounded px-1.5 py-0.5"
+                    style={{ border: '1px solid var(--color-border)' }}
+                  >
+                    + 门
+                  </button>
+                  <button
+                    onClick={() => void addOpening('window')}
+                    disabled={saving}
+                    className="rounded px-1.5 py-0.5"
+                    style={{ border: '1px solid var(--color-border)' }}
+                  >
+                    + 窗
+                  </button>
+                </span>
+              </div>
+              {wallOpenings.length === 0 ? (
+                <p style={{ color: 'var(--color-muted)' }}>这面墙还没有开口。门宽 90、窗宽 150 厘米。</p>
+              ) : (
+                <ul className="flex flex-col gap-0.5">
+                  {wallOpenings.map((opening) => (
+                    <li key={opening.id} className="flex items-center justify-between gap-2">
+                      <span>
+                        {opening.kind === 'door' ? '门' : '窗'} · 偏移 {Math.round(opening.offset)} · 宽{' '}
+                        {Math.round(opening.width)}
+                      </span>
+                      <button
+                        onClick={() => void removeOpening(opening.id)}
+                        disabled={saving}
+                        style={{ color: 'var(--color-danger)' }}
+                      >
+                        删
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         )}
         <div
@@ -1388,6 +1546,28 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 />
               </>
             )}
+          </Layer>
+
+          {/* 门窗画在墙上方：白色块盖住墙线，看起来才像"洞"。
+              位置由「墙 + 沿墙偏移」算出来，和物品的挂墙逻辑共用 clampWallOffset。 */}
+          <Layer>
+            {plan.openings.map((opening) => {
+              const wall = wallsById.get(opening.wallId)
+              if (!wall) return null
+              return (
+                <OpeningShape
+                  key={opening.id}
+                  opening={opening}
+                  wall={wall}
+                  scale={viewport.scale}
+                  onPick={() => {
+                    setSelectedId(wall.id)
+                    setSelectedItemId(null)
+                    setSelectedRoomHash(null)
+                  }}
+                />
+              )
+            })}
           </Layer>
 
           {/* 物品层在墙之上：家具要压在墙线上，但顺序反过来就点不到被盖住的墙了。
@@ -1672,6 +1852,70 @@ function RunDimension({
  * 把绘制原点挪回左上角——这样 `rotation` 绕自身中心转，而不是绕左上角把沙发甩出房间。
  * 标签放在中心、水平居中，旋转后也不会和图形分家。
  */
+/**
+ * 门/窗：画成盖在墙线上的白色块。开着窗就是「洞」，关着窗是玻璃——
+ * 这里只表达几何，不表达开关状态（那是 capability）。
+ */
+function OpeningShape({
+  opening,
+  wall,
+  scale,
+  onPick,
+}: {
+  opening: Opening
+  wall: Wall
+  scale: number
+  onPick: () => void
+}) {
+  const length = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay)
+  const offset = clampWallOffset(opening.offset, opening.width, length)
+  const ux = length === 0 ? 1 : (wall.bx - wall.ax) / length
+  const uy = length === 0 ? 0 : (wall.by - wall.ay) / length
+  const rotation = (Math.atan2(wall.by - wall.ay, wall.bx - wall.ax) * 180) / Math.PI
+  const thickness = wall.thickness || 10
+  return (
+    <Group
+      x={wall.ax + ux * offset}
+      y={wall.ay + uy * offset}
+      rotation={rotation}
+      onMouseDown={(e) => {
+        e.cancelBubble = true
+        onPick()
+      }}
+      onClick={(e) => {
+        e.cancelBubble = true
+        onPick()
+      }}
+    >
+      <Rect
+        x={0}
+        y={-thickness / 2}
+        width={opening.width}
+        height={thickness + 2}
+        fill="#ffffff"
+        stroke="#94a3b8"
+        strokeWidth={1 / scale}
+      />
+      {opening.kind === 'window' ? (
+        <Line
+          points={[0, 0, opening.width, 0]}
+          stroke="#4f6bed"
+          strokeWidth={1.5 / scale}
+          listening={false}
+        />
+      ) : (
+        <Line
+          points={[0, -thickness / 2, opening.width, -thickness / 2]}
+          stroke="#8a8a9e"
+          strokeWidth={1 / scale}
+          dash={[4 / scale, 3 / scale]}
+          listening={false}
+        />
+      )}
+    </Group>
+  )
+}
+
 function ItemShape({
   item,
   type,

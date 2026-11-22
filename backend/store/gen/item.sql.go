@@ -26,7 +26,7 @@ func (q *Queries) DeleteItem(ctx context.Context, id pgtype.UUID) (int64, error)
 
 const getItem = `-- name: GetItem :one
 SELECT i.id, i.type_key, t.kind, i.name, i.room_hash, r.name AS room_name,
-       i.x, i.y, i.rotation, i.status, i.attrs
+       i.x, i.y, i.rotation, i.status, i.attrs, i.wall_id, i.wall_offset
 FROM item i
 JOIN item_type t ON t.key = i.type_key
 LEFT JOIN room_name r ON r.polygon_hash = i.room_hash
@@ -34,17 +34,19 @@ WHERE i.id = $1
 `
 
 type GetItemRow struct {
-	ID       pgtype.UUID     `json:"id"`
-	TypeKey  string          `json:"type_key"`
-	Kind     string          `json:"kind"`
-	Name     string          `json:"name"`
-	RoomHash pgtype.Text     `json:"room_hash"`
-	RoomName pgtype.Text     `json:"room_name"`
-	X        float64         `json:"x"`
-	Y        float64         `json:"y"`
-	Rotation float64         `json:"rotation"`
-	Status   pgtype.Text     `json:"status"`
-	Attrs    json.RawMessage `json:"attrs"`
+	ID         pgtype.UUID     `json:"id"`
+	TypeKey    string          `json:"type_key"`
+	Kind       string          `json:"kind"`
+	Name       string          `json:"name"`
+	RoomHash   pgtype.Text     `json:"room_hash"`
+	RoomName   pgtype.Text     `json:"room_name"`
+	X          float64         `json:"x"`
+	Y          float64         `json:"y"`
+	Rotation   float64         `json:"rotation"`
+	Status     pgtype.Text     `json:"status"`
+	Attrs      json.RawMessage `json:"attrs"`
+	WallID     pgtype.UUID     `json:"wall_id"`
+	WallOffset pgtype.Float8   `json:"wall_offset"`
 }
 
 func (q *Queries) GetItem(ctx context.Context, id pgtype.UUID) (GetItemRow, error) {
@@ -62,25 +64,30 @@ func (q *Queries) GetItem(ctx context.Context, id pgtype.UUID) (GetItemRow, erro
 		&i.Rotation,
 		&i.Status,
 		&i.Attrs,
+		&i.WallID,
+		&i.WallOffset,
 	)
 	return i, err
 }
 
 const insertItem = `-- name: InsertItem :one
-INSERT INTO item (type_key, name, room_hash, x, y, rotation, status, attrs)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO item (type_key, name, room_hash, x, y, rotation, status, attrs, wall_id, wall_offset)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid,
+        $10::double precision)
 RETURNING id
 `
 
 type InsertItemParams struct {
-	TypeKey  string          `json:"type_key"`
-	Name     string          `json:"name"`
-	RoomHash pgtype.Text     `json:"room_hash"`
-	X        float64         `json:"x"`
-	Y        float64         `json:"y"`
-	Rotation float64         `json:"rotation"`
-	Status   pgtype.Text     `json:"status"`
-	Attrs    json.RawMessage `json:"attrs"`
+	TypeKey    string          `json:"type_key"`
+	Name       string          `json:"name"`
+	RoomHash   pgtype.Text     `json:"room_hash"`
+	X          float64         `json:"x"`
+	Y          float64         `json:"y"`
+	Rotation   float64         `json:"rotation"`
+	Status     pgtype.Text     `json:"status"`
+	Attrs      json.RawMessage `json:"attrs"`
+	WallID     pgtype.UUID     `json:"wall_id"`
+	WallOffset pgtype.Float8   `json:"wall_offset"`
 }
 
 func (q *Queries) InsertItem(ctx context.Context, arg InsertItemParams) (pgtype.UUID, error) {
@@ -93,6 +100,8 @@ func (q *Queries) InsertItem(ctx context.Context, arg InsertItemParams) (pgtype.
 		arg.Rotation,
 		arg.Status,
 		arg.Attrs,
+		arg.WallID,
+		arg.WallOffset,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
@@ -101,7 +110,7 @@ func (q *Queries) InsertItem(ctx context.Context, arg InsertItemParams) (pgtype.
 
 const listItems = `-- name: ListItems :many
 SELECT i.id, i.type_key, t.kind, i.name, i.room_hash, r.name AS room_name,
-       i.x, i.y, i.rotation, i.status, i.attrs
+       i.x, i.y, i.rotation, i.status, i.attrs, i.wall_id, i.wall_offset
 FROM item i
 JOIN item_type t ON t.key = i.type_key
 LEFT JOIN room_name r ON r.polygon_hash = i.room_hash
@@ -118,17 +127,19 @@ type ListItemsParams struct {
 }
 
 type ListItemsRow struct {
-	ID       pgtype.UUID     `json:"id"`
-	TypeKey  string          `json:"type_key"`
-	Kind     string          `json:"kind"`
-	Name     string          `json:"name"`
-	RoomHash pgtype.Text     `json:"room_hash"`
-	RoomName pgtype.Text     `json:"room_name"`
-	X        float64         `json:"x"`
-	Y        float64         `json:"y"`
-	Rotation float64         `json:"rotation"`
-	Status   pgtype.Text     `json:"status"`
-	Attrs    json.RawMessage `json:"attrs"`
+	ID         pgtype.UUID     `json:"id"`
+	TypeKey    string          `json:"type_key"`
+	Kind       string          `json:"kind"`
+	Name       string          `json:"name"`
+	RoomHash   pgtype.Text     `json:"room_hash"`
+	RoomName   pgtype.Text     `json:"room_name"`
+	X          float64         `json:"x"`
+	Y          float64         `json:"y"`
+	Rotation   float64         `json:"rotation"`
+	Status     pgtype.Text     `json:"status"`
+	Attrs      json.RawMessage `json:"attrs"`
+	WallID     pgtype.UUID     `json:"wall_id"`
+	WallOffset pgtype.Float8   `json:"wall_offset"`
 }
 
 func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]ListItemsRow, error) {
@@ -152,6 +163,8 @@ func (q *Queries) ListItems(ctx context.Context, arg ListItemsParams) ([]ListIte
 			&i.Rotation,
 			&i.Status,
 			&i.Attrs,
+			&i.WallID,
+			&i.WallOffset,
 		); err != nil {
 			return nil, err
 		}
@@ -176,24 +189,31 @@ SET name = CASE WHEN $1::boolean THEN $2::text ELSE name END,
                   THEN NULLIF($10::text, '') ELSE status END,
     attrs = CASE WHEN $11::boolean
                  THEN $12::jsonb ELSE attrs END,
+    wall_id = CASE WHEN $13::boolean
+                   THEN $14::uuid ELSE wall_id END,
+    wall_offset = CASE WHEN $13::boolean
+                       THEN $15::double precision ELSE wall_offset END,
     updated_at = now()
-WHERE id = $13
+WHERE id = $16
 `
 
 type UpdateItemParams struct {
-	NameSet   bool            `json:"name_set"`
-	Name      string          `json:"name"`
-	RoomSet   bool            `json:"room_set"`
-	RoomHash  string          `json:"room_hash"`
-	PosSet    bool            `json:"pos_set"`
-	X         float64         `json:"x"`
-	Y         float64         `json:"y"`
-	Rotation  float64         `json:"rotation"`
-	StatusSet bool            `json:"status_set"`
-	Status    string          `json:"status"`
-	AttrsSet  bool            `json:"attrs_set"`
-	Attrs     json.RawMessage `json:"attrs"`
-	ID        pgtype.UUID     `json:"id"`
+	NameSet    bool            `json:"name_set"`
+	Name       string          `json:"name"`
+	RoomSet    bool            `json:"room_set"`
+	RoomHash   string          `json:"room_hash"`
+	PosSet     bool            `json:"pos_set"`
+	X          float64         `json:"x"`
+	Y          float64         `json:"y"`
+	Rotation   float64         `json:"rotation"`
+	StatusSet  bool            `json:"status_set"`
+	Status     string          `json:"status"`
+	AttrsSet   bool            `json:"attrs_set"`
+	Attrs      json.RawMessage `json:"attrs"`
+	WallSet    bool            `json:"wall_set"`
+	WallID     pgtype.UUID     `json:"wall_id"`
+	WallOffset pgtype.Float8   `json:"wall_offset"`
+	ID         pgtype.UUID     `json:"id"`
 }
 
 // 逐字段 PATCH：未提供的字段保持数据库当前值。
@@ -211,6 +231,9 @@ func (q *Queries) UpdateItem(ctx context.Context, arg UpdateItemParams) (int64, 
 		arg.Status,
 		arg.AttrsSet,
 		arg.Attrs,
+		arg.WallSet,
+		arg.WallID,
+		arg.WallOffset,
 		arg.ID,
 	)
 	if err != nil {

@@ -1,20 +1,20 @@
 -- name: ListItemTypes :many
-SELECT key, kind, name, icons, default_width, default_depth,
+SELECT key, kind, name, icons, default_width, default_depth, mount,
        capabilities, capabilities_version, driver
 FROM item_type
 ORDER BY kind, key;
 
 -- name: GetItemType :one
-SELECT key, kind, name, icons, default_width, default_depth,
+SELECT key, kind, name, icons, default_width, default_depth, mount,
        capabilities, capabilities_version, driver
 FROM item_type
 WHERE key = $1;
 
 -- name: InsertItemType :one
 INSERT INTO item_type (key, kind, name, icons, default_width, default_depth,
-                       capabilities, capabilities_version, driver)
-VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8)
-RETURNING key, kind, name, icons, default_width, default_depth,
+                       capabilities, capabilities_version, driver, mount)
+VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, COALESCE(sqlc.narg('mount')::text, 'floor'))
+RETURNING key, kind, name, icons, default_width, default_depth, mount,
           capabilities, capabilities_version, driver;
 
 -- name: UpdateItemType :one
@@ -36,11 +36,13 @@ SET name = CASE WHEN sqlc.arg(name_set)::boolean THEN sqlc.arg(name)::text ELSE 
       THEN 1 ELSE 0 END,
     driver = CASE WHEN sqlc.arg(driver_set)::boolean
                   THEN NULLIF(sqlc.arg(driver)::text, '') ELSE driver END,
+    mount = CASE WHEN sqlc.arg(mount_set)::boolean
+                 THEN sqlc.narg('mount')::text ELSE mount END,
     updated_at = now()
 WHERE key = sqlc.arg(key)
   AND (NOT sqlc.arg(version_set)::boolean
        OR capabilities_version = sqlc.arg(expected_version)::integer)
-RETURNING key, kind, name, icons, default_width, default_depth,
+RETURNING key, kind, name, icons, default_width, default_depth, mount,
           capabilities, capabilities_version, driver;
 
 -- name: DeleteItemType :execrows

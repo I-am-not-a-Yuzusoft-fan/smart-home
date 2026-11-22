@@ -98,6 +98,40 @@ export type Room = {
   kind?: string
 }
 
+/**
+ * 门窗：挂在墙上、沿墙定位。高度与离地的默认值由后端按类型给
+ * （门 210/0，窗 120/90），几何的唯一来源仍是墙的端点。
+ */
+export type OpeningKind = 'door' | 'window'
+
+export type Opening = {
+  id: string
+  wallId: string
+  kind: OpeningKind
+  /** 距墙 A 端点的偏移（厘米） */
+  offset: number
+  width: number
+  height: number
+  /** 离地高度（厘米）；门为 0 */
+  sill: number
+}
+
+export type OpeningInput = {
+  wallId: string
+  kind: OpeningKind
+  offset: number
+  width: number
+  height?: number
+  sill?: number
+}
+
+export type OpeningPatch = {
+  offset?: number
+  width?: number
+  height?: number
+  sill?: number
+}
+
 /** 房间用途。与后端的 `room_name.kind` 检查约束一致。 */
 export type RoomKind = 'living' | 'bedroom' | 'kitchen' | 'bathroom' | 'study' | 'hallway'
 
@@ -108,6 +142,8 @@ export type Plan = {
   corners: Corner[]
   walls: Wall[]
   rooms: Room[]
+  /** 门窗：位置由「墙 + 沿墙偏移」决定，不随物品一起移动 */
+  openings: Opening[]
   /** 没参与任何闭合区域的墙数：大于 0 说明还有墙没围上 */
   openWalls: number
   /** 失配的房间名：前端据此提示「原来起的名字已失效」并允许清理 */
@@ -139,8 +175,23 @@ export const updateWall = (
   input: { ax: number; ay: number; bx: number; by: number; thickness?: number },
 ) => request<Plan>(`/api/walls/${id}`, { method: 'PATCH', body: JSON.stringify(input) })
 
-/** 删一面墙。 */
+/** 删一面墙。墙上的门窗与挂墙物品会被级联删除。 */
 export const deleteWall = (id: string) => request<void>(`/api/walls/${id}`, { method: 'DELETE' })
+
+/** 在墙上开一个门/窗；返回保存后的整个户型。 */
+export const createOpening = (input: OpeningInput) =>
+  request<Plan>('/api/openings', { method: 'POST', body: JSON.stringify(input) })
+
+/** 改开口的偏移/宽高/离地。 */
+export const updateOpening = (id: string, input: OpeningPatch) =>
+  request<Plan>(`/api/openings/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+
+/** 删开口（幂等：不存在也算成功）。 */
+export const deleteOpening = (id: string) =>
+  request<void>(`/api/openings/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 export type ItemKind = 'furniture' | 'device'
 export type ItemStatus = 'normal' | 'idle' | 'maintenance'
@@ -158,6 +209,9 @@ export type Item = {
   rotation: number
   status?: ItemStatus
   attrs?: Record<string, unknown>
+  /** 挂墙物品：位置由 (wallId, wallOffset) 决定，x/y/rotation 是服务端算出来的派生值 */
+  wallId?: string
+  wallOffset?: number
 }
 
 export type ItemFilter = {
@@ -175,6 +229,9 @@ export type ItemInput = {
   rotation?: number
   status?: ItemStatus
   attrs?: Record<string, unknown>
+  /** 挂墙物品：给了 wallId 就由服务端按墙重算 x/y/rotation */
+  wallId?: string
+  wallOffset?: number
 }
 
 export type ItemUpdate = {
@@ -185,6 +242,9 @@ export type ItemUpdate = {
   rotation?: number
   status?: ItemStatus
   attrs?: Record<string, unknown>
+  /** 换一面墙 / 沿墙挪：空字符串表示脱离墙面，回到自由摆放 */
+  wallId?: string
+  wallOffset?: number
 }
 
 /** 物品列表；筛选条件为空时返回全部。 */
@@ -244,11 +304,15 @@ export type Capability = {
   default?: unknown
 }
 
+/** 挂在哪：落地、贴墙、吸顶。挂墙物品必须带 wallId + wallOffset。 */
+export type Mount = 'floor' | 'wall' | 'ceiling'
+
 export type ItemType = {
   key: string
   kind: 'furniture' | 'device'
   name: string
   icons?: string
+  mount: Mount
   defaultWidth: number
   defaultDepth: number
   capabilities: Capability[]
@@ -261,6 +325,7 @@ export type ItemTypeInput = {
   kind: 'furniture' | 'device'
   name: string
   icons?: string
+  mount?: Mount
   defaultWidth?: number
   defaultDepth?: number
   capabilities: Capability[]
@@ -270,6 +335,7 @@ export type ItemTypeInput = {
 export type ItemTypeUpdate = {
   name?: string
   icons?: string
+  mount?: Mount
   defaultWidth?: number
   defaultDepth?: number
   capabilities?: Capability[]

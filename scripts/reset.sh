@@ -24,7 +24,10 @@ fi
 
 start=$(date +%s)
 psql_cmd 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'
-psql_file "$ROOT/sql/0001_init.sql"
+# 按文件名顺序跑全部迁移：0001 建表、0002 加墙面挂件……每加一版只需往 sql/ 放文件。
+for f in "$ROOT"/sql/0*.sql; do
+  psql_file "$f"
+done
 psql_file "$ROOT/sql/seed.sql"
 end=$(date +%s)
 

@@ -68,6 +68,7 @@ export default function ItemSidebar({
               <span className="block text-sm">{typ.name}</span>
               <span style={{ color: 'var(--color-muted)' }}>
                 {typ.kind === 'device' ? '设备' : '家具'} · {typ.defaultWidth}×{typ.defaultDepth}cm
+                {typ.mount === 'wall' ? ' · 挂墙' : typ.mount === 'ceiling' ? ' · 吸顶' : ''}
               </span>
             </button>
           ))}

@@ -11,6 +11,8 @@ type Props = {
     x?: number
     y?: number
     rotation?: number
+    wallId?: string
+    wallOffset?: number
   }) => Promise<void>
   onDelete: (id: string) => Promise<void>
 }
@@ -22,6 +24,7 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
   const [x, setX] = useState('0')
   const [y, setY] = useState('0')
   const [rotation, setRotation] = useState('0')
+  const [wallOffset, setWallOffset] = useState('0')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -32,8 +35,9 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
     setX(String(item.x))
     setY(String(item.y))
     setRotation(String(item.rotation))
+    setWallOffset(String(item.wallOffset ?? 0))
     setError(null)
-  }, [item?.id, item?.name, item?.roomHash, item?.x, item?.y, item?.rotation])
+  }, [item?.id, item?.name, item?.roomHash, item?.x, item?.y, item?.rotation, item?.wallOffset])
 
   if (!item) {
     return (
@@ -61,6 +65,22 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
     setSaving(true)
     setError(null)
     try {
+      // 挂墙物品只报沿墙偏移：x/y/rotation 是墙的函数，直接写会被后端拒掉（400）。
+      if (item.wallId) {
+        const nOffset = Number(wallOffset)
+        if (!Number.isFinite(nOffset) || nOffset < 0) {
+          setError('沿墙偏移必须是不小于 0 的数字')
+          setSaving(false)
+          return
+        }
+        await onUpdate(item.id, {
+          name: name.trim(),
+          roomHash,
+          wallId: item.wallId,
+          wallOffset: nOffset,
+        })
+        return
+      }
       await onUpdate(item.id, {
         name: name.trim(),
         roomHash,
@@ -82,6 +102,7 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
         <p className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
           {item.kind === 'device' ? '设备' : '家具'} · {type?.name ?? item.typeKey}
           {type ? ` · ${type.defaultWidth}×${type.defaultDepth}cm` : ''}
+          {item.wallId ? ' · 挂墙' : type?.mount === 'ceiling' ? ' · 吸顶' : ''}
         </p>
       </div>
 
@@ -102,27 +123,48 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
           ))}
         </select>
       </label>
-      <div className="grid grid-cols-2 gap-2">
-        <label className="grid gap-1 text-[11px]">
-          x（cm）
-          <input type="number" value={x} onChange={(e) => setX(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm" />
-        </label>
-        <label className="grid gap-1 text-[11px]">
-          y（cm）
-          <input type="number" value={y} onChange={(e) => setY(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm" />
-        </label>
-      </div>
-      <label className="grid gap-1 text-[11px]">
-        旋转（度）
-        <input type="number" step={90} value={rotation} onChange={(e) => setRotation(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm" />
-      </label>
-      <div className="flex flex-wrap gap-1">
-        {[0, 90, 180, 270].map((deg) => (
-          <button key={deg} onClick={() => setRotation(String(deg))} className="px-2 py-1 text-xs" style={buttonStyle}>
-            {deg}°
-          </button>
-        ))}
-      </div>
+      {item.wallId ? (
+        <>
+          <label className="grid gap-1 text-[11px]">
+            沿墙偏移（cm）
+            <input
+              type="number"
+              min={0}
+              value={wallOffset}
+              onChange={(e) => setWallOffset(e.target.value)}
+              style={inputStyle}
+              className="px-2 py-1 text-sm"
+            />
+          </label>
+          <p className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
+            挂墙物品的位置与朝向由墙决定：挪这面墙，它会跟着走。想自由摆放就先把它拖离墙面。
+          </p>
+        </>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="grid gap-1 text-[11px]">
+              x（cm）
+              <input type="number" value={x} onChange={(e) => setX(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm" />
+            </label>
+            <label className="grid gap-1 text-[11px]">
+              y（cm）
+              <input type="number" value={y} onChange={(e) => setY(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm" />
+            </label>
+          </div>
+          <label className="grid gap-1 text-[11px]">
+            旋转（度）
+            <input type="number" step={90} value={rotation} onChange={(e) => setRotation(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm" />
+          </label>
+          <div className="flex flex-wrap gap-1">
+            {[0, 90, 180, 270].map((deg) => (
+              <button key={deg} onClick={() => setRotation(String(deg))} className="px-2 py-1 text-xs" style={buttonStyle}>
+                {deg}°
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       <div className="mt-auto flex items-center justify-between gap-2">
         <button
