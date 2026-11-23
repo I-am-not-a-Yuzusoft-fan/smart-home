@@ -51,11 +51,13 @@ JOIN corner ca ON ca.id = w.a
 JOIN corner cb ON cb.id = w.b
 ORDER BY w.created_at, w.id;
 
--- name: GetWallByPair :one
--- 反着画也是同一面墙，所以两种顺序都查
+-- name: GetWallByPairAndArc :one
+-- 反着画也是同一面墙；弧墙与直墙可以共用一对端点（半圆阳台），
+-- 所以弧度和端点一起构成身份。
 SELECT id
 FROM wall
-WHERE (a = $1 AND b = $2) OR (a = $2 AND b = $1);
+WHERE ((a = $1 AND b = $2) OR (a = $2 AND b = $1))
+  AND arc_extent = sqlc.arg(arc_extent)::double precision;
 
 -- name: InsertWall :one
 INSERT INTO wall (a, b, thickness, arc_extent)

@@ -63,12 +63,13 @@ func (p *PGPlan) LoadPlan(ctx context.Context) ([]PlanCorner, []PlanWall, error)
 
 // CreateWall 在一个事务里：端点按坐标 upsert，再插入墙。
 //
-// 同一对端点只留一面墙，反着画（B→A）也算同一面——这种情况下什么也不做，
-// 让调用方读到的仍是已有的那面。
-func (p *PGPlan) CreateWall(ctx context.Context, in WallInput) error {
+// 墙的身份是「端点对 + 弧度」：完全相同的墙（反着画也算）只留一面，
+// 但同端点的直墙与弧墙是两面墙——半圆阳台的弦墙和弧墙就靠这条共存。
+// 返回 created=false 表示这面墙本来就存在。
+func (p *PGPlan) CreateWall(ctx context.Context, in WallInput) (bool, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -86,29 +87,29 @@ func (p *PGPlan) CreateWall(ctx context.Context, in WallInput) error {
 
 	a, err := q.UpsertCorner(ctx, first)
 	if err != nil {
-		return err
+		return false, err
 	}
 	b, err := q.UpsertCorner(ctx, second)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !aIsFirst {
 		a, b = b, a
 	}
 
-	_, err = q.GetWallByPair(ctx, storegen.GetWallByPairParams{A: a, B: b})
+	_, err = q.GetWallByPairAndArc(ctx, storegen.GetWallByPairAndArcParams{A: a, B: b, ArcExtent: in.ArcExtent})
 	switch {
 	case err == nil:
-		// 已经有这面墙了，提交事务（端点 upsert 可能刚创建过一个孤立端点）。
+		// 已经有一面一模一样的墙了，提交事务（端点 upsert 可能刚创建过一个孤立端点）。
 		// 每个改动都要 +1 版本号：撤销/重做靠它做乐观并发。
 		if _, err := q.BumpPlanVersion(ctx); err != nil {
-			return fmt.Errorf("递增版本号: %w", err)
+			return false, fmt.Errorf("递增版本号: %w", err)
 		}
-		return tx.Commit(ctx)
+		return false, tx.Commit(ctx)
 	case errors.Is(err, pgx.ErrNoRows):
 		// 继续插入
 	default:
-		return err
+		return false, err
 	}
 
 	if _, err := q.InsertWall(ctx, storegen.InsertWallParams{A: a, B: b, Thickness: in.Thickness, ArcExtent: in.ArcExtent}); err != nil {
@@ -117,17 +118,17 @@ func (p *PGPlan) CreateWall(ctx context.Context, in WallInput) error {
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			// 每个改动都要 +1 版本号：撤销/重做靠它做乐观并发。
 			if _, err := q.BumpPlanVersion(ctx); err != nil {
-				return fmt.Errorf("递增版本号: %w", err)
+				return false, fmt.Errorf("递增版本号: %w", err)
 			}
-			return tx.Commit(ctx)
+			return false, tx.Commit(ctx)
 		}
-		return err
+		return false, err
 	}
 	// 每个改动都要 +1 版本号：撤销/重做靠它做乐观并发。
 	if _, err := q.BumpPlanVersion(ctx); err != nil {
-		return fmt.Errorf("递增版本号: %w", err)
+		return false, fmt.Errorf("递增版本号: %w", err)
 	}
-	return tx.Commit(ctx)
+	return true, tx.Commit(ctx)
 }
 
 // LoadRoomNames 读全部房间命名。房间本身不落库，这里只有"名字"。
@@ -173,8 +174,8 @@ func (p *PGPlan) UpdateWall(ctx context.Context, id openapi_types.UUID, in WallI
 		a, b = b, a
 	}
 
-	// 这一对端点上已经有别的墙 → 409，不合并。
-	existing, err := q.GetWallByPair(ctx, storegen.GetWallByPairParams{A: a, B: b})
+	// 同端点、同弧度上已经有别的墙 → 409，不合并；同端点的直墙/弧墙可以并存。
+	existing, err := q.GetWallByPairAndArc(ctx, storegen.GetWallByPairAndArcParams{A: a, B: b, ArcExtent: in.ArcExtent})
 	switch {
 	case err == nil:
 		if existing.Bytes != id {
