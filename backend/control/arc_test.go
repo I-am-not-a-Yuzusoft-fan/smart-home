@@ -1,6 +1,7 @@
 package control
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -72,5 +73,47 @@ func TestDeriveArcRoomArea(t *testing.T) {
 	got := res.Rings[0].AreaM2
 	if math.Abs(got-13.45) > 0.1 {
 		t.Fatalf("带 60° 弧的房间面积应在 13.45 ㎡ 附近，实际 %.2f", got)
+	}
+}
+
+// 半圆阳台：带门的弦墙与半圆弧共用一对端点，应当推出两个房间——矩形 12 ㎡、透镜 ≈6.28 ㎡。
+// 这是「墙的身份 = 端点对 + 弧度」存在的理由：同端点的直墙与弧墙是两面墙。
+func TestDeriveChordAndArcMakeTwoRooms(t *testing.T) {
+	corners := []Point{
+		{ID: "a", X: 0, Y: 0},
+		{ID: "b", X: 400, Y: 0},
+		{ID: "c", X: 400, Y: 300},
+		{ID: "d", X: 0, Y: 300},
+	}
+	walls := []Wall{{A: "a", B: "b"}, {A: "b", B: "c"}, {A: "c", B: "d"}, {A: "d", B: "a"}}
+
+	// 半圆弧把弦 a-b 向上（屏幕 -y）撑成半圆，端点仍是 a 与 b。
+	mid := ArcPolyline(corners[0], corners[1], 180)
+	prev := "a"
+	for i, p := range mid {
+		id := fmt.Sprintf("arc%d", i)
+		corners = append(corners, Point{ID: id, X: p.X, Y: p.Y})
+		walls = append(walls, Wall{A: prev, B: id})
+		prev = id
+	}
+	walls = append(walls, Wall{A: prev, B: "b"})
+
+	res := Derive(corners, walls)
+	if len(res.Rings) != 2 {
+		t.Fatalf("半圆阳台应推出两个房间，实际 %d 个：%+v", len(res.Rings), res.Rings)
+	}
+	areas := []float64{res.Rings[0].AreaM2, res.Rings[1].AreaM2}
+	// 矩形 4×3=12 ㎡；半圆 π·2²/2 ≈ 6.28 ㎡（5° 采样略小）。
+	var rect, lens bool
+	for _, a := range areas {
+		if math.Abs(a-12) < 0.05 {
+			rect = true
+		}
+		if math.Abs(a-6.27) < 0.05 {
+			lens = true
+		}
+	}
+	if !rect || !lens {
+		t.Fatalf("应得到 12 ㎡ 与 ≈6.27 ㎡ 两个房间，实际 %v", areas)
 	}
 }

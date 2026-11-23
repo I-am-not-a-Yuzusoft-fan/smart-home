@@ -304,6 +304,7 @@ func (e OpeningInputKind) Valid() bool {
 
 // Defines values for RoomKind.
 const (
+	RoomKindBalcony  RoomKind = "balcony"
 	RoomKindBathroom RoomKind = "bathroom"
 	RoomKindBedroom  RoomKind = "bedroom"
 	RoomKindHallway  RoomKind = "hallway"
@@ -315,6 +316,8 @@ const (
 // Valid indicates whether the value is a known member of the RoomKind enum.
 func (e RoomKind) Valid() bool {
 	switch e {
+	case RoomKindBalcony:
+		return true
 	case RoomKindBathroom:
 		return true
 	case RoomKindBedroom:
@@ -334,6 +337,7 @@ func (e RoomKind) Valid() bool {
 
 // Defines values for RoomNameInputKind.
 const (
+	RoomNameInputKindBalcony  RoomNameInputKind = "balcony"
 	RoomNameInputKindBathroom RoomNameInputKind = "bathroom"
 	RoomNameInputKindBedroom  RoomNameInputKind = "bedroom"
 	RoomNameInputKindHallway  RoomNameInputKind = "hallway"
@@ -345,6 +349,8 @@ const (
 // Valid indicates whether the value is a known member of the RoomNameInputKind enum.
 func (e RoomNameInputKind) Valid() bool {
 	switch e {
+	case RoomNameInputKindBalcony:
+		return true
 	case RoomNameInputKindBathroom:
 		return true
 	case RoomNameInputKindBedroom:
@@ -382,6 +388,7 @@ func (e SessionUserRole) Valid() bool {
 
 // Defines values for StaleRoomKind.
 const (
+	StaleRoomKindBalcony  StaleRoomKind = "balcony"
 	StaleRoomKindBathroom StaleRoomKind = "bathroom"
 	StaleRoomKindBedroom  StaleRoomKind = "bedroom"
 	StaleRoomKindHallway  StaleRoomKind = "hallway"
@@ -393,6 +400,8 @@ const (
 // Valid indicates whether the value is a known member of the StaleRoomKind enum.
 func (e StaleRoomKind) Valid() bool {
 	switch e {
+	case StaleRoomKindBalcony:
+		return true
 	case StaleRoomKindBathroom:
 		return true
 	case StaleRoomKindBedroom:

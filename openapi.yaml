@@ -923,7 +923,7 @@ components:
           description: 用户起的名字；还没起名时为空
         kind:
           type: string
-          enum: [living, bedroom, kitchen, bathroom, study, hallway]
+          enum: [living, bedroom, kitchen, bathroom, study, hallway, balcony]
           description: 房间用途；还没指定时为空
     StaleRoom:
       type: object
@@ -937,7 +937,7 @@ components:
           type: string
         kind:
           type: string
-          enum: [living, bedroom, kitchen, bathroom, study, hallway]
+          enum: [living, bedroom, kitchen, bathroom, study, hallway, balcony]
     RoomNameInput:
       type: object
       required: [name]
@@ -950,7 +950,7 @@ components:
           description: 房间名，1–24 个字
         kind:
           type: string
-          enum: [living, bedroom, kitchen, bathroom, study, hallway]
+          enum: [living, bedroom, kitchen, bathroom, study, hallway, balcony]
     CapabilityOption:
       type: object
       required: [value, label]

@@ -123,7 +123,7 @@ type PlanStore interface {
 	LoadPlan(ctx context.Context) ([]PlanCorner, []PlanWall, error)
 	// LoadRoomNames 只取"名字"，几何由墙推导——房间不存几何是 ADR 0002 定下的。
 	LoadRoomNames(ctx context.Context) ([]RoomName, error)
-	CreateWall(ctx context.Context, in WallInput) error
+	CreateWall(ctx context.Context, in WallInput) (bool, error)
 	UpdateWall(ctx context.Context, id openapi_types.UUID, in WallInput) error
 	DeleteWall(ctx context.Context, id openapi_types.UUID) (int64, error)
 	// LoadVersion 读平面图版本号；撤销/重做拿它做乐观并发。
@@ -191,7 +191,8 @@ func (s *Server) GetPlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, plan)
 }
 
-// CreateWall 画一面墙：端点按坐标去重，同一对端点只留一面墙。
+// CreateWall 画一面墙：端点按坐标去重；墙的身份是「端点对 + 弧度」，
+// 所以同端点的直墙与弧墙可以共存（半圆阳台），完全相同的墙才幂等。
 // 成功后返回整个户型，前端直接替换本地状态。
 func (s *Server) CreateWall(w http.ResponseWriter, r *http.Request) {
 	var body gen.WallInput
@@ -223,10 +224,15 @@ func (s *Server) CreateWall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if err := s.plan.CreateWall(ctx, in); err != nil {
+	created, err := s.plan.CreateWall(ctx, in)
+	if err != nil {
 		s.log.Error("保存墙失败", "err", err)
 		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "保存失败")
 		return
+	}
+	if !created {
+		// 幂等：这面墙本来就在。前端靠这个头提示「这面墙已经存在」并选中它。
+		w.Header().Set("X-Wall-Existing", "1")
 	}
 
 	plan, err := s.readPlan(ctx)
@@ -316,7 +322,7 @@ func (s *Server) UpdateWall(w http.ResponseWriter, r *http.Request, wallID opena
 		writeError(w, http.StatusNotFound, gen.NOTFOUND, "没有这面墙")
 		return
 	case errors.Is(err, ErrWallConflict):
-		writeError(w, http.StatusConflict, gen.CONFLICT, "这个位置已经有一面同样的墙了")
+		writeError(w, http.StatusConflict, gen.CONFLICT, "这里已经有一面一模一样的墙（同端点、同弧度）")
 		return
 	default:
 		s.log.Error("改墙失败", "err", err)

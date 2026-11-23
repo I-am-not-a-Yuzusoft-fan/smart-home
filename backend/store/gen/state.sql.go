@@ -232,20 +232,23 @@ func (q *Queries) GetWallByID(ctx context.Context, id pgtype.UUID) (GetWallByIDR
 	return i, err
 }
 
-const getWallByPair = `-- name: GetWallByPair :one
+const getWallByPairAndArc = `-- name: GetWallByPairAndArc :one
 SELECT id
 FROM wall
-WHERE (a = $1 AND b = $2) OR (a = $2 AND b = $1)
+WHERE ((a = $1 AND b = $2) OR (a = $2 AND b = $1))
+  AND arc_extent = $3::double precision
 `
 
-type GetWallByPairParams struct {
-	A pgtype.UUID `json:"a"`
-	B pgtype.UUID `json:"b"`
+type GetWallByPairAndArcParams struct {
+	A         pgtype.UUID `json:"a"`
+	B         pgtype.UUID `json:"b"`
+	ArcExtent float64     `json:"arc_extent"`
 }
 
-// 反着画也是同一面墙，所以两种顺序都查
-func (q *Queries) GetWallByPair(ctx context.Context, arg GetWallByPairParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, getWallByPair, arg.A, arg.B)
+// 反着画也是同一面墙；弧墙与直墙可以共用一对端点（半圆阳台），
+// 所以弧度和端点一起构成身份。
+func (q *Queries) GetWallByPairAndArc(ctx context.Context, arg GetWallByPairAndArcParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getWallByPairAndArc, arg.A, arg.B, arg.ArcExtent)
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err

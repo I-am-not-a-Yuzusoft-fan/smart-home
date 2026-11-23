@@ -1194,33 +1194,11 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     try {
       const before = new Set(plan.walls.map((w) => w.id))
       const snapshot = snapshotOf(plan)
-      // 弦正好压在已有的墙上（画弧最常见的动作：把一面直墙改成弧墙）：
-      // 后端对"同一对端点"的建墙是幂等的——只 bump 版本、不建新墙，
-      // 所以以前会看到"弧线消失了、什么都没发生"。这里改成直接更新那面墙。
-      const same = (x: number, y: number, px: number, py: number) => Math.abs(x - px) < 1 && Math.abs(y - py) < 1
-      const hit = plan.walls.find(
-        (w) =>
-          (same(w.ax, w.ay, d.ax, d.ay) && same(w.bx, w.by, d.bx, d.by)) ||
-          (same(w.ax, w.ay, d.bx, d.by) && same(w.bx, w.by, d.ax, d.ay)),
-      )
-      if (hit) {
-        setError(null)
-        if (d.arcExtent === undefined) {
-          setSelectedId(hit.id)
-          setError('这面墙已经存在：想改弧度就选中它改，或者用「画弧」把它改成弧墙')
-          return
-        }
-        debugLog('reuse-wall', { id: hit.id, arcExtent: d.arcExtent })
-        const next = await updateWall(hit.id, { arcExtent: d.arcExtent })
-        if (seq === writeSeq.current) {
-          remember(snapshot)
-          setPlan(next)
-          setSelectedId(hit.id)
-        }
-        return
-      }
+      // 墙的身份是「端点对 + 弧度」：同端点的直墙与弧墙是两面墙，
+      // 半圆阳台的弦墙（带门）和外面那段弧就靠这条共存。
+      // 完全相同的墙由服务端按幂等处理，用 X-Wall-Existing 告诉我们。
       debugLog('create-wall', { ...d })
-      const next = await createWall({
+      const { plan: next, existing } = await createWall({
         ax: d.ax,
         ay: d.ay,
         bx: d.bx,
@@ -1230,6 +1208,21 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       if (seq === writeSeq.current) {
         remember(snapshot)
         setPlan(next)
+        if (existing) {
+          const same = (x: number, y: number, px: number, py: number) => Math.abs(x - px) < 1 && Math.abs(y - py) < 1
+          const hit = next.walls.find(
+            (w) =>
+              (same(w.ax, w.ay, d.ax, d.ay) && same(w.bx, w.by, d.bx, d.by)) ||
+              (same(w.ax, w.ay, d.bx, d.by) && same(w.bx, w.by, d.ax, d.ay)),
+          )
+          if (hit) setSelectedId(hit.id)
+          setError(
+            d.arcExtent === undefined
+              ? '这面墙已经存在：想改弧度就选中它改，或者用「画弧」再画一段弧墙'
+              : '这个位置上已经有一模一样的弧墙了：想改弧度就选中它改',
+          )
+          return
+        }
         setError(null)
         const created = next.walls.find((w) => !before.has(w.id))
         if (created) {
@@ -3120,6 +3113,7 @@ const ROOM_KINDS: { value: RoomKind; label: string }[] = [
   { value: 'bathroom', label: '卫生间' },
   { value: 'study', label: '书房' },
   { value: 'hallway', label: '走廊' },
+  { value: 'balcony', label: '阳台' },
 ]
 
 /**
