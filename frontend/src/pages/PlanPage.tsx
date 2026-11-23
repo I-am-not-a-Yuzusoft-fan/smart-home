@@ -954,8 +954,19 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     arcKeyRef.current = e.evt.altKey || e.evt.ctrlKey
     if (bend) {
       const b = bend
+      const extent = Math.round(b.arcExtent ?? 0)
+      if (e.evt.button === 0) {
+        // 松手后没动鼠标就点了一下：这时弧度还是 0，落定等于画一条直墙，
+        // 十有八九还会和已有的墙撞上（409）。直接说清楚，别让人以为"点了没反应"。
+        if (Math.abs(extent) < 1) {
+          setError('弧度还是 0°：先移动鼠标把弧拉出来，再单击落定')
+          return
+        }
+        setBend(null)
+        void submitWall({ ...b, arcExtent: extent })
+        return
+      }
       setBend(null)
-      if (e.evt.button === 0) void submitWall({ ...b, arcExtent: Math.round(b.arcExtent ?? 0) })
       return
     }
     const stage = stageRef.current
