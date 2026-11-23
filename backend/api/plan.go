@@ -241,8 +241,19 @@ func (s *Server) CreateWall(w http.ResponseWriter, r *http.Request) {
 // DeleteWall 删墙。端点保留：它可能被别的墙共用，孤立端点本身是合法状态。
 // UpdateWall 改一面墙的端点或厚度——拖端点微调长度与角度走这条。
 // 端点仍按坐标去重，所以把端点拖到别处已有端点上等于合并到这个点。
+// wallPatch 是 PATCH /api/walls/{id} 的请求体：所有字段都是可选的，
+// 没传的沿用墙上的原值（只改弧度时不能把端点写成 0）。
+type wallPatch struct {
+	Ax        *float64 `json:"ax,omitempty"`
+	Ay        *float64 `json:"ay,omitempty"`
+	Bx        *float64 `json:"bx,omitempty"`
+	By        *float64 `json:"by,omitempty"`
+	Thickness *float64 `json:"thickness,omitempty"`
+	ArcExtent *float64 `json:"arcExtent,omitempty"`
+}
+
 func (s *Server) UpdateWall(w http.ResponseWriter, r *http.Request, wallID openapi_types.UUID) {
-	var body gen.WallInput
+	var body wallPatch
 
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
 	dec.DisallowUnknownFields()
@@ -266,15 +277,30 @@ func (s *Server) UpdateWall(w http.ResponseWriter, r *http.Request, wallID opena
 
 	thickness := existing.Thickness
 	if body.Thickness != nil {
-		thickness = float64(*body.Thickness)
+		thickness = *body.Thickness
 	}
 	arc := existing.ArcExtent
 	if body.ArcExtent != nil {
-		arc = float64(*body.ArcExtent)
+		arc = *body.ArcExtent
+	}
+	// 端点也要沿用原值：只改弧度的 PATCH 以前会把端点写成 (0,0)-(0,0)，
+	// 校验直接报"墙的两个端点重合了"。
+	ax, ay, bx, by := existing.AX, existing.AY, existing.BX, existing.BY
+	if body.Ax != nil {
+		ax = *body.Ax
+	}
+	if body.Ay != nil {
+		ay = *body.Ay
+	}
+	if body.Bx != nil {
+		bx = *body.Bx
+	}
+	if body.By != nil {
+		by = *body.By
 	}
 	in := WallInput{
-		AX: float64(body.Ax), AY: float64(body.Ay),
-		BX: float64(body.Bx), BY: float64(body.By),
+		AX: ax, AY: ay,
+		BX: bx, BY: by,
 		Thickness: thickness,
 		ArcExtent: arc,
 	}

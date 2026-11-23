@@ -210,7 +210,8 @@ export const createWall = (input: {
 /** 改一面墙的端点或厚度（拖端点微调长度与角度走这条）。 */
 export const updateWall = (
   id: string,
-  input: { ax: number; ay: number; bx: number; by: number; thickness?: number; arcExtent?: number },
+  // PATCH 是部分更新：只传要改的字段，服务端会保留没传的（弧、厚度、端点）。
+  input: { ax?: number; ay?: number; bx?: number; by?: number; thickness?: number; arcExtent?: number },
 ) => request<Plan>(`/api/walls/${id}`, { method: 'PATCH', body: JSON.stringify(input) })
 
 /** 删一面墙。墙上的门窗与挂墙物品会被级联删除。 */
