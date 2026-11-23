@@ -9,6 +9,7 @@ FROM capability_state
 WHERE item_id = $1
 ORDER BY capability_key;
 
+
 -- name: UpsertState :exec
 INSERT INTO capability_state (item_id, capability_key, value, source, updated_at)
 VALUES ($1, $2, $3, $4, $5)
@@ -30,6 +31,19 @@ RETURNING id;
 UPDATE command_log
 SET status = $2, error = $3, completed_at = $4, duration_ms = $5
 WHERE request_id = $1;
+
+-- name: GetCommandByRequestID :one
+SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
+       created_at, completed_at, duration_ms
+FROM command_log
+WHERE request_id = $1;
+
+-- name: ListCommandLogs :many
+SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
+       created_at, completed_at, duration_ms
+FROM command_log
+ORDER BY created_at DESC, id DESC
+LIMIT $1;
 
 -- name: ListCorners :many
 SELECT id, x, y

@@ -1,0 +1,159 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+
+	"github.com/google/uuid"
+	openapi_types "github.com/oapi-codegen/runtime/types"
+
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api/gen"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
+	storegen "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
+)
+
+type CommandHandler interface {
+	Handle(context.Context, control.Command) (control.CommandResult, error)
+	ListLogs(context.Context, int32) ([]storegen.CommandLog, error)
+	ListStates(context.Context, uuid.UUID) ([]storegen.CapabilityState, error)
+}
+
+func (s *Server) SendItemCommand(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	var body gen.CommandInput
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	account, ok := AccountFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, gen.UNAUTHENTICATED, "未登录")
+		return
+	}
+	accountID, err := uuid.Parse(account.ID.String())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "会话用户数据无效")
+		return
+	}
+	result, err := s.commands.Handle(r.Context(), control.Command{
+		RequestID:     uuid.UUID(body.RequestId),
+		ItemID:        uuid.UUID(id),
+		CapabilityKey: body.CapabilityKey,
+		Value:         body.Value,
+		CreatedBy:     accountID,
+	})
+	if err != nil {
+		message := err.Error()
+		if strings.Contains(message, "不能小于") ||
+			strings.Contains(message, "不能大于") ||
+			strings.Contains(message, "不在允许选项") ||
+			strings.Contains(message, "必须是数字") ||
+			strings.Contains(message, "必须是布尔值") ||
+			strings.Contains(message, "必须是字符串") {
+			writeError(w, http.StatusBadRequest, gen.RANGEOUTOFBOUNDS, message)
+			return
+		}
+		var commandErr *control.CommandError
+		if errors.As(err, &commandErr) {
+			s.log.InfoContext(r.Context(), "命令校验错误", "code", commandErr.Code, "message", commandErr.Message)
+			status := http.StatusBadRequest
+			code := gen.VALIDATIONFAILED
+			if commandErr.Code == "RANGE_OUT_OF_BOUNDS" {
+				writeError(w, http.StatusBadRequest, gen.RANGEOUTOFBOUNDS, commandErr.Message)
+				return
+			}
+			switch commandErr.Code {
+			case "NOT_FOUND":
+				status, code = http.StatusNotFound, gen.NOTFOUND
+			case "RANGE_OUT_OF_BOUNDS":
+				status, code = http.StatusBadRequest, gen.RANGEOUTOFBOUNDS
+			case "DEVICE_UNAVAILABLE":
+				status, code = http.StatusServiceUnavailable, gen.DEVICEUNAVAILABLE
+			case "DEVICE_TIMEOUT":
+				status, code = http.StatusServiceUnavailable, gen.DEVICETIMEOUT
+			}
+			writeError(w, status, code, commandErr.Message)
+			return
+		}
+		s.log.ErrorContext(r.Context(), "下发设备命令失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "命令执行失败")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, gen.CommandResult{
+		RequestId: openapi_types.UUID(result.RequestID),
+		Status:    gen.CommandResultStatusOk,
+		Value:     result.Value,
+	})
+}
+
+func (s *Server) ListCommandLogs(w http.ResponseWriter, r *http.Request, params gen.ListCommandLogsParams) {
+	limit := int32(50)
+	if params.Limit != nil {
+		limit = int32(*params.Limit)
+	}
+	logs, err := s.commands.ListLogs(r.Context(), limit)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "读取操作记录失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取操作记录失败")
+		return
+	}
+	out := make([]gen.CommandLog, 0, len(logs))
+	for _, log := range logs {
+		row := gen.CommandLog{
+			Id:        log.ID,
+			RequestId: openapi_types.UUID(log.RequestID.Bytes),
+			CreatedAt: log.CreatedAt.Time,
+			Status:    gen.CommandLogStatus(log.Status),
+			Source:    gen.CommandLogSource(log.Source),
+		}
+		if log.ItemID.Valid {
+			id := openapi_types.UUID(log.ItemID.Bytes)
+			row.ItemId = &id
+		}
+		if log.CapabilityKey.Valid {
+			row.CapabilityKey = &log.CapabilityKey.String
+		}
+		if log.Target != nil {
+			row.Target = log.Target
+		}
+		if log.Error.Valid {
+			row.Error = &log.Error.String
+		}
+		if log.CompletedAt.Valid {
+			row.CompletedAt = &log.CompletedAt.Time
+		}
+		if log.DurationMs.Valid {
+			durationMs := int(log.DurationMs.Int32)
+			row.DurationMs = &durationMs
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) ListItemStates(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	states, err := s.commands.ListStates(r.Context(), uuid.UUID(id))
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "读取设备状态失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取设备状态失败")
+		return
+	}
+	out := make([]gen.CapabilityState, 0, len(states))
+	for _, state := range states {
+		var value any
+		if err := json.Unmarshal(state.Value, &value); err != nil {
+			s.log.ErrorContext(r.Context(), "设备状态值不是合法 JSON", "err", err)
+			writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取设备状态失败")
+			return
+		}
+		out = append(out, gen.CapabilityState{
+			ItemId:        openapi_types.UUID(state.ItemID.Bytes),
+			CapabilityKey: state.CapabilityKey,
+			Value:         value,
+			Source:        gen.CapabilityStateSource(state.Source),
+			UpdatedAt:     state.UpdatedAt.Time,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}

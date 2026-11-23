@@ -407,6 +407,53 @@ export type ItemTypeUpdate = {
 /** 全部类型模板。成员也能读。 */
 export const listItemTypes = () => request<ItemType[]>('/api/item-types')
 
+/** T8：设备能力命令请求。requestId 用 UUID 作幂等键。 */
+export type CommandInput = {
+  capabilityKey: string
+  value: unknown
+  requestId: string
+}
+
+export type CommandResult = {
+  requestId: string
+  status: 'ok'
+  value: unknown
+}
+
+export type CommandLog = {
+  id: number
+  requestId: string
+  itemId?: string
+  capabilityKey?: string
+  target?: unknown
+  status: 'ok' | 'failed' | 'timeout' | 'rejected'
+  error?: string
+  source: 'manual' | 'automation' | 'device' | 'timeout'
+  createdAt: string
+  completedAt?: string
+  durationMs?: number
+}
+
+export const sendItemCommand = (itemId: string, input: CommandInput) =>
+  request<CommandResult>(`/api/items/${encodeURIComponent(itemId)}/commands`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+
+export const listCommandLogs = (limit = 50) =>
+  request<CommandLog[]>(`/api/command-logs?limit=${encodeURIComponent(limit)}`)
+
+export type CapabilityState = {
+  itemId: string
+  capabilityKey: string
+  value: unknown
+  source: 'manual' | 'automation' | 'device' | 'timeout'
+  updatedAt: string
+}
+
+export const listItemStates = (itemId: string) =>
+  request<CapabilityState[]>(`/api/items/${encodeURIComponent(itemId)}/states`)
+
 /** 新建类型（仅管理员）。 */
 export const createItemType = (input: ItemTypeInput) =>
   request<ItemType>('/api/item-types', { method: 'POST', body: JSON.stringify(input) })

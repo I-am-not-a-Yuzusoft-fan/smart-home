@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import type { Item, ItemType, Room } from '../api/client.ts'
+import { listItemStates, sendItemCommand, type Item, type ItemType, type Room } from '../api/client.ts'
+import CapabilityForm, { type CapabilityValues } from './CapabilityForm.tsx'
 
 type Props = {
   item: Item | null
@@ -27,6 +28,8 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
   const [wallOffset, setWallOffset] = useState('0')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [capabilityValues, setCapabilityValues] = useState<CapabilityValues>({})
+  const [controlState, setControlState] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle')
 
   useEffect(() => {
     if (!item) return
@@ -37,6 +40,16 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
     setRotation(String(item.rotation))
     setWallOffset(String(item.wallOffset ?? 0))
     setError(null)
+    setControlState('idle')
+    if (item.kind === 'device') {
+      void listItemStates(item.id)
+        .then((states) => {
+          setCapabilityValues(Object.fromEntries(states.map((state) => [state.capabilityKey, state.value])))
+        })
+        .catch((e) => setError(e instanceof Error ? e.message : '读取设备状态失败'))
+    } else {
+      setCapabilityValues({})
+    }
   }, [item?.id, item?.name, item?.roomHash, item?.x, item?.y, item?.rotation, item?.wallOffset])
 
   if (!item) {
@@ -172,6 +185,55 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
           </div>
         </>
       )}
+
+      {item.kind === 'device' && type ? (
+        <section className="grid gap-2 border-t pt-3" style={{ borderColor: 'var(--color-border)' }}>
+          <h3 className="text-xs font-semibold">设备控制</h3>
+          <CapabilityForm
+            capabilities={type.capabilities}
+            values={capabilityValues}
+            idPrefix={`control-${item.id}`}
+            onChange={(key, value) => setCapabilityValues((current) => ({ ...current, [key]: value }))}
+            disabled={controlState === 'sending'}
+          />
+          {controlState === 'ok' ? (
+            <p className="text-xs" style={{ color: 'var(--color-success, #15803d)' }} role="status">下发成功，状态已落库</p>
+          ) : null}
+          {controlState === 'error' ? (
+            <p className="text-xs" style={{ color: 'var(--color-danger)' }} role="alert">{error}</p>
+          ) : null}
+          <div className="flex flex-wrap gap-1">
+            {type.capabilities.filter((capability) => capability.writable).map((capability) => (
+              <button
+                key={capability.key}
+                disabled={controlState === 'sending' || capabilityValues[capability.key] === undefined}
+                onClick={async () => {
+                  setControlState('sending')
+                  setError(null)
+                  try {
+                    const requestId = crypto.randomUUID()
+                    await sendItemCommand(item.id, {
+                      capabilityKey: capability.key,
+                      value: capabilityValues[capability.key],
+                      requestId,
+                    })
+                    const states = await listItemStates(item.id)
+                    setCapabilityValues(Object.fromEntries(states.map((state) => [state.capabilityKey, state.value])))
+                    setControlState('ok')
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : '设备命令执行失败')
+                    setControlState('error')
+                  }
+                }}
+                className="px-2 py-1 text-xs"
+                style={buttonStyle}
+              >
+                下发{capability.name}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className="mt-auto flex items-center justify-between gap-2">
         <button

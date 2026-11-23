@@ -38,6 +38,93 @@ func (e CapabilityType) Valid() bool {
 	}
 }
 
+// Defines values for CapabilityStateSource.
+const (
+	CapabilityStateSourceAutomation CapabilityStateSource = "automation"
+	CapabilityStateSourceDevice     CapabilityStateSource = "device"
+	CapabilityStateSourceManual     CapabilityStateSource = "manual"
+	CapabilityStateSourceTimeout    CapabilityStateSource = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the CapabilityStateSource enum.
+func (e CapabilityStateSource) Valid() bool {
+	switch e {
+	case CapabilityStateSourceAutomation:
+		return true
+	case CapabilityStateSourceDevice:
+		return true
+	case CapabilityStateSourceManual:
+		return true
+	case CapabilityStateSourceTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CommandLogSource.
+const (
+	CommandLogSourceAutomation CommandLogSource = "automation"
+	CommandLogSourceDevice     CommandLogSource = "device"
+	CommandLogSourceManual     CommandLogSource = "manual"
+	CommandLogSourceTimeout    CommandLogSource = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the CommandLogSource enum.
+func (e CommandLogSource) Valid() bool {
+	switch e {
+	case CommandLogSourceAutomation:
+		return true
+	case CommandLogSourceDevice:
+		return true
+	case CommandLogSourceManual:
+		return true
+	case CommandLogSourceTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CommandLogStatus.
+const (
+	CommandLogStatusFailed   CommandLogStatus = "failed"
+	CommandLogStatusOk       CommandLogStatus = "ok"
+	CommandLogStatusRejected CommandLogStatus = "rejected"
+	CommandLogStatusTimeout  CommandLogStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the CommandLogStatus enum.
+func (e CommandLogStatus) Valid() bool {
+	switch e {
+	case CommandLogStatusFailed:
+		return true
+	case CommandLogStatusOk:
+		return true
+	case CommandLogStatusRejected:
+		return true
+	case CommandLogStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CommandResultStatus.
+const (
+	CommandResultStatusOk CommandResultStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the CommandResultStatus enum.
+func (e CommandResultStatus) Valid() bool {
+	switch e {
+	case CommandResultStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorErrorCode.
 const (
 	CONFIRMATIONREQUIRED   ErrorErrorCode = "CONFIRMATION_REQUIRED"
@@ -490,13 +577,13 @@ func (e UnderlayPatchRotationDeg) Valid() bool {
 
 // Defines values for Healthz200JSONResponseBodyStatus.
 const (
-	Ok Healthz200JSONResponseBodyStatus = "ok"
+	Healthz200JSONResponseBodyStatusOk Healthz200JSONResponseBodyStatus = "ok"
 )
 
 // Valid indicates whether the value is a known member of the Healthz200JSONResponseBodyStatus enum.
 func (e Healthz200JSONResponseBodyStatus) Valid() bool {
 	switch e {
-	case Ok:
+	case Healthz200JSONResponseBodyStatusOk:
 		return true
 	default:
 		return false
@@ -560,6 +647,56 @@ type CapabilityOption struct {
 	// Value 存进能力值里的机器标识，如 cool
 	Value string `json:"value"`
 }
+
+// CapabilityState defines model for CapabilityState.
+type CapabilityState struct {
+	CapabilityKey string                `json:"capabilityKey"`
+	ItemId        openapi_types.UUID    `json:"itemId"`
+	Source        CapabilityStateSource `json:"source"`
+	UpdatedAt     time.Time             `json:"updatedAt"`
+	Value         interface{}           `json:"value"`
+}
+
+// CapabilityStateSource defines model for CapabilityState.Source.
+type CapabilityStateSource string
+
+// CommandInput defines model for CommandInput.
+type CommandInput struct {
+	CapabilityKey string             `json:"capabilityKey"`
+	RequestId     openapi_types.UUID `json:"requestId"`
+	Value         interface{}        `json:"value"`
+}
+
+// CommandLog defines model for CommandLog.
+type CommandLog struct {
+	CapabilityKey *string             `json:"capabilityKey,omitempty"`
+	CompletedAt   *time.Time          `json:"completedAt,omitempty"`
+	CreatedAt     time.Time           `json:"createdAt"`
+	DurationMs    *int                `json:"durationMs,omitempty"`
+	Error         *string             `json:"error,omitempty"`
+	Id            int64               `json:"id"`
+	ItemId        *openapi_types.UUID `json:"itemId,omitempty"`
+	RequestId     openapi_types.UUID  `json:"requestId"`
+	Source        CommandLogSource    `json:"source"`
+	Status        CommandLogStatus    `json:"status"`
+	Target        interface{}         `json:"target,omitempty"`
+}
+
+// CommandLogSource defines model for CommandLog.Source.
+type CommandLogSource string
+
+// CommandLogStatus defines model for CommandLog.Status.
+type CommandLogStatus string
+
+// CommandResult defines model for CommandResult.
+type CommandResult struct {
+	RequestId openapi_types.UUID  `json:"requestId"`
+	Status    CommandResultStatus `json:"status"`
+	Value     interface{}         `json:"value"`
+}
+
+// CommandResultStatus defines model for CommandResult.Status.
+type CommandResultStatus string
 
 // Corner defines model for Corner.
 type Corner struct {
@@ -999,6 +1136,11 @@ type NotFound = Error
 // Unauthenticated defines model for Unauthenticated.
 type Unauthenticated = Error
 
+// ListCommandLogsParams defines parameters for ListCommandLogs.
+type ListCommandLogsParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // Healthz200JSONResponseBodyStatus defines parameters for Healthz.
 type Healthz200JSONResponseBodyStatus string
 
@@ -1029,6 +1171,9 @@ type CreateItemJSONRequestBody = ItemInput
 
 // UpdateItemJSONRequestBody defines body for UpdateItem for application/json ContentType.
 type UpdateItemJSONRequestBody = ItemUpdate
+
+// SendItemCommandJSONRequestBody defines body for SendItemCommand for application/json ContentType.
+type SendItemCommandJSONRequestBody = CommandInput
 
 // CreateOpeningJSONRequestBody defines body for CreateOpening for application/json ContentType.
 type CreateOpeningJSONRequestBody = OpeningInput
@@ -1062,6 +1207,9 @@ type ServerInterface interface {
 	// Me 取当前会话的用户
 	// (GET /api/auth/me)
 	Me(w http.ResponseWriter, r *http.Request)
+	// ListCommandLogs 按时间倒序列出最近操作记录
+	// (GET /api/command-logs)
+	ListCommandLogs(w http.ResponseWriter, r *http.Request, params ListCommandLogsParams)
 	// Healthz 健康检查
 	// (GET /api/healthz)
 	Healthz(w http.ResponseWriter, r *http.Request)
@@ -1089,6 +1237,12 @@ type ServerInterface interface {
 	// UpdateItem 修改物品名称、房间、坐标、旋转或装饰属性
 	// (PATCH /api/items/{id})
 	UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// SendItemCommand 给设备下发一条能力命令
+	// (POST /api/items/{id}/commands)
+	SendItemCommand(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// ListItemStates 读取物品当前能力状态
+	// (GET /api/items/{id}/states)
+	ListItemStates(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// CreateOpening 在墙上开一个门或窗
 	// (POST /api/openings)
 	CreateOpening(w http.ResponseWriter, r *http.Request)
@@ -1152,6 +1306,12 @@ func (_ Unimplemented) Me(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// ListCommandLogs 按时间倒序列出最近操作记录
+// (GET /api/command-logs)
+func (_ Unimplemented) ListCommandLogs(w http.ResponseWriter, r *http.Request, params ListCommandLogsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // Healthz 健康检查
 // (GET /api/healthz)
 func (_ Unimplemented) Healthz(w http.ResponseWriter, r *http.Request) {
@@ -1203,6 +1363,18 @@ func (_ Unimplemented) DeleteItem(w http.ResponseWriter, r *http.Request, id ope
 // UpdateItem 修改物品名称、房间、坐标、旋转或装饰属性
 // (PATCH /api/items/{id})
 func (_ Unimplemented) UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// SendItemCommand 给设备下发一条能力命令
+// (POST /api/items/{id}/commands)
+func (_ Unimplemented) SendItemCommand(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ListItemStates 读取物品当前能力状态
+// (GET /api/items/{id}/states)
+func (_ Unimplemented) ListItemStates(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1326,6 +1498,39 @@ func (siw *ServerInterfaceWrapper) Me(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Me(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListCommandLogs operation middleware
+func (siw *ServerInterfaceWrapper) ListCommandLogs(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListCommandLogsParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListCommandLogs(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1545,6 +1750,58 @@ func (siw *ServerInterfaceWrapper) UpdateItem(w http.ResponseWriter, r *http.Req
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateItem(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SendItemCommand operation middleware
+func (siw *ServerInterfaceWrapper) SendItemCommand(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SendItemCommand(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListItemStates operation middleware
+func (siw *ServerInterfaceWrapper) ListItemStates(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListItemStates(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1995,6 +2252,15 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/api/items/{id}", wrapper.UpdateItem)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/items/{id}/commands", wrapper.SendItemCommand)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/items/{id}/states", wrapper.ListItemStates)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/command-logs", wrapper.ListCommandLogs)
 	})
 
 	return r

@@ -16,6 +16,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/device"
 	itemstore "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store"
 	storegen "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
@@ -44,6 +46,7 @@ func newTestServer(t *testing.T) http.Handler {
 		api.NewPGPlan(pool),
 		api.NewPGItemTypes(pool),
 		itemstore.NewItems(pool),
+		control.NewCommandHandler(pool, device.NewSimulatorAdapter(10*time.Millisecond, 0), time.Second),
 		api.NewSessionCodec("test-secret", time.Hour),
 		false,
 		"test",
@@ -200,5 +203,67 @@ func TestTamperedCookieIsRejected(t *testing.T) {
 	w := do(t, h, http.MethodGet, "/api/auth/me", "", bad)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("伪造会话应 401，实际 %d", w.Code)
+	}
+}
+
+func TestSendLightCommandAndRangeReject(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+	itemID := "00000000-0000-4000-8000-000000000301"
+
+	on := do(t, h, http.MethodPost, "/api/items/"+itemID+"/commands",
+		`{"capabilityKey":"on","value":true,"requestId":"10000000-0000-4000-8000-000000000001"}`, cookie)
+	if on.Code != http.StatusAccepted {
+		t.Fatalf("灯开关命令应 202，实际 %d：%s", on.Code, on.Body.String())
+	}
+
+	states := do(t, h, http.MethodGet, "/api/items/"+itemID+"/states", "", cookie)
+	if states.Code != http.StatusOK {
+		t.Fatalf("读取灯状态应 200，实际 %d", states.Code)
+	}
+	if !strings.Contains(states.Body.String(), `"capabilityKey":"on","value":true`) &&
+		!strings.Contains(states.Body.String(), `"capabilityKey":"on"`) {
+		t.Fatalf("灯状态未落库：%s", states.Body.String())
+	}
+
+	rejected := do(t, h, http.MethodPost, "/api/items/"+itemID+"/commands",
+		`{"capabilityKey":"brightness","value":101,"requestId":"10000000-0000-4000-8000-000000000002"}`, cookie)
+	if rejected.Code != http.StatusBadRequest {
+		t.Fatalf("亮度越界应 400，实际 %d：%s", rejected.Code, rejected.Body.String())
+	}
+	if code := errorCode(t, rejected); code != "RANGE_OUT_OF_BOUNDS" {
+		t.Fatalf("越界错误码应为 RANGE_OUT_OF_BOUNDS，实际 %q", code)
+	}
+
+	logs := do(t, h, http.MethodGet, "/api/command-logs?limit=10", "", cookie)
+	if logs.Code != http.StatusOK {
+		t.Fatalf("读取操作记录应 200，实际 %d", logs.Code)
+	}
+	if !strings.Contains(logs.Body.String(), `"status":"rejected"`) {
+		t.Fatalf("越界应写 rejected 操作记录：%s", logs.Body.String())
+	}
+}
+
+func TestSendAirConditionerCommand(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"li","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+	itemID := "00000000-0000-4000-8000-000000000302"
+
+	for i, body := range []string{
+		`{"capabilityKey":"mode","value":"cool","requestId":"20000000-0000-4000-8000-000000000001"}`,
+		`{"capabilityKey":"target_temp","value":28,"requestId":"20000000-0000-4000-8000-000000000002"}`,
+	} {
+		w := do(t, h, http.MethodPost, "/api/items/"+itemID+"/commands", body, cookie)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("空调命令 %d 应 202，实际 %d：%s", i, w.Code, w.Body.String())
+		}
+	}
+
+	rangeReject := do(t, h, http.MethodPost, "/api/items/"+itemID+"/commands",
+		`{"capabilityKey":"target_temp","value":31,"requestId":"20000000-0000-4000-8000-000000000003"}`, cookie)
+	if rangeReject.Code != http.StatusBadRequest {
+		t.Fatalf("空调温度越界应 400，实际 %d", rangeReject.Code)
 	}
 }

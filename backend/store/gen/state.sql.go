@@ -104,6 +104,33 @@ func (q *Queries) DeleteWallByID(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const getCommandByRequestID = `-- name: GetCommandByRequestID :one
+SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
+       created_at, completed_at, duration_ms
+FROM command_log
+WHERE request_id = $1
+`
+
+func (q *Queries) GetCommandByRequestID(ctx context.Context, requestID pgtype.UUID) (CommandLog, error) {
+	row := q.db.QueryRow(ctx, getCommandByRequestID, requestID)
+	var i CommandLog
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.ItemID,
+		&i.CapabilityKey,
+		&i.Target,
+		&i.Status,
+		&i.Error,
+		&i.Source,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.CompletedAt,
+		&i.DurationMs,
+	)
+	return i, err
+}
+
 const getOpening = `-- name: GetOpening :one
 SELECT o.id, o.wall_id, o.kind, o."offset", o.width, o.height, o.sill
 FROM opening o
@@ -385,6 +412,47 @@ func (q *Queries) InsertWallWithID(ctx context.Context, arg InsertWallWithIDPara
 		arg.ArcExtent,
 	)
 	return err
+}
+
+const listCommandLogs = `-- name: ListCommandLogs :many
+SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
+       created_at, completed_at, duration_ms
+FROM command_log
+ORDER BY created_at DESC, id DESC
+LIMIT $1
+`
+
+func (q *Queries) ListCommandLogs(ctx context.Context, limit int32) ([]CommandLog, error) {
+	rows, err := q.db.Query(ctx, listCommandLogs, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CommandLog
+	for rows.Next() {
+		var i CommandLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.RequestID,
+			&i.ItemID,
+			&i.CapabilityKey,
+			&i.Target,
+			&i.Status,
+			&i.Error,
+			&i.Source,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.CompletedAt,
+			&i.DurationMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listCorners = `-- name: ListCorners :many

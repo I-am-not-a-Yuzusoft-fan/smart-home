@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/device"
 	itemstore "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store"
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
@@ -50,6 +52,7 @@ func main() {
 		api.NewPGPlan(pool),
 		api.NewPGItemTypes(pool),
 		itemstore.NewItems(pool),
+		control.NewCommandHandler(pool, device.NewSimulatorAdapter(100*time.Millisecond, 0), 3*time.Second),
 		api.NewSessionCodec(cfg.sessionSecret, cfg.sessionTTL),
 		cfg.cookieSecure,
 		version,
