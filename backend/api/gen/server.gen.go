@@ -503,6 +503,30 @@ func (e StaleRoomKind) Valid() bool {
 	}
 }
 
+// Defines values for StateHistorySource.
+const (
+	StateHistorySourceAutomation StateHistorySource = "automation"
+	StateHistorySourceDevice     StateHistorySource = "device"
+	StateHistorySourceManual     StateHistorySource = "manual"
+	StateHistorySourceTimeout    StateHistorySource = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the StateHistorySource enum.
+func (e StateHistorySource) Valid() bool {
+	switch e {
+	case StateHistorySourceAutomation:
+		return true
+	case StateHistorySourceDevice:
+		return true
+	case StateHistorySourceManual:
+		return true
+	case StateHistorySourceTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UnderlayContentType.
 const (
 	Imagejpeg UnderlayContentType = "image/jpeg"
@@ -1032,6 +1056,19 @@ type StaleRoom struct {
 // StaleRoomKind defines model for StaleRoom.Kind.
 type StaleRoomKind string
 
+// StateHistory defines model for StateHistory.
+type StateHistory struct {
+	CapabilityKey string             `json:"capabilityKey"`
+	Id            int64              `json:"id"`
+	ItemId        openapi_types.UUID `json:"itemId"`
+	RecordedAt    time.Time          `json:"recordedAt"`
+	Source        StateHistorySource `json:"source"`
+	Value         interface{}        `json:"value"`
+}
+
+// StateHistorySource defines model for StateHistory.Source.
+type StateHistorySource string
+
 // Underlay 底图的元数据。`cmPerPx` 与 `offsetXCm/offsetYCm` 一起定义「图片像素 → 世界厘米」的映射：
 // 图片左上角落在 `(offsetXCm, offsetYCm)`，每像素宽 `cmPerPx` 厘米，旋转绕图片中心。
 type Underlay struct {
@@ -1154,6 +1191,12 @@ type ListItemsParams struct {
 // ListItemsParamsKind defines parameters for ListItems.
 type ListItemsParamsKind string
 
+// ListItemHistoryParams defines parameters for ListItemHistory.
+type ListItemHistoryParams struct {
+	Key   *string `form:"key,omitempty" json:"key,omitempty"`
+	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // AdvanceSimulationJSONBody defines parameters for AdvanceSimulation.
 type AdvanceSimulationJSONBody struct {
 	Minutes int `json:"minutes"`
@@ -1245,6 +1288,9 @@ type ServerInterface interface {
 	// SendItemCommand 给设备下发一条能力命令
 	// (POST /api/items/{id}/commands)
 	SendItemCommand(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// ListItemHistory 按时间倒序读取物品状态变化历史
+	// (GET /api/items/{id}/history)
+	ListItemHistory(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, params ListItemHistoryParams)
 	// ListItemStates 读取物品当前能力状态
 	// (GET /api/items/{id}/states)
 	ListItemStates(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
@@ -1377,6 +1423,12 @@ func (_ Unimplemented) UpdateItem(w http.ResponseWriter, r *http.Request, id ope
 // SendItemCommand 给设备下发一条能力命令
 // (POST /api/items/{id}/commands)
 func (_ Unimplemented) SendItemCommand(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ListItemHistory 按时间倒序读取物品状态变化历史
+// (GET /api/items/{id}/history)
+func (_ Unimplemented) ListItemHistory(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, params ListItemHistoryParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1790,6 +1842,61 @@ func (siw *ServerInterfaceWrapper) SendItemCommand(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SendItemCommand(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListItemHistory operation middleware
+func (siw *ServerInterfaceWrapper) ListItemHistory(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListItemHistoryParams
+
+	// ------------- Optional query parameter "key" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "key", r.URL.Query(), &params.Key, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "key"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListItemHistory(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2286,6 +2393,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/items/{id}/states", wrapper.ListItemStates)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/items/{id}/history", wrapper.ListItemHistory)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/api/sim/tick", wrapper.AdvanceSimulation)

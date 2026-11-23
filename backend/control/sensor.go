@@ -23,58 +23,116 @@ func NewSensorReporter(pool *pgxpool.Pool, broadcaster Broadcaster) *SensorRepor
 }
 
 func (r *SensorReporter) Report(ctx context.Context) error {
-	_, err := r.Advance(ctx, 0)
-	return err
+	return r.apply(ctx)
 }
 
 func (r *SensorReporter) Advance(ctx context.Context, minutes int) (time.Time, error) {
 	r.simulatedAt = r.simulatedAt.Add(time.Duration(minutes) * time.Minute)
+	err := r.apply(ctx)
+	return r.simulatedAt, err
+}
+
+func (r *SensorReporter) apply(ctx context.Context) error {
 	now := time.Now()
 	q := storegen.New(r.pool)
-	updates := []struct {
-		itemID uuid.UUID
-		key    string
-		value  any
-	}{
-		{uuid.MustParse("00000000-0000-4000-8000-000000000304"), "temperature", math.Round((31.5-math.Min(6, float64(minutes)/20))*10) / 10},
-		{uuid.MustParse("00000000-0000-4000-8000-000000000304"), "humidity", math.Round(math.Max(35, 68-float64(minutes)/10)*10) / 10},
-		{uuid.MustParse("00000000-0000-4000-8000-000000000305"), "illuminance", illumAtMinute(minutes)},
+	items, err := q.ListItems(ctx, storegen.ListItemsParams{})
+	if err != nil {
+		return err
 	}
+
+	updates := make([]sensorUpdate, 0)
+	for _, item := range items {
+		switch item.TypeKey {
+		case "sensor_th":
+			minute := r.simulatedMinute()
+			temp := math.Round((31.5-math.Min(6, float64(minute)/20))*10) / 10
+			humidity := math.Round(math.Max(35, 68-float64(minute)/10)*10) / 10
+			updates = append(updates,
+				sensorUpdate{itemID: uuid.UUID(item.ID.Bytes), key: "temperature", value: temp},
+				sensorUpdate{itemID: uuid.UUID(item.ID.Bytes), key: "humidity", value: humidity},
+			)
+		case "sensor_lux":
+			hour := r.simulatedHour()
+			lux := 30
+			if hour >= 7 && hour <= 18 {
+				lux = 1200
+			}
+			updates = append(updates, sensorUpdate{itemID: uuid.UUID(item.ID.Bytes), key: "illuminance", value: lux})
+		case "sensor_pir":
+			occupied := r.occupiedWindow()
+			updates = append(updates, sensorUpdate{itemID: uuid.UUID(item.ID.Bytes), key: "occupied", value: occupied})
+		}
+	}
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return r.simulatedAt, err
+		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	txq := q.WithTx(tx)
+	changed := make([]sensorUpdate, 0, len(updates))
 	for _, update := range updates {
 		value, _ := json.Marshal(update.value)
+		current, err := txq.GetState(ctx, storegen.GetStateParams{
+			ItemID: pgUUID(update.itemID), CapabilityKey: update.key,
+		})
+		if err == nil {
+			var old any
+			if json.Unmarshal(current.Value, &old) == nil {
+				if jsonEqual(old, update.value) {
+					continue
+				}
+			}
+		}
 		if err := txq.UpsertState(ctx, storegen.UpsertStateParams{
 			ItemID: pgUUID(update.itemID), CapabilityKey: update.key,
 			Value: value, Source: "device", UpdatedAt: pgTime(now),
 		}); err != nil {
-			return r.simulatedAt, err
+			return err
 		}
+		if err := txq.InsertHistory(ctx, storegen.InsertHistoryParams{
+			ItemID: pgUUID(update.itemID), CapabilityKey: update.key,
+			Value: value, Source: "device", RecordedAt: pgTime(now),
+		}); err != nil {
+			return err
+		}
+		changed = append(changed, update)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return r.simulatedAt, err
+		return err
 	}
-	for _, update := range updates {
+	for _, update := range changed {
 		r.broadcaster.Broadcast(StateMessage{
 			ItemID: update.itemID, CapabilityKey: update.key,
 			Value: update.value, Source: "device", UpdatedAt: now,
 		})
 	}
-	return r.simulatedAt, nil
+	return nil
 }
 
-func illumAtMinute(minutes int) int {
-	hour := (rMinute(minutes) / 60) % 24
-	if hour >= 7 && hour <= 18 {
-		return 1200
-	}
-	return 30
+type sensorUpdate struct {
+	itemID uuid.UUID
+	key    string
+	value  any
 }
 
-var rMinute = func(minutes int) int {
-	return (9*60 + minutes) % (24 * 60)
+func (r *SensorReporter) simulatedMinute() int {
+	hour := r.simulatedAt.Hour()
+	minute := r.simulatedAt.Minute()
+	return hour*60 + minute
+}
+
+func (r *SensorReporter) simulatedHour() int {
+	return r.simulatedAt.Hour()
+}
+
+func (r *SensorReporter) occupiedWindow() bool {
+	hour := r.simulatedHour()
+	return hour >= 7 && hour <= 22
+}
+
+func jsonEqual(a, b any) bool {
+	av, _ := json.Marshal(a)
+	bv, _ := json.Marshal(b)
+	return string(av) == string(bv)
 }

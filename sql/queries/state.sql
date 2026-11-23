@@ -27,6 +27,14 @@ SET value = EXCLUDED.value,
 INSERT INTO state_history (item_id, capability_key, value, source, recorded_at)
 VALUES ($1, $2, $3, $4, $5);
 
+-- name: ListStateHistory :many
+SELECT id, item_id, capability_key, value, source, recorded_at
+FROM state_history
+WHERE item_id = $1
+  AND (sqlc.narg('capability_key')::text IS NULL OR capability_key = sqlc.narg('capability_key'))
+ORDER BY recorded_at DESC, id DESC
+LIMIT $2;
+
 -- name: InsertCommand :one
 INSERT INTO command_log (request_id, item_id, capability_key, target, status, source, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
