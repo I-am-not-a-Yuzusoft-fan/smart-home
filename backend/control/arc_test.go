@@ -117,3 +117,30 @@ func TestDeriveChordAndArcMakeTwoRooms(t *testing.T) {
 		t.Fatalf("应得到 12 ㎡ 与 ≈6.27 ㎡ 两个房间，实际 %v", areas)
 	}
 }
+
+func TestHalfCircleKeepsItsSide(t *testing.T) {
+	a := Point{X: 0, Y: 0}
+	b := Point{X: 400, Y: 0}
+
+	up := ArcPolyline(a, b, 180)
+	down := ArcPolyline(a, b, -180)
+	if len(up) == 0 || len(down) == 0 {
+		t.Fatalf("180° 应该有采样点")
+	}
+	for _, p := range up {
+		if p.Y > 0 {
+			t.Fatalf("+180° 应该往 -y 一侧鼓，实际点 %v", p)
+		}
+	}
+	for _, p := range down {
+		if p.Y < 0 {
+			t.Fatalf("-180° 应该往 +y 一侧鼓，实际点 %v", p)
+		}
+	}
+	// 与小于 180° 的方向保持一致：+90° 也往 -y。
+	for _, p := range ArcPolyline(a, b, 90) {
+		if p.Y > 0 {
+			t.Fatalf("+90° 应该往 -y 一侧鼓，实际点 %v", p)
+		}
+	}
+}

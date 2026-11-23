@@ -461,6 +461,11 @@ func ArcPolyline(a, b Point, extentDeg float64) []Point {
 	for delta < -math.Pi {
 		delta += 2 * math.Pi
 	}
+	// 正好 180° 时两个方向的弧等长，归一化后总落成同一个符号，
+	// 半圆的鼓出方向就丢了——用弧度的符号把它补回来，与 <180° 时保持同一边。
+	if math.Abs(math.Abs(delta)-math.Pi) < 1e-9 {
+		delta = math.Copysign(math.Pi, theta)
+	}
 	// 采样步数：按 |δ| 每 5° 一段，至少 2 段。
 	steps := int(math.Ceil(math.Abs(delta) / (5 * math.Pi / 180)))
 	if steps < 2 {

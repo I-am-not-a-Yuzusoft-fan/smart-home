@@ -173,3 +173,15 @@ describe('弧墙几何', () => {
     expect(arcLength(a, b, -90)).toBeCloseTo(111.07, 1)
   })
 })
+
+describe('弧墙 180° 的鼓出方向', () => {
+  const a = { x: 0, y: 0 }
+  const b = { x: 400, y: 0 }
+  it('正负 180° 各自一边，且与 90° 同侧', () => {
+    const up = arcPolyline(a, b, 180)
+    const down = arcPolyline(a, b, -180)
+    expect(up.every((p) => p.y <= 0)).toBe(true)
+    expect(down.every((p) => p.y >= 0)).toBe(true)
+    expect(arcPolyline(a, b, 90).every((p) => p.y <= 0)).toBe(true)
+  })
+})
