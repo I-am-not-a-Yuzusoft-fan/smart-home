@@ -2142,11 +2142,11 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                   />
                 )
               })}
-              {/* 弧墙单独标弧长：尺寸线是与弧同心的圆弧，不走直线尺寸链。 */}
+              {/* 弧墙标半径：半圆阳台这种轮廓看半径最直观（GB/T 50001—2017 §11.4.1）。 */}
               {plan.walls
                 .filter((w) => Math.abs(w.arcExtent) >= 0.5)
                 .map((w) => (
-                  <ArcDim key={`arcdim-${w.id}`} wall={w} scale={viewport.scale} bounds={planBounds} />
+                  <RadiusDim key={`radius-${w.id}`} wall={w} scale={viewport.scale} bounds={planBounds} />
                 ))}
             </Layer>
           ) : null}
@@ -2746,24 +2746,24 @@ function AxisLabel({
   )
 }
 
-type ArcDimProps = {
+type RadiusDimProps = {
   wall: Wall
   scale: number
-  /** 户型包围盒：用来判断尺寸线该放在屋里还是屋外。 */
+  /** 户型包围盒：圆心跑到图纸外时用来判断改用折线引出。 */
   bounds: { minX: number; minY: number; maxX: number; maxY: number }
 }
 
 /**
- * 弧长标注（GB/T 50001—2017 §11.2.5）：尺寸线用与所注圆弧同心的圆弧表示，
- * 尺寸界线沿半径方向（垂直于弧），数字上方加弧长符号，这里用「⌒」前缀代替。
+ * 半径标注（GB/T 50001—2017 §11.4.1）：尺寸线一端从**圆心**开始，
+ * 另一端用箭头指到圆弧，数字前加注 `R`；数字记毫米。
+ * §11.4.3：圆心太远（比如接近直线的浅弧）时折线引出，只画靠近圆弧的那一小段。
  */
-function ArcDim({ wall, scale, bounds }: ArcDimProps) {
+function RadiusDim({ wall, scale, bounds }: RadiusDimProps) {
   const ref = useRef<Konva.Text>(null)
   const a = { x: wall.ax, y: wall.ay }
   const b = { x: wall.bx, y: wall.by }
   const circle = arcCircle(a, b, wall.arcExtent)
-  const text = formatMm(arcLength(a, b, wall.arcExtent))
-  // 字宽实测：字体里没有 U+2312，弧长符号改成自己画一道小弧。
+  const text = `R${formatMm(circle ? circle.r : 0)}`
   const [labelW, setLabelW] = useState(0)
   useLayoutEffect(() => {
     const node = ref.current
@@ -2772,83 +2772,58 @@ function ArcDim({ wall, scale, bounds }: ArcDimProps) {
     if (Math.abs(w - labelW) > 0.01) setLabelW(w)
   })
   if (!circle) return null
-  const pad = 22 / scale
-  const half = Math.max(wall.thickness, 4) / 2
-  // 尺寸线要注写在轮廓线以外：弧可能向房间里鼓，也可能向外鼓，
-  // 一律按 r + 偏移会把数字放进屋里（截图里"1571"就压在房间内）。
-  const midAng0 = circle.start + circle.delta / 2
-  const mid = arcPointAt({ cx: circle.cx, cy: circle.cy, r: circle.r }, midAng0)
-  const dir = { x: (mid.x - circle.cx) / (circle.r || 1), y: (mid.y - circle.cy) / (circle.r || 1) }
-  const probe = half + pad + 12 / scale
-  const at = (sign: number) => ({ x: mid.x + dir.x * probe * sign, y: mid.y + dir.y * probe * sign })
-  const outside = (q: { x: number; y: number }) =>
-    q.x < bounds.minX - 1 || q.x > bounds.maxX + 1 || q.y < bounds.minY - 1 || q.y > bounds.maxY + 1
-  // 两侧都朝外时取远离包围盒中心的那侧；都朝里时同理，总之宁可画在外面。
-  const side = outside(at(1)) || !outside(at(-1)) ? 1 : -1
-  const rLine = Math.max(circle.r + side * (half + pad), half + pad)
-  const steps = Math.max(6, Math.ceil(Math.abs(circle.delta) / ((6 * Math.PI) / 180)))
-  const pts: number[] = []
-  for (let i = 0; i <= steps; i += 1) {
-    const p = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine }, circle.start + (circle.delta * i) / steps)
-    pts.push(p.x, p.y)
-  }
-  const ends = [circle.start, circle.start + circle.delta].map((ang) => {
-    const inner = arcPointAt({ cx: circle.cx, cy: circle.cy, r: circle.r + side * half }, ang)
-    const outer = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + side * (4 / scale) }, ang)
-    return [inner, outer] as const
-  })
-  // 起止符：GB/T 50001—2017 §11.5.2 规定**角度与弧长用箭头**（45° 斜短线是直线尺寸的），
-  // 箭头贴在尺寸弧的两端、沿切线指向外侧的尺寸界线。
-  const arrow = (ang: number, outward: number) => {
-    const tip = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine }, ang)
-    // 该点的切线方向，乘 outward 指向弧线外侧。
-    const ux = -Math.sin(ang) * outward
-    const uy = Math.cos(ang) * outward
-    const len = 9 / scale
-    const halfW = 2.6 / scale
-    const base = { x: tip.x - ux * len, y: tip.y - uy * len }
-    const nx = -uy
-    const ny = ux
-    return [tip.x, tip.y, base.x + nx * halfW, base.y + ny * halfW, base.x - nx * halfW, base.y - ny * halfW]
-  }
-  const span = Math.sign(circle.delta) || 1
-  const arrows = [arrow(circle.start, -span), arrow(circle.start + circle.delta, span)]
-  const midAng = circle.start + circle.delta / 2
-  const label = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + side * (12 / scale) }, midAng)
-  // 字头朝上：把角度归到 (-90°, 90°]，否则弧在下半圈时数字会倒着写。
-  let labelDeg = (midAng * 180) / Math.PI + 90
-  if (labelDeg > 90) labelDeg -= 180
-  if (labelDeg <= -90) labelDeg += 180
+  // 箭头落在弧上，但避开弧中点：那里常常是房间标签（面积）的位置。
+  const ang = circle.start + circle.delta * 0.3
+  const tip = arcPointAt({ cx: circle.cx, cy: circle.cy, r: circle.r }, ang)
+  const ux = Math.cos(ang)
+  const uy = Math.sin(ang)
+  const chord = Math.hypot(b.x - a.x, b.y - a.y)
+  const insideBounds = (x: number, y: number) =>
+    x > bounds.minX && x < bounds.maxX && y > bounds.minY && y < bounds.maxY
+  // 圆心跑到户型外面很远时，整条半径线会横穿图纸——按 §11.4.3 只画靠弧的一小段。
+  const far = circle.r > chord * 2 || !insideBounds(circle.cx, circle.cy)
+  const arrowLen = 9 / scale
+  const halfW = 2.6 / scale
+  const arrow = [
+    tip.x,
+    tip.y,
+    tip.x - ux * arrowLen + -uy * halfW,
+    tip.y - uy * arrowLen + ux * halfW,
+    tip.x - ux * arrowLen - -uy * halfW,
+    tip.y - uy * arrowLen - ux * halfW,
+  ]
+  // 尺寸线：正常从圆心画到箭头；圆心太远就从弧往回折一小段。
+  const tail = far
+    ? { x: tip.x - ux * Math.min(circle.r * 0.6, 60 / scale), y: tip.y - uy * Math.min(circle.r * 0.6, 60 / scale) }
+    : { x: circle.cx, y: circle.cy }
+  const mid = { x: (tip.x + tail.x) / 2, y: (tip.y + tail.y) / 2 }
+  // 数字沿尺寸线方向排，且字头朝上（角度归到 (-90°, 90°]）。
+  let deg = (Math.atan2(tip.y - tail.y, tip.x - tail.x) * 180) / Math.PI
+  if (deg > 90) deg -= 180
+  if (deg <= -90) deg += 180
   return (
     <>
-      <Line points={pts} stroke="#7a7a8c" strokeWidth={1 / scale} dash={[6 / scale, 4 / scale]} listening={false} />
-      {arrows.map((pts, i) => (
-        <Line key={`a-${i}`} points={pts} closed fill="#4a4a5a" listening={false} />
-      ))}
-      {ends.map(([p1, p2], i) => (
-        <Line
-          key={`w-${i}`}
-          points={[p1.x, p1.y, p2.x, p2.y]}
-          stroke="#b0b0bd"
-          strokeWidth={0.6 / scale}
-          listening={false}
-        />
-      ))}
-      <Group x={label.x} y={label.y} rotation={labelDeg} listening={false}>
-        <Text ref={ref} x={-labelW / 2} y={0} text={text} fontSize={11 / scale} fill="#4a4a5a" />
-        {/* GB/T 50001 的弧长符号：数字上方一道小弧 */}
-        <Line
+      <Line
+        points={[tail.x, tail.y, tip.x, tip.y]}
+        stroke="#7a7a8c"
+        strokeWidth={1 / scale}
+        listening={false}
+      />
+      <Line points={arrow} closed fill="#4a4a5a" listening={false} />
+      <Group x={mid.x} y={mid.y} rotation={deg} listening={false}>
+        <Text
+          ref={ref}
           x={-labelW / 2}
-          y={-7 / scale}
-          points={[0, (3 / scale), labelW / 2, 0, labelW, 3 / scale]}
-          tension={0.4}
-          stroke="#4a4a5a"
-          strokeWidth={0.8 / scale}
+          y={-6 / scale - 11 / scale}
+          text={text}
+          fontSize={11 / scale}
+          fill="#4a4a5a"
         />
       </Group>
     </>
   )
 }
+
 
 function RunDimension({
   run,
