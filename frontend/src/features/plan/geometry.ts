@@ -220,3 +220,32 @@ export function arcLength(a: Pt, b: Pt, extentDeg: number): number {
   const r = chord / (2 * Math.sin(theta / 2))
   return r * theta
 }
+
+/** 弧墙的圆心、半径、起始角与扫过角（弧度）；直墙返回 null。 */
+export function arcCircle(
+  a: Pt,
+  b: Pt,
+  extentDeg: number,
+): { cx: number; cy: number; r: number; start: number; delta: number } | null {
+  const theta = (extentDeg * Math.PI) / 180
+  if (Math.abs(theta) < 1e-6) return null
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const d = Math.hypot(dx, dy)
+  if (d < 1e-9) return null
+  const h = d / 2 / Math.tan(theta / 2)
+  const cx = (a.x + b.x) / 2 + (-dy / d) * h
+  const cy = (a.y + b.y) / 2 + (dx / d) * h
+  const r = Math.hypot(a.x - cx, a.y - cy)
+  const start = Math.atan2(a.y - cy, a.x - cx)
+  const end = Math.atan2(b.y - cy, b.x - cx)
+  let delta = end - start
+  while (delta > Math.PI) delta -= 2 * Math.PI
+  while (delta < -Math.PI) delta += 2 * Math.PI
+  return { cx, cy, r, start, delta }
+}
+
+/** 圆弧上按角度取点（供尺寸线与箭头用）。 */
+export function arcPointAt(c: { cx: number; cy: number; r: number }, angle: number): Pt {
+  return { x: c.cx + c.r * Math.cos(angle), y: c.cy + c.r * Math.sin(angle) }
+}

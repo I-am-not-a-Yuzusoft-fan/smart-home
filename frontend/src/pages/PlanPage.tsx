@@ -39,6 +39,9 @@ import { UnderlayPanel } from '../components/UnderlayPanel.tsx'
 import TypeManager from '../components/TypeManager.tsx'
 import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from '../features/plan/edit.ts'
 import {
+  arcCircle,
+  arcLength,
+  arcPointAt,
   arcPoints,
   clampWallOffset,
   distanceToPolyline,
@@ -131,6 +134,8 @@ type Draft = {
   /** 当前点（世界坐标，已吸附） */
   bx: number
   by: number
+  /** 拉弧模式下正在调的角度（度），松手落库前一直为空 */
+  arcExtent?: number
 }
 
 type Edit = { wallId: string; end: 'a' | 'b'; ax: number; ay: number; bx: number; by: number }
@@ -296,6 +301,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
+  // 拉弧模式：Ctrl/Alt 松手后不马上建墙，先跟着鼠标定弧度，再点一下落库。
+  const [bend, setBend] = useState<Draft | null>(null)
   const [guide, setGuide] = useState<Guide>({ kind: 'none' })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // 物品与墙各自有选中态，但同一时刻只允许一个：点墙清物品，点物品清墙。
@@ -560,6 +567,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         setCalibrating(false)
         setCalibPoints([])
         setDraft(null)
+        setBend(null)
         setEditing(null)
         setGuide({ kind: 'none' })
         return
@@ -610,11 +618,25 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       const len = Math.hypot(dx, dy)
       return len < 1e-6 ? null : { x: dx / len, y: dy / len }
     }
-    /** 从 p 出发、沿这面墙指向另一端的方向。 */
+    /**
+     * 从 p 出发、沿这面墙指向另一端的方向。
+     *
+     * 弧墙必须给出**端点切线**而不是弦方向：转角处的斜接是按两墙方向求平分线的，
+     * 一边用切线、一边用弦，算出来的端面就对不上，放大看是一道楔形缺口。
+     */
     const outOf = (wall: Wall, p: Pt): Pt | null => {
       const da = Math.hypot(wall.ax - p.x, wall.ay - p.y)
       const db = Math.hypot(wall.bx - p.x, wall.by - p.y)
       if (Math.min(da, db) > 1) return null
+      if (Math.abs(wall.arcExtent) >= 0.5) {
+        const pts = arcPoints({ x: wall.ax, y: wall.ay }, { x: wall.bx, y: wall.by }, wall.arcExtent)
+        const n = pts.length
+        if (n >= 3) {
+          return da <= db
+            ? unit(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+            : unit(pts[n - 2].x - pts[n - 1].x, pts[n - 2].y - pts[n - 1].y)
+        }
+      }
       return da <= db ? unit(wall.bx - wall.ax, wall.by - wall.ay) : unit(wall.ax - wall.bx, wall.ay - wall.by)
     }
     /** 两墙夹角的一半正弦；自由端 / T 型路口返回 null。 */
@@ -634,9 +656,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       const dir = unit(wall.bx - wall.ax, wall.by - wall.ay)
       return dir ? { x: -dir.y, y: dir.x } : { x: 1, y: 0 }
     }
-    const endFace = (wall: Wall, p: Pt, corner: typeof plan.walls, normal: Pt): [Pt, Pt] => {
+    const endFace = (
+      wall: Wall,
+      p: Pt,
+      corner: typeof plan.walls,
+      normal: Pt,
+      dir: Pt | null,
+    ): [Pt, Pt] => {
       const half = Math.max(wall.thickness, 4) / 2
-      const dir = outOf(wall, p)
       const flat = (): [Pt, Pt] => [
         { x: p.x + normal.x * half, y: p.y + normal.y * half },
         { x: p.x - normal.x * half, y: p.y - normal.y * half },
@@ -654,7 +681,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       const sumLen = Math.hypot(sum.x, sum.y)
       if (sumLen < 1e-6) return flat()
       const shared = Math.max(half, Math.max(other.thickness, 4) / 2)
-      const reach = Math.min(shared / sinHalf, 2.5 * shared)
+      // 锐角时 shared/sinHalf 会甩出很长的针，夹在 1.6 倍半厚以内；sinHalf 太小时退平头。
+      if (sinHalf < 0.3) return flat()
+      const reach = Math.min(shared / sinHalf, 1.6 * shared)
       const ux = sum.x / sumLen
       const uy = sum.y / sumLen
       const a = { x: p.x - ux * reach, y: p.y - uy * reach }
@@ -667,9 +696,39 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     for (const wall of plan.walls) {
       const a = { x: wall.ax, y: wall.ay }
       const b = { x: wall.bx, y: wall.by }
+      if (Math.abs(wall.arcExtent) >= 0.5) {
+        // 弧墙：沿弧取偏移点拼成一条带，两端仍用斜接端面（按端点切线算，
+        // 不能用弦方向，否则 90° 以上的弧端面会明显偏）。
+        const pts = arcPoints(a, b, wall.arcExtent)
+        const half = Math.max(wall.thickness, 4) / 2
+        const n = pts.length
+        const tangentAt = (i: number): Pt | null => {
+          const prev = pts[Math.max(0, i - 1)]
+          const next = pts[Math.min(n - 1, i + 1)]
+          return unit(next.x - prev.x, next.y - prev.y)
+        }
+        const normalAt = (i: number): Pt => {
+          const t = tangentAt(i) ?? { x: 1, y: 0 }
+          return { x: -t.y, y: t.x }
+        }
+        const plus: Pt[] = []
+        const minus: Pt[] = []
+        for (let i = 1; i < n - 1; i += 1) {
+          const nm = normalAt(i)
+          plus.push({ x: pts[i].x + nm.x * half, y: pts[i].y + nm.y * half })
+          minus.push({ x: pts[i].x - nm.x * half, y: pts[i].y - nm.y * half })
+        }
+        const dirA = unit(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+        const dirB = unit(pts[n - 2].x - pts[n - 1].x, pts[n - 2].y - pts[n - 1].y)
+        const [aPlus, aMinus] = endFace(wall, a, byCorner.get(wall.aId) ?? [], normalAt(0), dirA)
+        const [bPlus, bMinus] = endFace(wall, b, byCorner.get(wall.bId) ?? [], normalAt(n - 1), dirB)
+        quads.set(wall.id, [aPlus, ...plus, bPlus, bMinus, ...minus.reverse(), aMinus])
+        continue
+      }
       const normal = wallNormal(wall)
-      const [aPlus, aMinus] = endFace(wall, a, byCorner.get(wall.aId) ?? [], normal)
-      const [bPlus, bMinus] = endFace(wall, b, byCorner.get(wall.bId) ?? [], normal)
+      const dir = outOf(wall, a)
+      const [aPlus, aMinus] = endFace(wall, a, byCorner.get(wall.aId) ?? [], normal, dir)
+      const [bPlus, bMinus] = endFace(wall, b, byCorner.get(wall.bId) ?? [], normal, outOf(wall, b))
       quads.set(wall.id, [aPlus, aMinus, bMinus, bPlus])
     }
     // 斜接是端点自带的，不再额外补圆点——以前锐角补圆、直角斜接，
@@ -848,6 +907,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }
 
   function onMouseDown(e: Konva.KonvaEventObject<MouseEvent>) {
+    if (bend) {
+      const b = bend
+      setBend(null)
+      if (e.evt.button === 0) void submitWall({ ...b, arcExtent: Math.round(b.arcExtent ?? 0) })
+      return
+    }
     const stage = stageRef.current
     if (!stage) return
     const raw = stage.getPointerPosition()
@@ -934,6 +999,17 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       setGuide(sn.guide)
       return
     }
+    if (bend) {
+      const dx = bend.bx - bend.ax
+      const dy = bend.by - bend.ay
+      const chord = Math.hypot(dx, dy) || 1
+      // 指针到弦的有向距离（沿左法线为正），矢高 → 圆心角：s = (L/2)·tan(θ/4)
+      const sag = (-dy * (p.x - bend.ax) + dx * (p.y - bend.ay)) / chord
+      const theta = (4 * Math.atan((2 * Math.abs(sag)) / chord) * 180) / Math.PI
+      // 屏幕 y 向下为正，而正弧度向上凸出，所以向下拖取负号，手势才跟手。
+      setBend({ ...bend, arcExtent: clamp(sag >= 0 ? -theta : theta, -179, 179) })
+      return
+    }
     if (!draft) {
       setHoverId(wallAt(p.x, p.y))
       return
@@ -995,6 +1071,11 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     })
     const wall = { ax: d.ax, ay: d.ay, bx: end.x, by: end.y }
     if (Math.hypot(wall.bx - wall.ax, wall.by - wall.ay) < MIN_DRAG_PX / viewport.scale) return
+    if (e.evt.ctrlKey || e.evt.altKey) {
+      // 拉弧模式：墙先不落库，指针定弧度，再点一下才建。
+      setBend({ ...wall, arcExtent: 0 })
+      return
+    }
     await submitWall(wall)
   }
 
@@ -1017,7 +1098,13 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     try {
       const before = new Set(plan.walls.map((w) => w.id))
       const snapshot = snapshotOf(plan)
-      const next = await createWall({ ax: d.ax, ay: d.ay, bx: d.bx, by: d.by })
+      const next = await createWall({
+        ax: d.ax,
+        ay: d.ay,
+        bx: d.bx,
+        by: d.by,
+        ...(d.arcExtent ? { arcExtent: d.arcExtent } : {}),
+      })
       if (seq === writeSeq.current) {
         remember(snapshot)
         setPlan(next)
@@ -1876,6 +1963,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                   />
                 )
               })}
+              {/* 弧墙单独标弧长：尺寸线是与弧同心的圆弧，不走直线尺寸链。 */}
+              {plan.walls
+                .filter((w) => Math.abs(w.arcExtent) >= 0.5)
+                .map((w) => (
+                  <ArcDim key={`arcdim-${w.id}`} wall={w} scale={viewport.scale} />
+                ))}
             </Layer>
           ) : null}
 
@@ -1921,6 +2014,33 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 strokeWidth={2 / viewport.scale}
               />
             ))}
+            {bend && (
+              <>
+                {/* 拉弧预览：跟手改弧度，点一下才落库 */}
+                <Line
+                  points={arcPoints(
+                    { x: bend.ax, y: bend.ay },
+                    { x: bend.bx, y: bend.by },
+                    bend.arcExtent ?? 0,
+                  ).flatMap((p) => [p.x, p.y])}
+                  stroke="#4f6bed"
+                  strokeWidth={Math.max(10, 4)}
+                  lineCap="butt"
+                  lineJoin="round"
+                  opacity={0.5}
+                  listening={false}
+                />
+                <Text
+                  x={(bend.ax + bend.bx) / 2 + 8 / viewport.scale}
+                  y={(bend.ay + bend.by) / 2 - 16 / viewport.scale}
+                  text={`弧度 ${Math.round(bend.arcExtent ?? 0)}°，单击完成`}
+                  fontSize={11 / viewport.scale}
+                  fill="#3a3a4d"
+                  listening={false}
+                />
+              </>
+            )}
+
             {draft && (
               <>
                 {/* 吸附参考线：贴到哪面墙上就把它整条描出来 */}
@@ -2079,25 +2199,6 @@ type WallShapeProps = {
 
 function WallLine({ wall, quad, selected, hovered, scale }: WallShapeProps & { quad?: Pt[] }) {
   const fill = selected ? '#4f6bed' : hovered ? '#55557a' : '#3a3a4d'
-  // 弧墙 v1 不平头斜接：直接沿弧画一条粗线，两端各补一个半径半墙厚的圆盖住接缝。
-  if (Math.abs(wall.arcExtent) >= 0.5) {
-    const pts = arcPoints({ x: wall.ax, y: wall.ay }, { x: wall.bx, y: wall.by }, wall.arcExtent)
-    const half = Math.max(wall.thickness, 4) / 2
-    return (
-      <>
-        <Line
-          points={pts.flatMap((p) => [p.x, p.y])}
-          stroke={selected ? '#4f6bed' : hovered ? '#55557a' : '#3a3a4d'}
-          strokeWidth={Math.max(wall.thickness, 4)}
-          lineCap="butt"
-          lineJoin="round"
-          listening={false}
-        />
-        <Circle x={wall.ax} y={wall.ay} radius={half} fill={fill} listening={false} />
-        <Circle x={wall.bx} y={wall.by} radius={half} fill={fill} listening={false} />
-      </>
-    )
-  }
   // 没有四角数据（例如刚画完还没重算）时退回中心线描边，至少不会消失。
   const points = quad
     ? quad.flatMap((p) => [p.x, p.y])
@@ -2434,6 +2535,78 @@ function AxisLabel({
       fillAfterStrokeEnabled
       listening={false}
     />
+  )
+}
+
+type ArcDimProps = {
+  wall: Wall
+  scale: number
+}
+
+/**
+ * 弧长标注（GB/T 50001—2017 §11.2.5）：尺寸线用与所注圆弧同心的圆弧表示，
+ * 尺寸界线沿半径方向（垂直于弧），数字上方加弧长符号，这里用「⌒」前缀代替。
+ */
+function ArcDim({ wall, scale }: ArcDimProps) {
+  const ref = useRef<Konva.Text>(null)
+  const a = { x: wall.ax, y: wall.ay }
+  const b = { x: wall.bx, y: wall.by }
+  const circle = arcCircle(a, b, wall.arcExtent)
+  const text = formatMm(arcLength(a, b, wall.arcExtent))
+  // 字宽实测：字体里没有 U+2312，弧长符号改成自己画一道小弧。
+  const [labelW, setLabelW] = useState(0)
+  useLayoutEffect(() => {
+    const node = ref.current
+    if (!node) return
+    const w = node.getTextWidth()
+    if (Math.abs(w - labelW) > 0.01) setLabelW(w)
+  })
+  if (!circle) return null
+  const pad = 22 / scale
+  const half = Math.max(wall.thickness, 4) / 2
+  const rLine = circle.r + half + pad
+  const steps = Math.max(6, Math.ceil(Math.abs(circle.delta) / ((6 * Math.PI) / 180)))
+  const pts: number[] = []
+  for (let i = 0; i <= steps; i += 1) {
+    const p = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine }, circle.start + (circle.delta * i) / steps)
+    pts.push(p.x, p.y)
+  }
+  const ends = [circle.start, circle.start + circle.delta].map((ang) => {
+    const inner = arcPointAt({ cx: circle.cx, cy: circle.cy, r: circle.r + half }, ang)
+    const outer = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + 4 / scale }, ang)
+    return [inner, outer] as const
+  })
+  const midAng = circle.start + circle.delta / 2
+  const label = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + 12 / scale }, midAng)
+  // 字头朝上：把角度归到 (-90°, 90°]，否则弧在下半圈时数字会倒着写。
+  let labelDeg = (midAng * 180) / Math.PI + 90
+  if (labelDeg > 90) labelDeg -= 180
+  if (labelDeg <= -90) labelDeg += 180
+  return (
+    <>
+      <Line points={pts} stroke="#7a7a8c" strokeWidth={1 / scale} dash={[6 / scale, 4 / scale]} listening={false} />
+      {ends.map(([p1, p2], i) => (
+        <Line
+          key={`w-${i}`}
+          points={[p1.x, p1.y, p2.x, p2.y]}
+          stroke="#b0b0bd"
+          strokeWidth={0.6 / scale}
+          listening={false}
+        />
+      ))}
+      <Group x={label.x} y={label.y} rotation={labelDeg} listening={false}>
+        <Text ref={ref} x={-labelW / 2} y={0} text={text} fontSize={11 / scale} fill="#4a4a5a" />
+        {/* GB/T 50001 的弧长符号：数字上方一道小弧 */}
+        <Line
+          x={-labelW / 2}
+          y={-7 / scale}
+          points={[0, (3 / scale), labelW / 2, 0, labelW, 3 / scale]}
+          tension={0.4}
+          stroke="#4a4a5a"
+          strokeWidth={0.8 / scale}
+        />
+      </Group>
+    </>
   )
 }
 

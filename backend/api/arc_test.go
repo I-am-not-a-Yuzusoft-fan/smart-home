@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -58,5 +59,50 @@ func TestArcWallRoundTripAndGuards(t *testing.T) {
 	if res := do(t, h, http.MethodPost, "/api/openings", open, admin); res.Code != http.StatusBadRequest ||
 		!strings.Contains(res.Body.String(), "弧墙") {
 		t.Fatalf("弧墙开门应 400 且提到弧墙，实际 %d：%s", res.Code, res.Body.String())
+	}
+}
+
+// 拖端点时前端只发坐标（不带 arcExtent / thickness），后端必须沿用原值，
+// 否则弧墙会被拉直、20 厘米外墙会被悄悄改回 10。
+func TestPartialWallUpdateKeepsArcAndThickness(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+
+	w := do(t, h, http.MethodPost, "/api/walls",
+		`{"ax":1000,"ay":1000,"bx":1400,"by":1000,"arcExtent":60,"thickness":20}`, admin)
+	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
+		t.Fatalf("建弧墙应 201，实际 %d：%s", w.Code, w.Body.String())
+	}
+	var plan planBody
+	if err := json.Unmarshal(w.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("解析户型失败: %v", err)
+	}
+	wallID := plan.Walls[len(plan.Walls)-1].ID
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/walls/"+wallID, "", admin) })
+
+	// 只改坐标：等同拖端点
+	w = do(t, h, http.MethodPatch, "/api/walls/"+wallID,
+		`{"ax":1010,"ay":1010,"bx":1410,"by":1010}`, admin)
+	if w.Code != http.StatusOK {
+		t.Fatalf("改墙应 200，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("解析户型失败: %v", err)
+	}
+	var got struct {
+		ArcExtent float64 `json:"arcExtent"`
+		Thickness float64 `json:"thickness"`
+	}
+	for _, wall := range plan.Walls {
+		if wall.ID == wallID {
+			got.ArcExtent = wall.ArcExtent
+			got.Thickness = wall.Thickness
+		}
+	}
+	if got.ArcExtent != 60 {
+		t.Fatalf("只改坐标后弧度应保持 60，实际 %v", got.ArcExtent)
+	}
+	if got.Thickness != 20 {
+		t.Fatalf("只改坐标后厚度应保持 20，实际 %v", got.Thickness)
 	}
 }
