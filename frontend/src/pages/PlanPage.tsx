@@ -2703,6 +2703,15 @@ function ArcDim({ wall, scale, bounds }: ArcDimProps) {
     const outer = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + side * (4 / scale) }, ang)
     return [inner, outer] as const
   })
+  // 起止符：跟直墙尺寸一样用 45° 中粗短斜线，方向取该点处半径的 45°。
+  const ticks = [circle.start, circle.start + circle.delta].map((ang) => {
+    const p0 = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine }, ang)
+    // 半径方向再转 45°，得到国标那种斜短线。
+    const rad = { x: Math.cos(ang), y: Math.sin(ang) }
+    const diag = { x: (rad.x + rad.y) / Math.SQRT2, y: (rad.y - rad.x) / Math.SQRT2 }
+    const t = 3 / scale
+    return [p0.x - diag.x * t, p0.y - diag.y * t, p0.x + diag.x * t, p0.y + diag.y * t]
+  })
   const midAng = circle.start + circle.delta / 2
   const label = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + side * (12 / scale) }, midAng)
   // 字头朝上：把角度归到 (-90°, 90°]，否则弧在下半圈时数字会倒着写。
@@ -2712,6 +2721,9 @@ function ArcDim({ wall, scale, bounds }: ArcDimProps) {
   return (
     <>
       <Line points={pts} stroke="#7a7a8c" strokeWidth={1 / scale} dash={[6 / scale, 4 / scale]} listening={false} />
+      {ticks.map((pts, i) => (
+        <Line key={`t-${i}`} points={pts} stroke="#4a4a5a" strokeWidth={2 / scale} listening={false} />
+      ))}
       {ends.map(([p1, p2], i) => (
         <Line
           key={`w-${i}`}
