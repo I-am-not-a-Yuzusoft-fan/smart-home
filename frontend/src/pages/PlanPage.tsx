@@ -165,7 +165,19 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [showUnderlay, setShowUnderlay] = useState(false)
   // 画布左上角那行操作提示：一开始给新用户看，真开始缩放/平移之后就淡出——
   // 它没有背景，高倍时底下的墙和标注正好从字后面穿过去，看着像字糊在一起。
-  const [hintHidden, setHintHidden] = useState(false)
+  // 提示只在操作时淡一点，停手 3 秒再亮回来：彻底藏起来用户就再也找不到了。
+  const [hintDimmed, setHintDimmed] = useState(false)
+  const hintTimer = useRef<number | null>(null)
+  const dimHint = () => {
+    setHintDimmed(true)
+    if (hintTimer.current !== null) window.clearTimeout(hintTimer.current)
+    hintTimer.current = window.setTimeout(() => setHintDimmed(false), 3000)
+  }
+  const showHint = () => {
+    if (hintTimer.current !== null) window.clearTimeout(hintTimer.current)
+    hintTimer.current = null
+    setHintDimmed(false)
+  }
   const [underlayBusy, setUnderlayBusy] = useState(false)
   const [underlayImage, setUnderlayImage] = useState<HTMLImageElement | null>(null)
   // 两点定标：进入后画布点击只标点，不画墙；点满两个再填真实长度。
@@ -503,7 +515,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }, [history.past, history.future, snapshotOf, applySnapshot])
 
   const fitToContent = useCallback(() => {
-    setHintHidden(false)
+    showHint()
     if (plan.corners.length === 0) {
       setViewport({ scale: 1, x: 0, y: 0 })
       return
@@ -929,7 +941,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     // 中键或按住空格：拖画布，不画墙。
     if (e.evt.button === 1 || spaceDown) {
       panRef.current = { sx: raw.x, sy: raw.y, vx: viewport.x, vy: viewport.y }
-      setHintHidden(true)
+      dimHint()
       return
     }
     if (e.evt.button === 2) {
@@ -1094,7 +1106,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     // 以指针为锚点缩放：缩放前后，指针下面的那个点不动。
     const before = toWorld(raw)
     const factor = e.evt.deltaY < 0 ? 1.1 : 1 / 1.1
-    setHintHidden(true)
+    dimHint()
     const scale = clamp(viewport.scale * factor, ZOOM_MIN, ZOOM_MAX)
     setViewport({ scale, x: raw.x - before.x * scale, y: raw.y - before.y * scale })
   }
@@ -1850,7 +1862,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           style={{
             color: 'var(--color-muted)',
             background: 'color-mix(in srgb, var(--color-bg) 82%, transparent)',
-            opacity: hintHidden ? 0 : 1,
+            opacity: hintDimmed ? 0.35 : 1,
           }}
         >
           {arcModifier} 拖出弧 · 拖拽画墙 · 点墙选中后 Delete 删除 · 空格/中键平移 · 滚轮缩放 · Shift 自由角度 · 拖端点改墙
@@ -2167,7 +2179,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
         {!loading && hint && (
           <div
-            className="pointer-events-none absolute left-4 top-4 px-3 py-1 text-xs"
+            className="pointer-events-none absolute left-4 top-11 px-3 py-1 text-xs"
             style={{ color: '#b06a00', background: 'rgba(255,255,255,0.82)', borderRadius: 6 }}
           >
             {hint}
