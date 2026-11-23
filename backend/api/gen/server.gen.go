@@ -304,6 +304,7 @@ func (e OpeningInputKind) Valid() bool {
 
 // Defines values for RoomKind.
 const (
+	RoomKindBalcony  RoomKind = "balcony"
 	RoomKindBathroom RoomKind = "bathroom"
 	RoomKindBedroom  RoomKind = "bedroom"
 	RoomKindHallway  RoomKind = "hallway"
@@ -315,6 +316,8 @@ const (
 // Valid indicates whether the value is a known member of the RoomKind enum.
 func (e RoomKind) Valid() bool {
 	switch e {
+	case RoomKindBalcony:
+		return true
 	case RoomKindBathroom:
 		return true
 	case RoomKindBedroom:
@@ -334,6 +337,7 @@ func (e RoomKind) Valid() bool {
 
 // Defines values for RoomNameInputKind.
 const (
+	RoomNameInputKindBalcony  RoomNameInputKind = "balcony"
 	RoomNameInputKindBathroom RoomNameInputKind = "bathroom"
 	RoomNameInputKindBedroom  RoomNameInputKind = "bedroom"
 	RoomNameInputKindHallway  RoomNameInputKind = "hallway"
@@ -345,6 +349,8 @@ const (
 // Valid indicates whether the value is a known member of the RoomNameInputKind enum.
 func (e RoomNameInputKind) Valid() bool {
 	switch e {
+	case RoomNameInputKindBalcony:
+		return true
 	case RoomNameInputKindBathroom:
 		return true
 	case RoomNameInputKindBedroom:
@@ -382,6 +388,7 @@ func (e SessionUserRole) Valid() bool {
 
 // Defines values for StaleRoomKind.
 const (
+	StaleRoomKindBalcony  StaleRoomKind = "balcony"
 	StaleRoomKindBathroom StaleRoomKind = "bathroom"
 	StaleRoomKindBedroom  StaleRoomKind = "bedroom"
 	StaleRoomKindHallway  StaleRoomKind = "hallway"
@@ -393,6 +400,8 @@ const (
 // Valid indicates whether the value is a known member of the StaleRoomKind enum.
 func (e StaleRoomKind) Valid() bool {
 	switch e {
+	case StaleRoomKindBalcony:
+		return true
 	case StaleRoomKindBathroom:
 		return true
 	case StaleRoomKindBedroom:
@@ -930,7 +939,10 @@ type UnderlayPatchRotationDeg int
 // Wall defines model for Wall.
 type Wall struct {
 	// AId 起点端点 id
-	AId       openapi_types.UUID `json:"aId"`
+	AId openapi_types.UUID `json:"aId"`
+
+	// ArcExtent 弧度（度），0 为直墙
+	ArcExtent float64            `json:"arcExtent"`
 	Ax        float64            `json:"ax"`
 	Ay        float64            `json:"ay"`
 	BId       openapi_types.UUID `json:"bId"`
@@ -942,6 +954,10 @@ type Wall struct {
 
 // WallInput defines model for WallInput.
 type WallInput struct {
+	// ArcExtent 弧度（度）。0 表示直墙；正负表示往弦的哪一侧弯（逆时针为正）。
+	// 半径与圆心由弦长和弧角反解，不落库。
+	ArcExtent *float64 `json:"arcExtent,omitempty"`
+
 	// Ax 起点 x，单位厘米，原点在平面图左上角（0–5000，超出会被拒）
 	Ax float64 `json:"ax"`
 	Ay float64 `json:"ay"`
@@ -958,6 +974,8 @@ type WallInput struct {
 // 带上表示「这面墙原来就在」——撤销/重做必须保住 id，否则门窗的
 // `wall_id` 与前端选中态都会断。
 type WallSnapshot struct {
+	// ArcExtent 弧度（度），0 为直墙
+	ArcExtent *float64            `json:"arcExtent,omitempty"`
 	Ax        float64             `json:"ax"`
 	Ay        float64             `json:"ay"`
 	Bx        float64             `json:"bx"`

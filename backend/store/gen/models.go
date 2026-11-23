@@ -185,4 +185,5 @@ type Wall struct {
 	Thickness float64            `json:"thickness"`
 	Height    float64            `json:"height"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ArcExtent float64            `json:"arc_extent"`
 }

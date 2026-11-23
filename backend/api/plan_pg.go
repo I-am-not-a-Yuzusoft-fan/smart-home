@@ -55,6 +55,7 @@ func (p *PGPlan) LoadPlan(ctx context.Context) ([]PlanCorner, []PlanWall, error)
 			BX:        w.Bx,
 			BY:        w.By,
 			Thickness: w.Thickness,
+			ArcExtent: w.ArcExtent,
 		})
 	}
 	return outCorners, outWalls, nil
@@ -62,12 +63,13 @@ func (p *PGPlan) LoadPlan(ctx context.Context) ([]PlanCorner, []PlanWall, error)
 
 // CreateWall 在一个事务里：端点按坐标 upsert，再插入墙。
 //
-// 同一对端点只留一面墙，反着画（B→A）也算同一面——这种情况下什么也不做，
-// 让调用方读到的仍是已有的那面。
-func (p *PGPlan) CreateWall(ctx context.Context, in WallInput) error {
+// 墙的身份是「端点对 + 弧度」：完全相同的墙（反着画也算）只留一面，
+// 但同端点的直墙与弧墙是两面墙——半圆阳台的弦墙和弧墙就靠这条共存。
+// 返回 created=false 表示这面墙本来就存在。
+func (p *PGPlan) CreateWall(ctx context.Context, in WallInput) (bool, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -85,48 +87,48 @@ func (p *PGPlan) CreateWall(ctx context.Context, in WallInput) error {
 
 	a, err := q.UpsertCorner(ctx, first)
 	if err != nil {
-		return err
+		return false, err
 	}
 	b, err := q.UpsertCorner(ctx, second)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !aIsFirst {
 		a, b = b, a
 	}
 
-	_, err = q.GetWallByPair(ctx, storegen.GetWallByPairParams{A: a, B: b})
+	_, err = q.GetWallByPairAndArc(ctx, storegen.GetWallByPairAndArcParams{A: a, B: b, ArcExtent: in.ArcExtent})
 	switch {
 	case err == nil:
-		// 已经有这面墙了，提交事务（端点 upsert 可能刚创建过一个孤立端点）。
+		// 已经有一面一模一样的墙了，提交事务（端点 upsert 可能刚创建过一个孤立端点）。
 		// 每个改动都要 +1 版本号：撤销/重做靠它做乐观并发。
 		if _, err := q.BumpPlanVersion(ctx); err != nil {
-			return fmt.Errorf("递增版本号: %w", err)
+			return false, fmt.Errorf("递增版本号: %w", err)
 		}
-		return tx.Commit(ctx)
+		return false, tx.Commit(ctx)
 	case errors.Is(err, pgx.ErrNoRows):
 		// 继续插入
 	default:
-		return err
+		return false, err
 	}
 
-	if _, err := q.InsertWall(ctx, storegen.InsertWallParams{A: a, B: b, Thickness: in.Thickness}); err != nil {
+	if _, err := q.InsertWall(ctx, storegen.InsertWallParams{A: a, B: b, Thickness: in.Thickness, ArcExtent: in.ArcExtent}); err != nil {
 		// 并发下别人刚好插进来：唯一索引挡住后按"已存在"处理，不算失败。
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			// 每个改动都要 +1 版本号：撤销/重做靠它做乐观并发。
 			if _, err := q.BumpPlanVersion(ctx); err != nil {
-				return fmt.Errorf("递增版本号: %w", err)
+				return false, fmt.Errorf("递增版本号: %w", err)
 			}
-			return tx.Commit(ctx)
+			return false, tx.Commit(ctx)
 		}
-		return err
+		return false, err
 	}
 	// 每个改动都要 +1 版本号：撤销/重做靠它做乐观并发。
 	if _, err := q.BumpPlanVersion(ctx); err != nil {
-		return fmt.Errorf("递增版本号: %w", err)
+		return false, fmt.Errorf("递增版本号: %w", err)
 	}
-	return tx.Commit(ctx)
+	return true, tx.Commit(ctx)
 }
 
 // LoadRoomNames 读全部房间命名。房间本身不落库，这里只有"名字"。
@@ -172,8 +174,8 @@ func (p *PGPlan) UpdateWall(ctx context.Context, id openapi_types.UUID, in WallI
 		a, b = b, a
 	}
 
-	// 这一对端点上已经有别的墙 → 409，不合并。
-	existing, err := q.GetWallByPair(ctx, storegen.GetWallByPairParams{A: a, B: b})
+	// 同端点、同弧度上已经有别的墙 → 409，不合并；同端点的直墙/弧墙可以并存。
+	existing, err := q.GetWallByPairAndArc(ctx, storegen.GetWallByPairAndArcParams{A: a, B: b, ArcExtent: in.ArcExtent})
 	switch {
 	case err == nil:
 		if existing.Bytes != id {
@@ -186,6 +188,7 @@ func (p *PGPlan) UpdateWall(ctx context.Context, id openapi_types.UUID, in WallI
 
 	if _, err := q.UpdateWall(ctx, storegen.UpdateWallParams{
 		ID: pgtype.UUID{Bytes: id, Valid: true}, A: a, B: b, Thickness: in.Thickness,
+		ArcExtent: in.ArcExtent,
 	}); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -275,6 +278,7 @@ func (p *PGPlan) ReplacePlan(ctx context.Context, version int64, walls []WallSna
 		id        *string
 		a, b      pgtype.UUID
 		thickness float64
+		arc       float64
 	}
 	planned := make([]plannedWall, 0, len(walls))
 	for _, w := range walls {
@@ -286,7 +290,7 @@ func (p *PGPlan) ReplacePlan(ctx context.Context, version int64, walls []WallSna
 		if err != nil {
 			return fmt.Errorf("写入端点: %w", err)
 		}
-		planned = append(planned, plannedWall{id: w.ID, a: aID, b: bID, thickness: w.Thickness})
+		planned = append(planned, plannedWall{id: w.ID, a: aID, b: bID, thickness: w.Thickness, arc: w.ArcExtent})
 	}
 
 	// 现存的墙：不在新列表里的删掉。
@@ -313,7 +317,7 @@ func (p *PGPlan) ReplacePlan(ctx context.Context, version int64, walls []WallSna
 	// 逐面墙：有 id 的更新，没 id 的插入。
 	for _, w := range planned {
 		if w.id == nil {
-			if _, err := q.InsertWall(ctx, storegen.InsertWallParams{A: w.a, B: w.b, Thickness: w.thickness}); err != nil {
+			if _, err := q.InsertWall(ctx, storegen.InsertWallParams{A: w.a, B: w.b, Thickness: w.thickness, ArcExtent: w.arc}); err != nil {
 				return fmt.Errorf("插入墙: %w", err)
 			}
 			continue
@@ -322,13 +326,13 @@ func (p *PGPlan) ReplacePlan(ctx context.Context, version int64, walls []WallSna
 		if err != nil {
 			return err
 		}
-		n, err := q.UpdateWallGeom(ctx, storegen.UpdateWallGeomParams{ID: id, A: w.a, B: w.b, Thickness: w.thickness})
+		n, err := q.UpdateWallGeom(ctx, storegen.UpdateWallGeomParams{ID: id, A: w.a, B: w.b, Thickness: w.thickness, ArcExtent: w.arc})
 		if err != nil {
 			return fmt.Errorf("更新墙: %w", err)
 		}
 		if n == 0 {
 			// 客户端认为存在、库里没有（别人删了）：按新墙插入，保住这次撤销的结果。
-			if err := q.InsertWallWithID(ctx, storegen.InsertWallWithIDParams{ID: id, A: w.a, B: w.b, Thickness: w.thickness}); err != nil {
+			if err := q.InsertWallWithID(ctx, storegen.InsertWallWithIDParams{ID: id, A: w.a, B: w.b, Thickness: w.thickness, ArcExtent: w.arc}); err != nil {
 				return fmt.Errorf("补插墙: %w", err)
 			}
 		}
@@ -412,6 +416,7 @@ func (p *PGPlan) GetWall(ctx context.Context, id openapi_types.UUID) (PlanWall, 
 		BX:        row.Bx,
 		BY:        row.By,
 		Thickness: row.Thickness,
+		ArcExtent: row.ArcExtent,
 	}, nil
 }
 
@@ -420,6 +425,9 @@ func (p *PGPlan) CreateOpening(ctx context.Context, in OpeningInput) (openapi_ty
 	wall, err := p.GetWall(ctx, in.WallID)
 	if err != nil {
 		return openapi_types.UUID{}, err
+	}
+	if math.Abs(wall.ArcExtent) >= 0.5 {
+		return openapi_types.UUID{}, ErrArcWall
 	}
 	length := math.Hypot(wall.BX-wall.AX, wall.BY-wall.AY)
 	// 允许 0.5 厘米的浮点误差：前端按墙长摆满整面墙时不该被 1e-9 卡住。

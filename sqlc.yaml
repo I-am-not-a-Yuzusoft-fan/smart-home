@@ -5,6 +5,10 @@ sql:
       - "sql/0001_init.sql"
       - "sql/0002_mount_and_openings.sql"
       - "sql/0003_underlay.sql"
+      - "sql/0004_wall_arc.sql"
+      - "sql/0005_arc_half_circle.sql"
+      - "sql/0006_wall_pair_arc.sql"
+      - "sql/0007_room_kind_balcony.sql"
     queries: "sql/queries"
     engine: "postgresql"
     gen:

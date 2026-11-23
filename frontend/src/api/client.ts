@@ -24,7 +24,10 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function requestWithResponse<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<{ body: T; res: Response }> {
   // 写请求必须带这个头：后端拿它区分"同源页面发的"和"别的站点发起的"。
   // 跨站表单带不了自定义头，所以它挡得住 CSRF；同源 fetch 能原样带上。
   const method = (init?.method ?? 'GET').toUpperCase()
@@ -39,7 +42,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   })
   if (res.status === 204) {
-    return undefined as T
+    return { body: undefined as T, res }
   }
   const text = await res.text()
   const body: unknown = text ? JSON.parse(text) : null
@@ -51,7 +54,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       err?.error?.message ?? `请求失败（HTTP ${res.status}）`,
     )
   }
-  return body as T
+  return { body: body as T, res }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await requestWithResponse<T>(path, init)).body
 }
 
 /** 取当前会话用户；未登录时抛 401 的 ApiError。 */
@@ -80,6 +87,8 @@ export type Wall = {
   bx: number
   by: number
   thickness: number
+  /** 弧度（度），0 是直墙；半径与圆心由弦长和弧角反解，不落库。 */
+  arcExtent: number
 }
 
 /** 整个户型。端点单列是因为两面墙共用一个端点。 */
@@ -133,7 +142,14 @@ export type OpeningPatch = {
 }
 
 /** 房间用途。与后端的 `room_name.kind` 检查约束一致。 */
-export type RoomKind = 'living' | 'bedroom' | 'kitchen' | 'bathroom' | 'study' | 'hallway'
+export type RoomKind =
+  | 'living'
+  | 'bedroom'
+  | 'kitchen'
+  | 'bathroom'
+  | 'study'
+  | 'hallway'
+  | 'balcony'
 
 /** 失配的房间名：墙改过之后哈希对不上任何现存房间，名字悬空在这里。 */
 export type StaleRoom = { hash: string; name: string; kind?: RoomKind }
@@ -188,19 +204,34 @@ export type WallSnapshot = {
   bx: number
   by: number
   thickness?: number
+  arcExtent?: number
 }
 
 /** 读当前户型。 */
 export const getPlan = () => request<Plan>('/api/plan')
 
 /** 画一面墙；返回保存后的整个户型。 */
-export const createWall = (input: { ax: number; ay: number; bx: number; by: number; thickness?: number }) =>
-  request<Plan>('/api/walls', { method: 'POST', body: JSON.stringify(input) })
+export const createWall = async (input: {
+  ax: number
+  ay: number
+  bx: number
+  by: number
+  thickness?: number
+  arcExtent?: number
+}): Promise<{ plan: Plan; existing: boolean }> => {
+  const { body, res } = await requestWithResponse<Plan>('/api/walls', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  // 幂等创建：同端点、同弧度的墙本来就存在时，服务端不改数据、只带这个头回来。
+  return { plan: body, existing: res.headers.get('X-Wall-Existing') === '1' }
+}
 
 /** 改一面墙的端点或厚度（拖端点微调长度与角度走这条）。 */
 export const updateWall = (
   id: string,
-  input: { ax: number; ay: number; bx: number; by: number; thickness?: number },
+  // PATCH 是部分更新：只传要改的字段，服务端会保留没传的（弧、厚度、端点）。
+  input: { ax?: number; ay?: number; bx?: number; by?: number; thickness?: number; arcExtent?: number },
 ) => request<Plan>(`/api/walls/${id}`, { method: 'PATCH', body: JSON.stringify(input) })
 
 /** 删一面墙。墙上的门窗与挂墙物品会被级联删除。 */

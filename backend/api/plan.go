@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"strings"
@@ -39,6 +40,8 @@ type PlanWall struct {
 	AX, AY    float64
 	BX, BY    float64
 	Thickness float64
+	// ArcExtent 弧度（度）：0 为直墙，正负表示往弦的哪一侧弯。
+	ArcExtent float64
 }
 
 // WallInput 是画墙的输入。
@@ -46,6 +49,7 @@ type WallInput struct {
 	AX, AY    float64
 	BX, BY    float64
 	Thickness float64
+	ArcExtent float64
 }
 
 // PlanOpening 是一个门或窗。和挂墙物品一样用「墙 + 沿墙偏移」定位，
@@ -89,6 +93,8 @@ var (
 	// ErrOpeningNotFound 开口不存在；ErrOpeningTooWide 开口超出墙长。
 	ErrOpeningNotFound = errors.New("开口不存在")
 	ErrOpeningTooWide  = errors.New("开口超出墙的范围")
+	// ErrArcWall 挂在弧墙上：v1 只在直墙上开门窗、挂物品。
+	ErrArcWall = errors.New("弧墙暂不支持门窗与挂墙物品")
 	// ErrPlanConflict 版本号过期：别处已经改过这份户型。
 	ErrPlanConflict = errors.New("plan version conflict")
 )
@@ -110,13 +116,14 @@ type WallSnapshot struct {
 	AX, AY    float64
 	BX, BY    float64
 	Thickness float64
+	ArcExtent float64
 }
 
 type PlanStore interface {
 	LoadPlan(ctx context.Context) ([]PlanCorner, []PlanWall, error)
 	// LoadRoomNames 只取"名字"，几何由墙推导——房间不存几何是 ADR 0002 定下的。
 	LoadRoomNames(ctx context.Context) ([]RoomName, error)
-	CreateWall(ctx context.Context, in WallInput) error
+	CreateWall(ctx context.Context, in WallInput) (bool, error)
 	UpdateWall(ctx context.Context, id openapi_types.UUID, in WallInput) error
 	DeleteWall(ctx context.Context, id openapi_types.UUID) (int64, error)
 	// LoadVersion 读平面图版本号；撤销/重做拿它做乐观并发。
@@ -184,7 +191,8 @@ func (s *Server) GetPlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, plan)
 }
 
-// CreateWall 画一面墙：端点按坐标去重，同一对端点只留一面墙。
+// CreateWall 画一面墙：端点按坐标去重；墙的身份是「端点对 + 弧度」，
+// 所以同端点的直墙与弧墙可以共存（半圆阳台），完全相同的墙才幂等。
 // 成功后返回整个户型，前端直接替换本地状态。
 func (s *Server) CreateWall(w http.ResponseWriter, r *http.Request) {
 	var body gen.WallInput
@@ -200,10 +208,15 @@ func (s *Server) CreateWall(w http.ResponseWriter, r *http.Request) {
 	if body.Thickness != nil {
 		thickness = float64(*body.Thickness)
 	}
+	arc := 0.0
+	if body.ArcExtent != nil {
+		arc = float64(*body.ArcExtent)
+	}
 	in := WallInput{
 		AX: float64(body.Ax), AY: float64(body.Ay),
 		BX: float64(body.Bx), BY: float64(body.By),
 		Thickness: thickness,
+		ArcExtent: arc,
 	}
 	if msg, ok := validateWall(in); !ok {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
@@ -211,10 +224,15 @@ func (s *Server) CreateWall(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	if err := s.plan.CreateWall(ctx, in); err != nil {
+	created, err := s.plan.CreateWall(ctx, in)
+	if err != nil {
 		s.log.Error("保存墙失败", "err", err)
 		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "保存失败")
 		return
+	}
+	if !created {
+		// 幂等：这面墙本来就在。前端靠这个头提示「这面墙已经存在」并选中它。
+		w.Header().Set("X-Wall-Existing", "1")
 	}
 
 	plan, err := s.readPlan(ctx)
@@ -229,8 +247,19 @@ func (s *Server) CreateWall(w http.ResponseWriter, r *http.Request) {
 // DeleteWall 删墙。端点保留：它可能被别的墙共用，孤立端点本身是合法状态。
 // UpdateWall 改一面墙的端点或厚度——拖端点微调长度与角度走这条。
 // 端点仍按坐标去重，所以把端点拖到别处已有端点上等于合并到这个点。
+// wallPatch 是 PATCH /api/walls/{id} 的请求体：所有字段都是可选的，
+// 没传的沿用墙上的原值（只改弧度时不能把端点写成 0）。
+type wallPatch struct {
+	Ax        *float64 `json:"ax,omitempty"`
+	Ay        *float64 `json:"ay,omitempty"`
+	Bx        *float64 `json:"bx,omitempty"`
+	By        *float64 `json:"by,omitempty"`
+	Thickness *float64 `json:"thickness,omitempty"`
+	ArcExtent *float64 `json:"arcExtent,omitempty"`
+}
+
 func (s *Server) UpdateWall(w http.ResponseWriter, r *http.Request, wallID openapi_types.UUID) {
-	var body gen.WallInput
+	var body wallPatch
 
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
 	dec.DisallowUnknownFields()
@@ -239,14 +268,47 @@ func (s *Server) UpdateWall(w http.ResponseWriter, r *http.Request, wallID opena
 		return
 	}
 
-	thickness := defaultThick
+	// 拖端点只发坐标，没带 thickness/arcExtent 时要沿用原值，
+	// 否则会把 20 厘米外墙改回 10、把弧墙拉直。
+	existing, err := s.plan.GetWall(r.Context(), wallID)
+	if err != nil {
+		if errors.Is(err, ErrWallNotFound) {
+			writeError(w, http.StatusNotFound, gen.NOTFOUND, "没有这面墙")
+			return
+		}
+		s.log.Error("读墙失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取失败")
+		return
+	}
+
+	thickness := existing.Thickness
 	if body.Thickness != nil {
-		thickness = float64(*body.Thickness)
+		thickness = *body.Thickness
+	}
+	arc := existing.ArcExtent
+	if body.ArcExtent != nil {
+		arc = *body.ArcExtent
+	}
+	// 端点也要沿用原值：只改弧度的 PATCH 以前会把端点写成 (0,0)-(0,0)，
+	// 校验直接报"墙的两个端点重合了"。
+	ax, ay, bx, by := existing.AX, existing.AY, existing.BX, existing.BY
+	if body.Ax != nil {
+		ax = *body.Ax
+	}
+	if body.Ay != nil {
+		ay = *body.Ay
+	}
+	if body.Bx != nil {
+		bx = *body.Bx
+	}
+	if body.By != nil {
+		by = *body.By
 	}
 	in := WallInput{
-		AX: float64(body.Ax), AY: float64(body.Ay),
-		BX: float64(body.Bx), BY: float64(body.By),
+		AX: ax, AY: ay,
+		BX: bx, BY: by,
 		Thickness: thickness,
+		ArcExtent: arc,
 	}
 	if msg, ok := validateWall(in); !ok {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
@@ -260,7 +322,7 @@ func (s *Server) UpdateWall(w http.ResponseWriter, r *http.Request, wallID opena
 		writeError(w, http.StatusNotFound, gen.NOTFOUND, "没有这面墙")
 		return
 	case errors.Is(err, ErrWallConflict):
-		writeError(w, http.StatusConflict, gen.CONFLICT, "这个位置已经有一面同样的墙了")
+		writeError(w, http.StatusConflict, gen.CONFLICT, "这里已经有一面一模一样的墙（同端点、同弧度）")
 		return
 	default:
 		s.log.Error("改墙失败", "err", err)
@@ -326,6 +388,9 @@ func (s *Server) CreateOpening(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, ErrOpeningTooWide):
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "开口超出了这面墙的范围")
+		return
+	case errors.Is(err, ErrArcWall):
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "弧墙暂不支持门窗：先把它改成直墙再开洞")
 		return
 	default:
 		s.log.Error("开洞失败", "err", err)
@@ -414,7 +479,20 @@ func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 	}
 	edges := make([]control.Wall, 0, len(walls))
 	for _, w := range walls {
-		edges = append(edges, control.Wall{A: w.AID.String(), B: w.BID.String()})
+		if math.Abs(w.ArcExtent) < 0.5 {
+			edges = append(edges, control.Wall{A: w.AID.String(), B: w.BID.String()})
+			continue
+		}
+		// 弧墙先离散成折线再进推导：房间多边形因此是折线近似（≤5° 一段）。
+		// 采样点用「墙 id + 序号」当临时端点，不落库，墙一改哈希自然就变。
+		prev := w.AID.String()
+		for i, ap := range control.ArcPolyline(control.Point{X: w.AX, Y: w.AY}, control.Point{X: w.BX, Y: w.BY}, w.ArcExtent) {
+			id := fmt.Sprintf("%s#arc%d", w.ID.String(), i)
+			points = append(points, control.Point{ID: id, X: ap.X, Y: ap.Y})
+			edges = append(edges, control.Wall{A: prev, B: id})
+			prev = id
+		}
+		edges = append(edges, control.Wall{A: prev, B: w.BID.String()})
 	}
 	derived := control.Derive(points, edges)
 
@@ -513,6 +591,7 @@ func (s *Server) readPlan(ctx context.Context) (gen.Plan, error) {
 			Bx:        w.BX,
 			By:        w.BY,
 			Thickness: w.Thickness,
+			ArcExtent: w.ArcExtent,
 		})
 	}
 	return plan, nil
@@ -609,6 +688,9 @@ func validateWall(in WallInput) (string, bool) {
 	if in.Thickness < 1 || in.Thickness > maxWallThick {
 		return "墙厚必须在 1–100 厘米之间", false
 	}
+	if math.Abs(in.ArcExtent) > 180 {
+		return "弧度必须在 −180° 到 180° 之间", false
+	}
 	return "", true
 }
 
@@ -632,8 +714,12 @@ func (s *Server) ReplacePlan(w http.ResponseWriter, r *http.Request) {
 		if wall.Thickness != nil {
 			thickness = *wall.Thickness
 		}
+		arc := 0.0
+		if wall.ArcExtent != nil {
+			arc = *wall.ArcExtent
+		}
 		if msg, ok := validateWall(WallInput{
-			AX: wall.Ax, AY: wall.Ay, BX: wall.Bx, BY: wall.By, Thickness: thickness,
+			AX: wall.Ax, AY: wall.Ay, BX: wall.Bx, BY: wall.By, Thickness: thickness, ArcExtent: arc,
 		}); !ok {
 			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, msg)
 			return
@@ -645,6 +731,7 @@ func (s *Server) ReplacePlan(w http.ResponseWriter, r *http.Request) {
 		}
 		walls = append(walls, WallSnapshot{
 			ID: id, AX: wall.Ax, AY: wall.Ay, BX: wall.Bx, BY: wall.By, Thickness: thickness,
+			ArcExtent: arc,
 		})
 	}
 

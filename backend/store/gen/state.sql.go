@@ -171,23 +171,30 @@ func (q *Queries) GetState(ctx context.Context, arg GetStateParams) (CapabilityS
 }
 
 const getWall = `-- name: GetWall :one
-SELECT a, b FROM wall WHERE id = $1
+SELECT a, b, thickness, arc_extent FROM wall WHERE id = $1
 `
 
 type GetWallRow struct {
-	A pgtype.UUID `json:"a"`
-	B pgtype.UUID `json:"b"`
+	A         pgtype.UUID `json:"a"`
+	B         pgtype.UUID `json:"b"`
+	Thickness float64     `json:"thickness"`
+	ArcExtent float64     `json:"arc_extent"`
 }
 
 func (q *Queries) GetWall(ctx context.Context, id pgtype.UUID) (GetWallRow, error) {
 	row := q.db.QueryRow(ctx, getWall, id)
 	var i GetWallRow
-	err := row.Scan(&i.A, &i.B)
+	err := row.Scan(
+		&i.A,
+		&i.B,
+		&i.Thickness,
+		&i.ArcExtent,
+	)
 	return i, err
 }
 
 const getWallByID = `-- name: GetWallByID :one
-SELECT w.id, w.a, w.b, w.thickness,
+SELECT w.id, w.a, w.b, w.thickness, w.arc_extent,
        ca.x AS ax, ca.y AS ay, cb.x AS bx, cb.y AS by
 FROM wall w
 JOIN corner ca ON ca.id = w.a
@@ -200,6 +207,7 @@ type GetWallByIDRow struct {
 	A         pgtype.UUID `json:"a"`
 	B         pgtype.UUID `json:"b"`
 	Thickness float64     `json:"thickness"`
+	ArcExtent float64     `json:"arc_extent"`
 	Ax        float64     `json:"ax"`
 	Ay        float64     `json:"ay"`
 	Bx        float64     `json:"bx"`
@@ -215,6 +223,7 @@ func (q *Queries) GetWallByID(ctx context.Context, id pgtype.UUID) (GetWallByIDR
 		&i.A,
 		&i.B,
 		&i.Thickness,
+		&i.ArcExtent,
 		&i.Ax,
 		&i.Ay,
 		&i.Bx,
@@ -223,20 +232,23 @@ func (q *Queries) GetWallByID(ctx context.Context, id pgtype.UUID) (GetWallByIDR
 	return i, err
 }
 
-const getWallByPair = `-- name: GetWallByPair :one
+const getWallByPairAndArc = `-- name: GetWallByPairAndArc :one
 SELECT id
 FROM wall
-WHERE (a = $1 AND b = $2) OR (a = $2 AND b = $1)
+WHERE ((a = $1 AND b = $2) OR (a = $2 AND b = $1))
+  AND arc_extent = $3::double precision
 `
 
-type GetWallByPairParams struct {
-	A pgtype.UUID `json:"a"`
-	B pgtype.UUID `json:"b"`
+type GetWallByPairAndArcParams struct {
+	A         pgtype.UUID `json:"a"`
+	B         pgtype.UUID `json:"b"`
+	ArcExtent float64     `json:"arc_extent"`
 }
 
-// 反着画也是同一面墙，所以两种顺序都查
-func (q *Queries) GetWallByPair(ctx context.Context, arg GetWallByPairParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, getWallByPair, arg.A, arg.B)
+// 反着画也是同一面墙；弧墙与直墙可以共用一对端点（半圆阳台），
+// 所以弧度和端点一起构成身份。
+func (q *Queries) GetWallByPairAndArc(ctx context.Context, arg GetWallByPairAndArcParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getWallByPairAndArc, arg.A, arg.B, arg.ArcExtent)
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
@@ -327,8 +339,8 @@ func (q *Queries) InsertOpening(ctx context.Context, arg InsertOpeningParams) (p
 }
 
 const insertWall = `-- name: InsertWall :one
-INSERT INTO wall (a, b, thickness)
-VALUES ($1, $2, $3)
+INSERT INTO wall (a, b, thickness, arc_extent)
+VALUES ($1, $2, $3, $4)
 RETURNING id
 `
 
@@ -336,17 +348,23 @@ type InsertWallParams struct {
 	A         pgtype.UUID `json:"a"`
 	B         pgtype.UUID `json:"b"`
 	Thickness float64     `json:"thickness"`
+	ArcExtent float64     `json:"arc_extent"`
 }
 
 func (q *Queries) InsertWall(ctx context.Context, arg InsertWallParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, insertWall, arg.A, arg.B, arg.Thickness)
+	row := q.db.QueryRow(ctx, insertWall,
+		arg.A,
+		arg.B,
+		arg.Thickness,
+		arg.ArcExtent,
+	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
 }
 
 const insertWallWithID = `-- name: InsertWallWithID :exec
-INSERT INTO wall (id, a, b, thickness) VALUES ($1, $2, $3, $4)
+INSERT INTO wall (id, a, b, thickness, arc_extent) VALUES ($1, $2, $3, $4, $5)
 `
 
 type InsertWallWithIDParams struct {
@@ -354,6 +372,7 @@ type InsertWallWithIDParams struct {
 	A         pgtype.UUID `json:"a"`
 	B         pgtype.UUID `json:"b"`
 	Thickness float64     `json:"thickness"`
+	ArcExtent float64     `json:"arc_extent"`
 }
 
 // 撤销/重做要保住墙 id：门窗的 wall_id、前端的选中态都挂在它上面。
@@ -363,6 +382,7 @@ func (q *Queries) InsertWallWithID(ctx context.Context, arg InsertWallWithIDPara
 		arg.A,
 		arg.B,
 		arg.Thickness,
+		arg.ArcExtent,
 	)
 	return err
 }
@@ -603,7 +623,7 @@ func (q *Queries) ListWallIDs(ctx context.Context) ([]pgtype.UUID, error) {
 }
 
 const listWalls = `-- name: ListWalls :many
-SELECT w.id, w.a, w.b, w.thickness,
+SELECT w.id, w.a, w.b, w.thickness, w.arc_extent,
        ca.x AS ax, ca.y AS ay, cb.x AS bx, cb.y AS by
 FROM wall w
 JOIN corner ca ON ca.id = w.a
@@ -616,6 +636,7 @@ type ListWallsRow struct {
 	A         pgtype.UUID `json:"a"`
 	B         pgtype.UUID `json:"b"`
 	Thickness float64     `json:"thickness"`
+	ArcExtent float64     `json:"arc_extent"`
 	Ax        float64     `json:"ax"`
 	Ay        float64     `json:"ay"`
 	Bx        float64     `json:"bx"`
@@ -636,6 +657,7 @@ func (q *Queries) ListWalls(ctx context.Context) ([]ListWallsRow, error) {
 			&i.A,
 			&i.B,
 			&i.Thickness,
+			&i.ArcExtent,
 			&i.Ax,
 			&i.Ay,
 			&i.Bx,
@@ -731,7 +753,7 @@ func (q *Queries) UpdateOpeningOffset(ctx context.Context, arg UpdateOpeningOffs
 }
 
 const updateWall = `-- name: UpdateWall :execrows
-UPDATE wall SET a = $2, b = $3, thickness = $4 WHERE id = $1
+UPDATE wall SET a = $2, b = $3, thickness = $4, arc_extent = $5 WHERE id = $1
 `
 
 type UpdateWallParams struct {
@@ -739,6 +761,7 @@ type UpdateWallParams struct {
 	A         pgtype.UUID `json:"a"`
 	B         pgtype.UUID `json:"b"`
 	Thickness float64     `json:"thickness"`
+	ArcExtent float64     `json:"arc_extent"`
 }
 
 func (q *Queries) UpdateWall(ctx context.Context, arg UpdateWallParams) (int64, error) {
@@ -747,6 +770,7 @@ func (q *Queries) UpdateWall(ctx context.Context, arg UpdateWallParams) (int64, 
 		arg.A,
 		arg.B,
 		arg.Thickness,
+		arg.ArcExtent,
 	)
 	if err != nil {
 		return 0, err
@@ -755,7 +779,7 @@ func (q *Queries) UpdateWall(ctx context.Context, arg UpdateWallParams) (int64, 
 }
 
 const updateWallGeom = `-- name: UpdateWallGeom :execrows
-UPDATE wall SET a = $2, b = $3, thickness = $4 WHERE id = $1
+UPDATE wall SET a = $2, b = $3, thickness = $4, arc_extent = $5 WHERE id = $1
 `
 
 type UpdateWallGeomParams struct {
@@ -763,6 +787,7 @@ type UpdateWallGeomParams struct {
 	A         pgtype.UUID `json:"a"`
 	B         pgtype.UUID `json:"b"`
 	Thickness float64     `json:"thickness"`
+	ArcExtent float64     `json:"arc_extent"`
 }
 
 func (q *Queries) UpdateWallGeom(ctx context.Context, arg UpdateWallGeomParams) (int64, error) {
@@ -771,6 +796,7 @@ func (q *Queries) UpdateWallGeom(ctx context.Context, arg UpdateWallGeomParams) 
 		arg.A,
 		arg.B,
 		arg.Thickness,
+		arg.ArcExtent,
 	)
 	if err != nil {
 		return 0, err

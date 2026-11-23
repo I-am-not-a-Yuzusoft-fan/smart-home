@@ -39,13 +39,15 @@ type planBody struct {
 	OpenWalls int           `json:"openWalls"`
 	Version   int64         `json:"version"`
 	Walls     []struct {
-		ID  string  `json:"id"`
-		AID string  `json:"aId"`
-		BID string  `json:"bId"`
-		AX  float64 `json:"ax"`
-		AY  float64 `json:"ay"`
-		BX  float64 `json:"bx"`
-		BY  float64 `json:"by"`
+		ID        string  `json:"id"`
+		AID       string  `json:"aId"`
+		BID       string  `json:"bId"`
+		AX        float64 `json:"ax"`
+		AY        float64 `json:"ay"`
+		BX        float64 `json:"bx"`
+		BY        float64 `json:"by"`
+		Thickness float64 `json:"thickness"`
+		ArcExtent float64 `json:"arcExtent"`
 	} `json:"walls"`
 }
 

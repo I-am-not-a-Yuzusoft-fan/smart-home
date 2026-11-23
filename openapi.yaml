@@ -724,6 +724,15 @@ components:
           maximum: 100
           default: 10
           description: 墙厚（厘米），省略时为 10
+        arcExtent:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          default: 0
+          description: |
+            弧度（度）。0 表示直墙；正负表示往弦的哪一侧弯（逆时针为正）。
+            半径与圆心由弦长和弧角反解，不落库。
     Corner:
       type: object
       required: [id, x, y]
@@ -739,7 +748,7 @@ components:
           format: double
     Wall:
       type: object
-      required: [id, aId, bId, ax, ay, bx, by, thickness]
+      required: [id, aId, bId, ax, ay, bx, by, thickness, arcExtent]
       properties:
         id:
           type: string
@@ -766,6 +775,10 @@ components:
         thickness:
           type: number
           format: double
+        arcExtent:
+          type: number
+          format: double
+          description: 弧度（度），0 为直墙
     Plan:
       type: object
       required: [corners, walls, openings, rooms, openWalls, staleRooms, version]
@@ -854,6 +867,12 @@ components:
           minimum: 1
           maximum: 100
           default: 10
+        arcExtent:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          description: 弧度（度），0 为直墙
     PlanInput:
       type: object
       required: [version, walls]
@@ -904,7 +923,7 @@ components:
           description: 用户起的名字；还没起名时为空
         kind:
           type: string
-          enum: [living, bedroom, kitchen, bathroom, study, hallway]
+          enum: [living, bedroom, kitchen, bathroom, study, hallway, balcony]
           description: 房间用途；还没指定时为空
     StaleRoom:
       type: object
@@ -918,7 +937,7 @@ components:
           type: string
         kind:
           type: string
-          enum: [living, bedroom, kitchen, bathroom, study, hallway]
+          enum: [living, bedroom, kitchen, bathroom, study, hallway, balcony]
     RoomNameInput:
       type: object
       required: [name]
@@ -931,7 +950,7 @@ components:
           description: 房间名，1–24 个字
         kind:
           type: string
-          enum: [living, bedroom, kitchen, bathroom, study, hallway]
+          enum: [living, bedroom, kitchen, bathroom, study, hallway, balcony]
     CapabilityOption:
       type: object
       required: [value, label]

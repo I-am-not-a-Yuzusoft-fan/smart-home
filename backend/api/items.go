@@ -118,6 +118,10 @@ func (s *Server) CreateItem(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, gen.INTERNAL, "创建物品失败")
 			return
 		}
+		if math.Abs(wall.ArcExtent) >= 0.5 {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "弧墙暂不支持挂墙物品：先把它改成直墙")
+			return
+		}
 		offset := 0.0
 		if body.WallOffset != nil {
 			offset = *body.WallOffset
@@ -298,6 +302,10 @@ func (s *Server) UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_t
 			}
 			s.log.ErrorContext(r.Context(), "读取墙失败", "err", err)
 			writeError(w, http.StatusInternalServerError, gen.INTERNAL, "更新物品失败")
+			return
+		}
+		if math.Abs(wall.ArcExtent) >= 0.5 {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "弧墙暂不支持挂墙物品：先把它改成直墙")
 			return
 		}
 		typ, err := s.itemTypes.GetItemType(r.Context(), existing.TypeKey)
