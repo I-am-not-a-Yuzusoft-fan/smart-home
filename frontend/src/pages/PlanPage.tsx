@@ -1052,7 +1052,11 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       const sag = (-dy * (p.x - bend.ax) + dx * (p.y - bend.ay)) / chord
       const theta = (4 * Math.atan((2 * Math.abs(sag)) / chord) * 180) / Math.PI
       // 屏幕 y 向下为正，而正弧度向上凸出，所以向下拖取负号，手势才跟手。
-      setBend({ ...bend, arcExtent: clamp(sag >= 0 ? -theta : theta, -179, 179) })
+      // 接近半圆时吸附到正 180°：s = (L/2)·tan(θ/4)，θ 由矢高反解，
+      // 手抖一点就到不了 180，直接给个吸附更顺手。
+      const raw = sag >= 0 ? -theta : theta
+      const snapped = Math.abs(raw) >= 178 ? Math.sign(raw) * 180 : raw
+      setBend({ ...bend, arcExtent: clamp(snapped, -180, 180) })
       return
     }
     if (!draft) {
@@ -1235,7 +1239,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       1,
       100,
     )
-    const arcExtent = Math.min(179, Math.max(-179, Number.parseFloat(wallForm.arc) || 0))
+    const arcExtent = Math.min(180, Math.max(-180, Number.parseFloat(wallForm.arc) || 0))
     const seq = ++writeSeq.current
     setSaving(true)
     try {
@@ -2155,7 +2159,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
           {/* 门窗画在墙上方：白色块盖住墙线，看起来才像"洞"。
               位置由「墙 + 沿墙偏移」算出来，和物品的挂墙逻辑共用 clampWallOffset。 */}
-          <Layer>
+          <Layer listening={!bend}>
             {plan.openings.map((opening) => {
               const wall = wallsById.get(opening.wallId)
               if (!wall) return null
@@ -2178,7 +2182,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
           {/* 物品层在墙之上：家具要压在墙线上，但顺序反过来就点不到被盖住的墙了。
               选中用几何命中（wallAt/handleAt），不依赖 Konva 的 hit graph。 */}
-          <Layer>
+          <Layer listening={!bend}>
             {items.map((item) => (
               <ItemShape
                 key={item.id}

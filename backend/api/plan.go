@@ -656,7 +656,7 @@ func validateWall(in WallInput) (string, bool) {
 	if in.Thickness < 1 || in.Thickness > maxWallThick {
 		return "墙厚必须在 1–100 厘米之间", false
 	}
-	if math.Abs(in.ArcExtent) >= 180 {
+	if math.Abs(in.ArcExtent) > 180 {
 		return "弧度必须在 −180° 到 180° 之间", false
 	}
 	return "", true
