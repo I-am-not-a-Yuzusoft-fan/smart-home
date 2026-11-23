@@ -1,11 +1,12 @@
 import { create } from 'zustand'
 
+/** 一条设备状态。字段名与 04-详细设计说明书 §3.2 的封套一致。 */
 export type LiveState = {
   itemId: string
   capabilityKey: string
   value: unknown
   source: string
-  updatedAt: string
+  ts: string
 }
 
 type LiveStore = {
@@ -14,8 +15,7 @@ type LiveStore = {
   lastSeq: number | null
   applyEnvelope: (envelope: { seq: number; type: string; payload: unknown }) => void
   setConnected: (connected: boolean) => void
-  setState: (state: LiveState) => void
-  getState: (itemId: string, capabilityKey: string) => unknown
+  reset: () => void
 }
 
 const keyOf = (itemId: string, capabilityKey: string) => `${itemId}:${capabilityKey}`
@@ -25,35 +25,39 @@ export const useLiveStore = create<LiveStore>((set, get) => ({
   connected: false,
   lastSeq: null,
   setConnected: (connected) => set({ connected }),
-  setState: (state) => set((store) => ({
-    states: { ...store.states, [keyOf(state.itemId, state.capabilityKey)]: state },
-  })),
-  getState: (itemId, capabilityKey) => get().states[keyOf(itemId, capabilityKey)]?.value,
+  reset: () => set({ states: {}, lastSeq: null }),
   applyEnvelope: (envelope) => {
-    const lastSeq = get().lastSeq
+    const { lastSeq } = get()
+    // 跳号：漏了消息，丢弃本地缓存，交给调用方重连拿新快照（§6.3 第 3 条）。
     if (lastSeq !== null && envelope.seq > lastSeq + 1) {
       set({ states: {}, lastSeq: null })
       return
     }
     set({ lastSeq: envelope.seq })
     if (envelope.type === 'snapshot') {
-      const payload = envelope.payload as LiveState[]
-      set({
-        states: Object.fromEntries(payload.map((state) => [
-          keyOf(state.itemId, state.capabilityKey),
-          state,
-        ])),
-      })
+      const payload = envelope.payload as { states?: LiveState[] }
+      const states = payload.states ?? []
+      set({ states: Object.fromEntries(states.map((s) => [keyOf(s.itemId, s.capabilityKey), s])) })
+      return
     }
     if (envelope.type === 'state') {
       const state = envelope.payload as LiveState
-      get().setState(state)
+      set((store) => ({ states: { ...store.states, [keyOf(state.itemId, state.capabilityKey)]: state } }))
     }
   },
 }))
 
+/** 取某个设备某项能力的最新值；没有就走调用方的兜底。 */
+export function useLiveValue(itemId: string | null | undefined, capabilityKey: string): unknown {
+  return useLiveStore((store) => (itemId ? store.states[keyOf(itemId, capabilityKey)]?.value : undefined))
+}
+
+/**
+ * 连上 /ws/state：先收全量快照，之后只收增量。
+ * 断线 1.5s 后自动重连；重连时 store 清掉 lastSeq，服务端会先发一份新快照。
+ */
 export function connectLiveState(onGap: () => void) {
-  let socket: WebSocket
+  let socket: WebSocket | null = null
   let timer: number | null = null
   let stopped = false
 
@@ -65,11 +69,11 @@ export function connectLiveState(onGap: () => void) {
     socket.onopen = () => useLiveStore.setState({ connected: true, lastSeq: null })
     socket.onmessage = (event) => {
       const envelope = JSON.parse(event.data) as { seq: number; type: string; payload: unknown }
-      const lastSeq = useLiveStore.getState().lastSeq
+      const { lastSeq } = useLiveStore.getState()
       if (lastSeq !== null && envelope.seq > lastSeq + 1) {
-        useLiveStore.setState({ states: {}, lastSeq: null })
+        useLiveStore.getState().reset()
         onGap()
-        socket.close()
+        socket?.close()
         return
       }
       useLiveStore.getState().applyEnvelope(envelope)
@@ -81,9 +85,11 @@ export function connectLiveState(onGap: () => void) {
   }
 
   connect()
+
   return () => {
     stopped = true
-    if (timer !== null) window.clearTimeout(timer)
+    if (timer) window.clearTimeout(timer)
     socket?.close()
+    useLiveStore.setState({ connected: false })
   }
 }

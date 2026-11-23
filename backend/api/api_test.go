@@ -286,6 +286,7 @@ func TestSendLightCommandAndRangeReject(t *testing.T) {
 		`{"capabilityKey":"brightness","value":101,"requestId":"`+rejectID+`"}`, cookie)
 	if replay.Code != http.StatusBadRequest || errorCode(t, replay) != "RANGE_OUT_OF_BOUNDS" {
 		t.Fatalf("重放越界命令应仍 400 RANGE_OUT_OF_BOUNDS，实际 %d %s", replay.Code, replay.Body.String())
+
 	}
 }
 

@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"time"
 
@@ -63,6 +65,17 @@ type statusRecorder struct {
 func (w *statusRecorder) WriteHeader(code int) {
 	w.status = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack 透传底层连接：/ws/state 靠 http.Hijacker 完成协议升级，
+// 外层记录状态的结构体不实现它会让握手直接 501。
+func (w *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
+
+// Flush 同理，透传流式响应能力。
+func (w *statusRecorder) Flush() {
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 // logRequests 只记录写请求与 4xx/5xx，避免刷屏。

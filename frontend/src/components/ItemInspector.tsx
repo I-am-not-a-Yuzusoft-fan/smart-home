@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { listItemStates, sendItemCommand, type Item, type ItemType, type Room } from '../api/client.ts'
+import { liveValuesFor } from '../features/control/live.ts'
+import { useLiveStore } from '../store/liveState.ts'
 import CapabilityForm, { type CapabilityValues } from './CapabilityForm.tsx'
 
 type Props = {
@@ -30,6 +32,15 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
   const [error, setError] = useState<string | null>(null)
   const [capabilityValues, setCapabilityValues] = useState<CapabilityValues>({})
   const [controlState, setControlState] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle')
+  const liveStates = useLiveStore((store) => store.states)
+  const liveConnected = useLiveStore((store) => store.connected)
+
+  // 推送来的值覆盖一次性拉取的结果：命令落库后不用手动刷新，三处显示同一份数据。
+  const liveValues = item ? liveValuesFor(liveStates, item.id, type) : {}
+  const mergedValues = useMemo<CapabilityValues>(
+    () => ({ ...capabilityValues, ...liveValues }),
+    [capabilityValues, liveValues],
+  )
 
   useEffect(() => {
     if (!item) return
@@ -188,10 +199,15 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
 
       {item.kind === 'device' && type ? (
         <section className="grid gap-2 border-t pt-3" style={{ borderColor: 'var(--color-border)' }}>
-          <h3 className="text-xs font-semibold">设备控制</h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold">设备控制</h3>
+            <span className="text-[11px]" style={{ color: liveConnected ? 'var(--color-success, #15803d)' : 'var(--color-muted)' }}>
+              {liveConnected ? '实时' : '重连中'}
+            </span>
+          </div>
           <CapabilityForm
             capabilities={type.capabilities}
-            values={capabilityValues}
+            values={mergedValues}
             idPrefix={`control-${item.id}`}
             onChange={(key, value) => setCapabilityValues((current) => ({ ...current, [key]: value }))}
             disabled={controlState === 'sending'}
@@ -206,7 +222,7 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
             {type.capabilities.filter((capability) => capability.writable).map((capability) => (
               <button
                 key={capability.key}
-                disabled={controlState === 'sending' || capabilityValues[capability.key] === undefined}
+                disabled={controlState === 'sending' || mergedValues[capability.key] === undefined}
                 onClick={async () => {
                   setControlState('sending')
                   setError(null)
@@ -214,12 +230,12 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
                     const requestId = crypto.randomUUID()
                     await sendItemCommand(item.id, {
                       capabilityKey: capability.key,
-                      value: capabilityValues[capability.key],
+                      value: mergedValues[capability.key],
                       requestId,
                     })
                     const states = await listItemStates(item.id)
                     setCapabilityValues(Object.fromEntries(states.map((state) => [state.capabilityKey, state.value])))
-                    setControlState('ok')
+                            setControlState('ok')
                   } catch (e) {
                     setError(e instanceof Error ? e.message : '设备命令执行失败')
                     setControlState('error')
