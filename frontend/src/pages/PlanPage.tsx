@@ -549,11 +549,18 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     let minY = Infinity
     let maxX = -Infinity
     let maxY = -Infinity
-    for (const c of plan.corners) {
-      minX = Math.min(minX, c.x)
-      minY = Math.min(minY, c.y)
-      maxX = Math.max(maxX, c.x)
-      maxY = Math.max(maxY, c.y)
+    const take = (x: number, y: number) => {
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x)
+      maxY = Math.max(maxY, y)
+    }
+    for (const c of plan.corners) take(c.x, c.y)
+    // 半圆墙会鼓到包围盒外面（顶墙弯 180° 能顶出去一个半径），
+    // 只按角点算会把它和弧长标注一起裁掉。
+    for (const w of plan.walls) {
+      if (Math.abs(w.arcExtent) < 0.5) continue
+      for (const pt of arcPoints({ x: w.ax, y: w.ay }, { x: w.bx, y: w.by }, w.arcExtent)) take(pt.x, pt.y)
     }
     // 三级标注画在户型外侧（墙厚/2 + 102px 起），全览必须留出这一圈，
     // 否则最外一排总尺寸会被裁在视口外。132 是「102 + 数字高度 + 余量」。
@@ -566,7 +573,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       x: (size.width - bw * scale) / 2 - minX * scale,
       y: (size.height - bh * scale) / 2 - minY * scale,
     })
-  }, [plan.corners, size.height, size.width])
+  }, [plan.corners, plan.walls, size.height, size.width])
 
   // 首次读到有内容的户型时自动全览一次；之后用户自己调，不再插手。
   useEffect(() => {
@@ -799,9 +806,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     [runs],
   )
 
-  /** 只有外轮廓上的链才画尺寸线；内墙的长度由墙上的标签负责。 */
-  const outerRuns = useMemo(() => {
-    if (plan.corners.length === 0) return []
+  /** 户型包围盒：外轮廓尺寸链与弧长尺寸都靠它判断"里侧/外侧"。 */
+  const planBounds = useMemo(() => {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     for (const c of plan.corners) {
       if (c.x < minX) minX = c.x
@@ -809,8 +815,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       if (c.y < minY) minY = c.y
       if (c.y > maxY) maxY = c.y
     }
-    return outerRunsInBounds(runs, { minX, minY, maxX, maxY })
-  }, [runs, plan.corners])
+    return { minX, minY, maxX, maxY }
+  }, [plan.corners])
+
+  /** 只有外轮廓上的链才画尺寸线；内墙的长度由墙上的标签负责。 */
+  const outerRuns = useMemo(
+    () => (plan.corners.length === 0 ? [] : outerRunsInBounds(runs, planBounds)),
+    [runs, plan.corners.length, planBounds],
+  )
 
   /**
    * 尺寸只标在**下方与左方**两侧。
@@ -2046,7 +2058,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
               {plan.walls
                 .filter((w) => Math.abs(w.arcExtent) >= 0.5)
                 .map((w) => (
-                  <ArcDim key={`arcdim-${w.id}`} wall={w} scale={viewport.scale} />
+                  <ArcDim key={`arcdim-${w.id}`} wall={w} scale={viewport.scale} bounds={planBounds} />
                 ))}
             </Layer>
           ) : null}
@@ -2643,13 +2655,15 @@ function AxisLabel({
 type ArcDimProps = {
   wall: Wall
   scale: number
+  /** 户型包围盒：用来判断尺寸线该放在屋里还是屋外。 */
+  bounds: { minX: number; minY: number; maxX: number; maxY: number }
 }
 
 /**
  * 弧长标注（GB/T 50001—2017 §11.2.5）：尺寸线用与所注圆弧同心的圆弧表示，
  * 尺寸界线沿半径方向（垂直于弧），数字上方加弧长符号，这里用「⌒」前缀代替。
  */
-function ArcDim({ wall, scale }: ArcDimProps) {
+function ArcDim({ wall, scale, bounds }: ArcDimProps) {
   const ref = useRef<Konva.Text>(null)
   const a = { x: wall.ax, y: wall.ay }
   const b = { x: wall.bx, y: wall.by }
@@ -2666,7 +2680,18 @@ function ArcDim({ wall, scale }: ArcDimProps) {
   if (!circle) return null
   const pad = 22 / scale
   const half = Math.max(wall.thickness, 4) / 2
-  const rLine = circle.r + half + pad
+  // 尺寸线要注写在轮廓线以外：弧可能向房间里鼓，也可能向外鼓，
+  // 一律按 r + 偏移会把数字放进屋里（截图里"1571"就压在房间内）。
+  const midAng0 = circle.start + circle.delta / 2
+  const mid = arcPointAt({ cx: circle.cx, cy: circle.cy, r: circle.r }, midAng0)
+  const dir = { x: (mid.x - circle.cx) / (circle.r || 1), y: (mid.y - circle.cy) / (circle.r || 1) }
+  const probe = half + pad + 12 / scale
+  const at = (sign: number) => ({ x: mid.x + dir.x * probe * sign, y: mid.y + dir.y * probe * sign })
+  const outside = (q: { x: number; y: number }) =>
+    q.x < bounds.minX - 1 || q.x > bounds.maxX + 1 || q.y < bounds.minY - 1 || q.y > bounds.maxY + 1
+  // 两侧都朝外时取远离包围盒中心的那侧；都朝里时同理，总之宁可画在外面。
+  const side = outside(at(1)) || !outside(at(-1)) ? 1 : -1
+  const rLine = Math.max(circle.r + side * (half + pad), half + pad)
   const steps = Math.max(6, Math.ceil(Math.abs(circle.delta) / ((6 * Math.PI) / 180)))
   const pts: number[] = []
   for (let i = 0; i <= steps; i += 1) {
@@ -2674,12 +2699,12 @@ function ArcDim({ wall, scale }: ArcDimProps) {
     pts.push(p.x, p.y)
   }
   const ends = [circle.start, circle.start + circle.delta].map((ang) => {
-    const inner = arcPointAt({ cx: circle.cx, cy: circle.cy, r: circle.r + half }, ang)
-    const outer = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + 4 / scale }, ang)
+    const inner = arcPointAt({ cx: circle.cx, cy: circle.cy, r: circle.r + side * half }, ang)
+    const outer = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + side * (4 / scale) }, ang)
     return [inner, outer] as const
   })
   const midAng = circle.start + circle.delta / 2
-  const label = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + 12 / scale }, midAng)
+  const label = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + side * (12 / scale) }, midAng)
   // 字头朝上：把角度归到 (-90°, 90°]，否则弧在下半圈时数字会倒着写。
   let labelDeg = (midAng * 180) / Math.PI + 90
   if (labelDeg > 90) labelDeg -= 180
