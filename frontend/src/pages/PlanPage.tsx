@@ -2547,8 +2547,10 @@ function RoomLabel({
   const wPx = (maxX - minX) * scale
   const hPx = (maxY - minY) * scale
   // 房间在屏幕上小于这个尺寸时，标签会把整个户型盖住——那还不如不画，
-  // 缩放进来自然就有了。
-  if (Math.min(wPx, hPx) < 40) return null
+  // 缩放进来自然就有了。有名字的房间例外：阳台、凸窗本来就是细长的一条，
+  // 按包围盒一卡就永远不显示，宁可让它溢出到隔壁也比没有强。
+  if (Math.min(wPx, hPx) < 22) return null
+  if (!room.name && Math.min(wPx, hPx) < 40) return null
   // 字号以**世界单位**为主（34cm，跟打印图纸一个量级），再夹到 7–15px 的屏幕区间：
   // 太小读不了，太大又会溢出到隔壁房间。
   const size = Math.min(Math.max(34, 7 / scale), 15 / scale)
@@ -2562,7 +2564,8 @@ function RoomLabel({
   // 房间标签只写名字 + 面积。宽×深一律不标：矩形房间的外接矩形恰好等于房间本身，
   // 异形的却会写出一个图上看不出来的矩形；房间尺寸本来就该由墙上的尺寸链回答。
   const lines: string[] = [room.name ? room.name : `${room.areaM2.toFixed(1)} ㎡`]
-  if (room.name && wPx >= 96) lines.push(`${room.areaM2.toFixed(1)} ㎡`)
+  // 面积是「这块多大」的唯一线索，细长房间也要给；只是屏幕上放不下两行时先让位给名字。
+  if (room.name && (wPx >= 96 || Math.min(wPx, hPx) < 40)) lines.push(`${room.areaM2.toFixed(1)} ㎡`)
   return (
     <Text
       x={anchor.x}

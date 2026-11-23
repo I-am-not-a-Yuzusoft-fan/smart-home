@@ -198,6 +198,8 @@ export function arcPolyline(a: Pt, b: Pt, extentDeg: number): Pt[] {
   let delta = end - start
   while (delta > Math.PI) delta -= 2 * Math.PI
   while (delta < -Math.PI) delta += 2 * Math.PI
+  // 正好 180° 时两段弧等长，归一化后符号唯一，鼓出方向得靠弧度符号补回来。
+  if (Math.abs(Math.abs(delta) - Math.PI) < 1e-9) delta = Math.sign(theta) * Math.PI
   const steps = Math.max(2, Math.ceil(Math.abs(delta) / ((5 * Math.PI) / 180)))
   const out: Pt[] = []
   for (let i = 1; i < steps; i += 1) {
