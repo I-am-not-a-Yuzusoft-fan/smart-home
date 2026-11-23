@@ -46,9 +46,6 @@ func (s *Server) Router() http.Handler {
 		},
 	})
 
-	// 临时调试通道：前端把关键交互打到这里，服务端日志里能实时看到。
-	r.Post("/api/debug/events", s.DebugEvent)
-
 	// 底图字节不走生成代码：一个 200 响应可能带三种 content type，
 	// 契约里写出来只会让 codegen 生成难用的 union。鉴权链是同一个。
 	r.Get("/api/plan/underlay/image", s.ServeUnderlayImage)
@@ -91,7 +88,6 @@ func logRequests(log interface {
 
 var publicPaths = map[string]bool{
 	"/api/healthz":     true,
-	"/api/debug/events": true,
 	"/api/auth/login":  true,
 	"/api/auth/logout": true,
 }
