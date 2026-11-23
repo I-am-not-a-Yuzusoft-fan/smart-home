@@ -303,6 +303,13 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [draft, setDraft] = useState<Draft | null>(null)
   // 拉弧模式：Ctrl/Alt 松手后不马上建墙，先跟着鼠标定弧度，再点一下落库。
   const [bend, setBend] = useState<Draft | null>(null)
+  // macOS 的 Ctrl+点击是系统右键，拉弧只能用 Option；Windows/Linux 上是 Ctrl。
+  const arcModifier = /mac|iphone|ipad/i.test(
+    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+      navigator.platform,
+  )
+    ? '⌥'
+    : 'Ctrl'
   const [guide, setGuide] = useState<Guide>({ kind: 'none' })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // 物品与墙各自有选中态，但同一时刻只允许一个：点墙清物品，点物品清墙。
@@ -1846,7 +1853,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             opacity: hintHidden ? 0 : 1,
           }}
         >
-          拖拽画墙 · 点墙选中后 Delete 删除 · 空格/中键平移 · 滚轮缩放 · Shift 自由角度 · 拖端点改墙
+          {arcModifier} 拖出弧 · 拖拽画墙 · 点墙选中后 Delete 删除 · 空格/中键平移 · 滚轮缩放 · Shift 自由角度 · 拖端点改墙
         </div>
         {showUnderlay ? (
           <UnderlayPanel
@@ -2033,7 +2040,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 <Text
                   x={(bend.ax + bend.bx) / 2 + 8 / viewport.scale}
                   y={(bend.ay + bend.by) / 2 - 16 / viewport.scale}
-                  text={`弧度 ${Math.round(bend.arcExtent ?? 0)}°，单击完成`}
+                  text={`弧度 ${Math.round(bend.arcExtent ?? 0)}°，单击完成（Esc 取消）`}
                   fontSize={11 / viewport.scale}
                   fill="#3a3a4d"
                   listening={false}
