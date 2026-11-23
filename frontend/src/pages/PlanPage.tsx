@@ -357,6 +357,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const arcKeyRef = useRef(false)
   // 按住修饰键时给一句提示，否则「拖出弧」这个手势没人猜得到。
   const [arcKeyHeld, setArcKeyHeld] = useState(false)
+  // 画弧模式：不用按修饰键，先点这个按钮再拖，拖完松手就在等定弧度。
+  const [arcMode, setArcMode] = useState(false)
   const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
   const fittedRef = useRef(false)
 
@@ -1108,13 +1110,15 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     // 浏览器可能在松手前不再发 mousemove，那样墙会短一截、四个角对不上。
     // 必须带上 anchor，否则松手这一下会退化成「只吸附墙线、不做正交」，
     // 预览是直的、落库却是斜的。
+    const arcWanted = arcMode || e.evt.altKey || e.evt.ctrlKey || arcKeyRef.current
     const end = snap(p.x, p.y, {
       anchor: { x: d.ax, y: d.ay },
-      orthogonal: !e.evt.shiftKey,
+      // 弦不强制正交：斜着的弦才画得出常见的弧（想正交按住 Shift）。
+      orthogonal: !e.evt.shiftKey && !arcWanted,
     })
     const wall = { ax: d.ax, ay: d.ay, bx: end.x, by: end.y }
     if (Math.hypot(wall.bx - wall.ax, wall.by - wall.ay) < MIN_DRAG_PX / viewport.scale) return
-    const wantsArc = e.evt.altKey || e.evt.ctrlKey || arcKeyRef.current
+    const wantsArc = arcWanted
     arcKeyRef.current = false
     if (wantsArc) {
       // 拉弧模式：墙先不落库，指针定弧度，再点一下才建。
@@ -1618,6 +1622,20 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             }}
           >
             尺寸标注
+          </button>
+          <button
+            onClick={() => setArcMode((v) => !v)}
+            disabled={saving}
+            title="画弧模式：拖出弦后松手，移动鼠标定弧度，单击落定"
+            className="whitespace-nowrap px-2 py-1 text-xs"
+            style={{
+              border: `1px solid ${arcMode ? 'var(--color-primary)' : 'var(--color-border)'}`,
+              borderRadius: 'var(--radius-sm)',
+              background: arcMode ? 'var(--color-primary-weak)' : 'var(--color-bg)',
+              color: arcMode ? 'var(--color-primary)' : 'inherit',
+            }}
+          >
+            画弧
           </button>
           <button
             onClick={() => {
@@ -2203,14 +2221,16 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           </Layer>
         </Stage>
 
-        {!loading && (arcKeyHeld || bend) && (
+        {!loading && (arcMode || arcKeyHeld || bend) && (
           <div
             className="pointer-events-none absolute left-1/2 top-24 -translate-x-1/2 rounded px-3 py-1.5 text-xs"
             style={{ color: '#1f4fa8', background: 'rgba(255,255,255,0.92)', border: '1px solid #cfd8ea', borderRadius: 8 }}
           >
             {bend
               ? '移动鼠标定弧度 → 单击落定（Esc 取消）'
-              : `${arcModifier} 已按住：拖出一段弦 → 松手 → 移动鼠标定弧度 → 单击落定`}
+              : arcMode
+                ? '画弧模式：拖出一段弦 → 松手 → 移动鼠标定弧度 → 单击落定（再点「画弧」退出）'
+                : `${arcModifier} 已按住：拖出一段弦 → 松手 → 移动鼠标定弧度 → 单击落定`}
           </div>
         )}
 
