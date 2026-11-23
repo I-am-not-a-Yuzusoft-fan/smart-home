@@ -1061,7 +1061,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     }
     const s = snap(p.x, p.y, {
       anchor: { x: draft.ax, y: draft.ay },
-      orthogonal: !e.evt.shiftKey,
+      // 画弧时弦要能斜着，预览就必须跟落点用同一套吸附，否则松手会突然跳一下。
+      orthogonal: !e.evt.shiftKey && !arcMode && !e.evt.altKey && !e.evt.ctrlKey,
     })
     setDraft((d) => (d ? { ...d, bx: s.x, by: s.y } : d))
     setGuide(s.guide)
@@ -2096,7 +2097,11 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 <Text
                   x={(bend.ax + bend.bx) / 2 + 8 / viewport.scale}
                   y={(bend.ay + bend.by) / 2 - 16 / viewport.scale}
-                  text={`弧度 ${Math.round(bend.arcExtent ?? 0)}°，单击完成（Esc 取消）`}
+                  text={
+                    Math.abs(bend.arcExtent ?? 0) < 1
+                      ? '移动鼠标定弧度 · 单击落定（Esc 取消）'
+                      : `弧度 ${Math.round(bend.arcExtent ?? 0)}° · 单击落定（Esc 取消）`
+                  }
                   fontSize={11 / viewport.scale}
                   fill="#3a3a4d"
                   listening={false}
@@ -2125,15 +2130,21 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 <Line
                   points={[draft.ax, draft.ay, draft.bx, draft.by]}
                   stroke="#4f6bed"
-                  strokeWidth={10}
-                  opacity={0.4}
+                  strokeWidth={arcMode ? 6 : 10}
+                  opacity={arcMode ? 0.55 : 0.4}
+                  // 画弧模式下这条只是"弦"，画成虚线，免得看起来像在画直墙。
+                  dash={arcMode ? [10 / viewport.scale, 6 / viewport.scale] : undefined}
                   lineCap="round"
                   listening={false}
                 />
                 <Text
                   x={(draft.ax + draft.bx) / 2 + 8 / viewport.scale}
                   y={(draft.ay + draft.by) / 2 - 8 / viewport.scale}
-                  text={formatCm(Math.hypot(draft.bx - draft.ax, draft.by - draft.ay))}
+                  text={
+                    arcMode
+                      ? `${formatCm(Math.hypot(draft.bx - draft.ax, draft.by - draft.ay))} · 松手后移动鼠标定弧度`
+                      : formatCm(Math.hypot(draft.bx - draft.ax, draft.by - draft.ay))
+                  }
                   fontSize={labelSize}
                   fill="#4f6bed"
                   listening={false}
