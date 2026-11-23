@@ -6,6 +6,7 @@ sql:
       - "sql/0002_mount_and_openings.sql"
       - "sql/0003_underlay.sql"
       - "sql/0004_wall_arc.sql"
+      - "sql/0005_arc_half_circle.sql"
     queries: "sql/queries"
     engine: "postgresql"
     gen:

@@ -48,10 +48,15 @@ func TestArcWallRoundTripAndGuards(t *testing.T) {
 		t.Fatalf("90° 弧的弓形应让面积涨到 4.5 ㎡ 以上，实际 %.2f", mine.AreaM2)
 	}
 
-	// 超界拒绝。
-	bad := `{"ax":4100,"ay":4100,"bx":4300,"by":4100,"thickness":10,"arcExtent":180}`
+	// 正好 180° 是合法的半圆（以前用开区间会把它拒掉，界面上也就"落定不了"）。
+	half := `{"ax":4100,"ay":4100,"bx":4300,"by":4100,"thickness":10,"arcExtent":180}`
+	if res := do(t, h, http.MethodPatch, "/api/walls/"+top, half, admin); res.Code != http.StatusOK {
+		t.Fatalf("180° 半圆应 200，实际 %d：%s", res.Code, res.Body.String())
+	}
+	// 超过半圈没有意义，拒绝。
+	bad := `{"ax":4100,"ay":4100,"bx":4300,"by":4100,"thickness":10,"arcExtent":181}`
 	if res := do(t, h, http.MethodPatch, "/api/walls/"+top, bad, admin); res.Code != http.StatusBadRequest {
-		t.Fatalf("180° 应 400，实际 %d", res.Code)
+		t.Fatalf("181° 应 400，实际 %d", res.Code)
 	}
 
 	// 弧墙上不能开门。

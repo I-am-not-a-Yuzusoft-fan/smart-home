@@ -727,8 +727,8 @@ components:
         arcExtent:
           type: number
           format: double
-          exclusiveMinimum: -180
-          exclusiveMaximum: 180
+          minimum: -180
+          maximum: 180
           default: 0
           description: |
             弧度（度）。0 表示直墙；正负表示往弦的哪一侧弯（逆时针为正）。
@@ -870,8 +870,8 @@ components:
         arcExtent:
           type: number
           format: double
-          exclusiveMinimum: -180
-          exclusiveMaximum: 180
+          minimum: -180
+          maximum: 180
           description: 弧度（度），0 为直墙
     PlanInput:
       type: object
