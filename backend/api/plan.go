@@ -251,11 +251,24 @@ func (s *Server) UpdateWall(w http.ResponseWriter, r *http.Request, wallID opena
 		return
 	}
 
-	thickness := defaultThick
+	// 拖端点只发坐标，没带 thickness/arcExtent 时要沿用原值，
+	// 否则会把 20 厘米外墙改回 10、把弧墙拉直。
+	existing, err := s.plan.GetWall(r.Context(), wallID)
+	if err != nil {
+		if errors.Is(err, ErrWallNotFound) {
+			writeError(w, http.StatusNotFound, gen.NOTFOUND, "没有这面墙")
+			return
+		}
+		s.log.Error("读墙失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取失败")
+		return
+	}
+
+	thickness := existing.Thickness
 	if body.Thickness != nil {
 		thickness = float64(*body.Thickness)
 	}
-	arc := 0.0
+	arc := existing.ArcExtent
 	if body.ArcExtent != nil {
 		arc = float64(*body.ArcExtent)
 	}
