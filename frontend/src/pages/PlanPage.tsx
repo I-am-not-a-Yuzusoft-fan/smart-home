@@ -96,15 +96,6 @@ function transformOf(u: Underlay): UnderlayTransform {
 
 const MIN_DRAG_PX = 8
 
-// 临时调试：把关键交互送到服务端日志（/api/debug/events），排查"点了没反应"。
-function debugLog(tag: string, data: Record<string, unknown>) {
-  if (!import.meta.env.DEV) return
-  void fetch('/api/debug/events', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
-    body: JSON.stringify({ tag, data }),
-  }).catch(() => {})
-}
 // 下限要低于 25%：annotations 占的是一圈固定的屏幕像素（约 110px），
 // 窄窗口里 25% 会把户型撑到边缘，最外一排尺寸被画布裁掉。
 const ZOOM_MIN = 0.18
@@ -1023,7 +1014,6 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     if (bend) {
       const b = bend
       const extent = Math.round(b.arcExtent ?? 0)
-      debugLog('bend-commit', { button: e.evt.button, extent, ax: b.ax, ay: b.ay, bx: b.bx, by: b.by })
       if (e.evt.button === 0) {
         // 松手后没动鼠标就点了一下：这时弧度还是 0，落定等于画一条直墙，
         // 十有八九还会和已有的墙撞上（409）。直接说清楚，别让人以为"点了没反应"。
@@ -1214,7 +1204,6 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     arcKeyRef.current = false
     if (wantsArc) {
       // 拉弧模式：墙先不落库，指针定弧度，再点一下才建。
-      debugLog('bend-start', { ...wall, arcMode })
       setBend({ ...wall, arcExtent: 0 })
       return
     }
@@ -1243,7 +1232,6 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       // 墙的身份是「端点对 + 弧度」：同端点的直墙与弧墙是两面墙，
       // 半圆阳台的弦墙（带门）和外面那段弧就靠这条共存。
       // 完全相同的墙由服务端按幂等处理，用 X-Wall-Existing 告诉我们。
-      debugLog('create-wall', { ...d })
       const { plan: next, existing } = await createWall({
         ax: d.ax,
         ay: d.ay,
@@ -1278,7 +1266,6 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : '保存失败'
-      debugLog('create-wall-error', { message: msg, ...d })
       setError(msg)
     } finally {
       setSaving(false)
