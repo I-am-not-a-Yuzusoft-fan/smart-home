@@ -828,6 +828,32 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     return { minX, minY, maxX, maxY }
   }, [plan.corners])
 
+  /**
+   * 包住所有墙的包围盒（弧墙按采样点算）：尺寸线要注写在图形轮廓线以外，
+   * 阳台这种伸出去的弧会把尺寸线吞进去，所以得知道这一侧伸出去多远。
+   */
+  const planExtent = useMemo(() => {
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    const push = (x: number, y: number) => {
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+    for (const c of plan.corners) push(c.x, c.y)
+    for (const w of plan.walls) {
+      push(w.ax, w.ay)
+      push(w.bx, w.by)
+      if (Math.abs(w.arcExtent) >= 0.5) {
+        for (const pt of arcPoints({ x: w.ax, y: w.ay }, { x: w.bx, y: w.by }, w.arcExtent)) push(pt.x, pt.y)
+      }
+    }
+    return { minX, minY, maxX, maxY }
+  }, [plan.corners, plan.walls])
+
   /** 只有外轮廓上的链才画尺寸线；内墙的长度由墙上的标签负责。 */
   const outerRuns = useMemo(
     () => (plan.corners.length === 0 ? [] : outerRunsInBounds(runs, planBounds)),
@@ -859,6 +885,26 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }, [outerRuns, plan.corners])
 
   /** 每个房间的开间×进深：后端的栋深多边形是绕中线走的，这里只报边长，不改几何。 */
+
+  /** 这条链所在的这一侧，几何比尺寸链还外伸了多少厘米（弧墙阳台靠它绕开）。 */
+  function protrusionOf(run: { a: Pt; b: Pt; horizontal: boolean }): number {
+    const outward = run.horizontal
+      ? (run.a.y + run.b.y) / 2 < center.y
+        ? -1
+        : 1
+      : (run.a.x + run.b.x) / 2 < center.x
+        ? -1
+        : 1
+    const line = run.horizontal ? run.a.y : run.a.x
+    const reach = run.horizontal
+      ? outward > 0
+        ? planExtent.maxY - line
+        : line - planExtent.minY
+      : outward > 0
+        ? planExtent.maxX - line
+        : line - planExtent.minX
+    return Math.max(0, reach)
+  }
 
   const center = (() => {
     if (plan.corners.length === 0) return { x: 0, y: 0 }
@@ -2055,6 +2101,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                   center={center}
                   scale={viewport.scale}
                   thickness={Math.max(...run.wallIds.map((id) => wallsById.get(id)?.thickness ?? 10))}
+                  extra={protrusionOf(run)}
                   onPick={
                     run.wallIds.length === 1
                       ? () => {
@@ -2090,6 +2137,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                     thickness={Math.max(
                       ...run.wallIds.map((id) => wallsById.get(id)?.thickness ?? 10),
                     )}
+                    extra={protrusionOf(run)}
                     segments={segments}
                   />
                 )
@@ -2590,12 +2638,15 @@ function AxisChain({
   scale,
   thickness,
   segments,
+  extra = 0,
 }: {
   run: { a: Pt; b: Pt; horizontal: boolean }
   center: Pt
   scale: number
   thickness: number
   segments: AxisSegment[]
+  /** 这一侧伸出去的几何（阳台、凸窗）有多远：尺寸线要绕开它，不能压在轮廓上 */
+  extra?: number
 }) {
   const midX = (run.a.x + run.b.x) / 2
   const midY = (run.a.y + run.b.y) / 2
@@ -2607,7 +2658,7 @@ function AxisChain({
       ? -1
       : 1
   // 比总尺寸链往里一档，两条线才不会叠在一起。
-  const offset = thickness / 2 + (run.horizontal ? 40 : 56) / scale
+  const offset = thickness / 2 + extra + (run.horizontal ? 40 : 56) / scale
   const x1 = run.a.x + (run.horizontal ? 0 : outward * offset)
   const y1 = run.a.y + (run.horizontal ? outward * offset : 0)
   const x2 = run.b.x + (run.horizontal ? 0 : outward * offset)
@@ -2746,15 +2797,22 @@ function ArcDim({ wall, scale, bounds }: ArcDimProps) {
     const outer = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + side * (4 / scale) }, ang)
     return [inner, outer] as const
   })
-  // 起止符：跟直墙尺寸一样用 45° 中粗短斜线，方向取该点处半径的 45°。
-  const ticks = [circle.start, circle.start + circle.delta].map((ang) => {
-    const p0 = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine }, ang)
-    // 半径方向再转 45°，得到国标那种斜短线。
-    const rad = { x: Math.cos(ang), y: Math.sin(ang) }
-    const diag = { x: (rad.x + rad.y) / Math.SQRT2, y: (rad.y - rad.x) / Math.SQRT2 }
-    const t = 3 / scale
-    return [p0.x - diag.x * t, p0.y - diag.y * t, p0.x + diag.x * t, p0.y + diag.y * t]
-  })
+  // 起止符：GB/T 50001—2017 §11.5.2 规定**角度与弧长用箭头**（45° 斜短线是直线尺寸的），
+  // 箭头贴在尺寸弧的两端、沿切线指向外侧的尺寸界线。
+  const arrow = (ang: number, outward: number) => {
+    const tip = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine }, ang)
+    // 该点的切线方向，乘 outward 指向弧线外侧。
+    const ux = -Math.sin(ang) * outward
+    const uy = Math.cos(ang) * outward
+    const len = 9 / scale
+    const halfW = 2.6 / scale
+    const base = { x: tip.x - ux * len, y: tip.y - uy * len }
+    const nx = -uy
+    const ny = ux
+    return [tip.x, tip.y, base.x + nx * halfW, base.y + ny * halfW, base.x - nx * halfW, base.y - ny * halfW]
+  }
+  const span = Math.sign(circle.delta) || 1
+  const arrows = [arrow(circle.start, -span), arrow(circle.start + circle.delta, span)]
   const midAng = circle.start + circle.delta / 2
   const label = arcPointAt({ cx: circle.cx, cy: circle.cy, r: rLine + side * (12 / scale) }, midAng)
   // 字头朝上：把角度归到 (-90°, 90°]，否则弧在下半圈时数字会倒着写。
@@ -2764,8 +2822,8 @@ function ArcDim({ wall, scale, bounds }: ArcDimProps) {
   return (
     <>
       <Line points={pts} stroke="#7a7a8c" strokeWidth={1 / scale} dash={[6 / scale, 4 / scale]} listening={false} />
-      {ticks.map((pts, i) => (
-        <Line key={`t-${i}`} points={pts} stroke="#4a4a5a" strokeWidth={2 / scale} listening={false} />
+      {arrows.map((pts, i) => (
+        <Line key={`a-${i}`} points={pts} closed fill="#4a4a5a" listening={false} />
       ))}
       {ends.map(([p1, p2], i) => (
         <Line
@@ -2798,6 +2856,7 @@ function RunDimension({
   scale,
   thickness,
   onPick,
+  extra = 0,
 }: {
   run: { a: { x: number; y: number }; b: { x: number; y: number }; total: number; horizontal: boolean }
   center: { x: number; y: number }
@@ -2806,6 +2865,8 @@ function RunDimension({
   thickness: number
   /** 只有一面墙的链：数字就是这面墙的长度，把它做成点选墙的入口。 */
   onPick?: () => void
+  /** 这一侧伸出去的几何（阳台、凸窗）有多远：尺寸线要绕开它 */
+  extra?: number
 }) {
   const midX = (run.a.x + run.b.x) / 2
   const midY = (run.a.y + run.b.y) / 2
@@ -2819,7 +2880,7 @@ function RunDimension({
   // 分段标签贴着墙（17 / 52 px），一级标注必须再往外一档，否则两个数字叠在一起。
   // 单墙链没有内圈的分段数字，就贴着墙标——否则一面 4 米的墙会白留出两道空隙。
   // 三排标注由内到外：墙上分段（默认隐藏）→ 轴线（第二排）→ 总尺寸（最外）
-  const offset = thickness / 2 + (run.horizontal ? 64 : 82) / scale
+  const offset = thickness / 2 + extra + (run.horizontal ? 64 : 82) / scale
 
   const x1 = run.a.x + (run.horizontal ? 0 : outward * offset)
   const y1 = run.a.y + (run.horizontal ? outward * offset : 0)
