@@ -69,6 +69,7 @@ import {
 } from '../features/plan/underlay.ts'
 import { replacePlan, type WallSnapshot } from '../api/client.ts'
 import { sampleAsFile, syntheticCalibrations, type UnderlaySample } from '../features/plan/samples.ts'
+import { connectLiveState } from '../store/liveState.ts'
 
 type Props = {
   user: SessionUser
@@ -393,6 +394,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     } finally {
       setLoading(false)
     }
+  }, [])
+
+  useEffect(() => {
+    return connectLiveState(() => {
+      setError('实时状态序号异常，正在重新获取快照')
+    })
   }, [])
 
   const typeByKey = useMemo(() => new Map(types.map((typ) => [typ.key, typ])), [types])

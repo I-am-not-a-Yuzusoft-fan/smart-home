@@ -433,6 +433,38 @@ func (q *Queries) InsertWallWithID(ctx context.Context, arg InsertWallWithIDPara
 	return err
 }
 
+const listAllStates = `-- name: ListAllStates :many
+SELECT item_id, capability_key, value, source, updated_at
+FROM capability_state
+ORDER BY item_id, capability_key
+`
+
+func (q *Queries) ListAllStates(ctx context.Context) ([]CapabilityState, error) {
+	rows, err := q.db.Query(ctx, listAllStates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CapabilityState
+	for rows.Next() {
+		var i CapabilityState
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.CapabilityKey,
+			&i.Value,
+			&i.Source,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCommandLogs = `-- name: ListCommandLogs :many
 SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
        created_at, completed_at, duration_ms

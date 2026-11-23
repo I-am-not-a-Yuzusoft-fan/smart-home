@@ -42,13 +42,30 @@ type CommandHandler interface {
 }
 
 type Handler struct {
-	pool    *pgxpool.Pool
-	adapter device.Adapter
-	timeout time.Duration
+	pool        *pgxpool.Pool
+	adapter     device.Adapter
+	timeout     time.Duration
+	broadcaster Broadcaster
+}
+
+type Broadcaster interface {
+	Broadcast(StateMessage)
+}
+
+type StateMessage struct {
+	ItemID        uuid.UUID
+	CapabilityKey string
+	Value         any
+	Source        string
+	UpdatedAt     time.Time
 }
 
 func NewCommandHandler(pool *pgxpool.Pool, adapter device.Adapter, timeout time.Duration) *Handler {
 	return &Handler{pool: pool, adapter: adapter, timeout: timeout}
+}
+
+func (h *Handler) SetBroadcaster(broadcaster Broadcaster) {
+	h.broadcaster = broadcaster
 }
 
 func (h *Handler) ListLogs(ctx context.Context, limit int32) ([]storegen.ListCommandLogsRow, error) {
@@ -233,6 +250,12 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return CommandResult{}, err
+	}
+	if h.broadcaster != nil {
+		h.broadcaster.Broadcast(StateMessage{
+			ItemID: command.ItemID, CapabilityKey: command.CapabilityKey,
+			Value: value, Source: "manual", UpdatedAt: now,
+		})
 	}
 	return CommandResult{RequestID: command.RequestID, Status: "ok", Value: value}, nil
 }

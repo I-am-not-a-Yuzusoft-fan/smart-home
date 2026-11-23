@@ -9,6 +9,11 @@ FROM capability_state
 WHERE item_id = $1
 ORDER BY capability_key;
 
+-- name: ListAllStates :many
+SELECT item_id, capability_key, value, source, updated_at
+FROM capability_state
+ORDER BY item_id, capability_key;
+
 
 -- name: UpsertState :exec
 INSERT INTO capability_state (item_id, capability_key, value, source, updated_at)

@@ -48,17 +48,22 @@ func newTestServerWith(t *testing.T, adapter device.Adapter, timeout time.Durati
 	}
 	t.Cleanup(pool.Close)
 
+	commandHandler := control.NewCommandHandler(pool, adapter, timeout)
+	hub := api.NewHub(storegen.New(pool))
+	commandHandler.SetBroadcaster(hub)
+
 	srv := api.New(
 		api.NewPGAccounts(storegen.New(pool)),
 		api.NewPGPlan(pool),
 		api.NewPGItemTypes(pool),
 		itemstore.NewItems(pool),
-		control.NewCommandHandler(pool, adapter, timeout),
+		commandHandler,
 		api.NewSessionCodec("test-secret", time.Hour),
 		false,
 		"test",
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
+	srv.SetHub(hub)
 	return srv.Router()
 }
 
