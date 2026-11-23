@@ -148,8 +148,36 @@ export type Plan = {
   openWalls: number
   /** 失配的房间名：前端据此提示「原来起的名字已失效」并允许清理 */
   staleRooms: StaleRoom[]
+  /** 垫在画布下面的底图元数据；没有底图时是 null */
+  underlay: Underlay | null
   /** 平面图版本号：撤销/重做写回时带上它做乐观并发 */
   version: number
+}
+
+/** 底图元数据。图片字节走 `/api/plan/underlay/image`，不在这份 JSON 里。 */
+export type Underlay = {
+  contentType: 'image/png' | 'image/jpeg' | 'image/webp'
+  widthPx: number
+  heightPx: number
+  sha256: string
+  /** 一个图片像素等于多少世界厘米 */
+  cmPerPx: number
+  offsetXCm: number
+  offsetYCm: number
+  rotationDeg: 0 | 90 | 180 | 270
+  opacity: number
+  visible: boolean
+  updatedAt: string
+}
+
+/** 底图元数据补丁：只传要改的字段。 */
+export type UnderlayPatch = {
+  cmPerPx?: number
+  offsetXCm?: number
+  offsetYCm?: number
+  rotationDeg?: 0 | 90 | 180 | 270
+  opacity?: number
+  visible?: boolean
 }
 
 /** 整份替换时的墙：带 id 表示「这面墙原来就在」，撤销删除靠它保住 id。 */
@@ -373,3 +401,37 @@ export const updateRoomName = (hash: string, input: { name: string; kind?: RoomK
 /** 清掉房间名。幂等：失配的旧名字也用它清理。 */
 export const clearRoomName = (hash: string) =>
   request<void>(`/api/rooms/${encodeURIComponent(hash)}`, { method: 'DELETE' })
+
+/** 底图的图片地址。带上 sha 做缓存键：换图就换 URL，旧缓存自然失效。 */
+export const underlayImageUrl = (sha: string) => `/api/plan/underlay/image?sha=${encodeURIComponent(sha)}`
+
+/** 上传底图：请求体是图片原始字节，所以不能走 `request()`（它固定发 JSON）。 */
+export async function uploadUnderlay(file: File): Promise<Plan> {
+  const res = await fetch('/api/plan/underlay', {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: {
+      'X-Requested-With': 'fetch',
+      'Content-Type': 'application/octet-stream',
+    },
+    body: file,
+  })
+  const text = await res.text()
+  const body: unknown = text ? JSON.parse(text) : null
+  if (!res.ok) {
+    const err = body as ApiErrorBody | null
+    throw new ApiError(
+      res.status,
+      err?.error?.code ?? 'INTERNAL',
+      err?.error?.message ?? `上传失败（HTTP ${res.status}）`,
+    )
+  }
+  return body as Plan
+}
+
+/** 改底图的定标与显示参数（仅管理员）。 */
+export const updateUnderlay = (patch: UnderlayPatch) =>
+  request<Plan>('/api/plan/underlay', { method: 'PATCH', body: JSON.stringify(patch) })
+
+/** 删掉底图（仅管理员）；幂等。 */
+export const clearUnderlay = () => request<void>('/api/plan/underlay', { method: 'DELETE' })

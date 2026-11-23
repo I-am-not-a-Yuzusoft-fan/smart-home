@@ -140,9 +140,9 @@ func (s *Server) CreateItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item, err := s.items.CreateItem(r.Context(), itemstore.ItemCreate{
-		TypeKey:  typ.Key,
-		Name:     strings.TrimSpace(body.Name),
-		RoomHash: roomHash,
+		TypeKey:    typ.Key,
+		Name:       strings.TrimSpace(body.Name),
+		RoomHash:   roomHash,
 		X:          placeX,
 		Y:          placeY,
 		Rotation:   placeRot,
@@ -494,15 +494,15 @@ func toGenItem(item itemstore.Item) (gen.Item, error) {
 		status = &value
 	}
 	return gen.Item{
-		Id:       openapi_types.UUID(item.ID),
-		TypeKey:  item.TypeKey,
-		Kind:     gen.ItemKind(item.Kind),
-		Name:     item.Name,
-		RoomHash: item.RoomHash,
-		RoomName: item.RoomName,
-		X:        item.X,
-		Y:        item.Y,
-		Rotation: item.Rotation,
+		Id:         openapi_types.UUID(item.ID),
+		TypeKey:    item.TypeKey,
+		Kind:       gen.ItemKind(item.Kind),
+		Name:       item.Name,
+		RoomHash:   item.RoomHash,
+		RoomName:   item.RoomName,
+		X:          item.X,
+		Y:          item.Y,
+		Rotation:   item.Rotation,
 		Status:     status,
 		Attrs:      attrs,
 		WallId:     uuidPtr(item.WallID),

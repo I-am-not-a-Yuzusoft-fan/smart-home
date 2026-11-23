@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/oapi-codegen/runtime"
@@ -409,6 +410,75 @@ func (e StaleRoomKind) Valid() bool {
 	}
 }
 
+// Defines values for UnderlayContentType.
+const (
+	Imagejpeg UnderlayContentType = "image/jpeg"
+	Imagepng  UnderlayContentType = "image/png"
+	Imagewebp UnderlayContentType = "image/webp"
+)
+
+// Valid indicates whether the value is a known member of the UnderlayContentType enum.
+func (e UnderlayContentType) Valid() bool {
+	switch e {
+	case Imagejpeg:
+		return true
+	case Imagepng:
+		return true
+	case Imagewebp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UnderlayRotationDeg.
+const (
+	UnderlayRotationDegN0   UnderlayRotationDeg = 0
+	UnderlayRotationDegN180 UnderlayRotationDeg = 180
+	UnderlayRotationDegN270 UnderlayRotationDeg = 270
+	UnderlayRotationDegN90  UnderlayRotationDeg = 90
+)
+
+// Valid indicates whether the value is a known member of the UnderlayRotationDeg enum.
+func (e UnderlayRotationDeg) Valid() bool {
+	switch e {
+	case UnderlayRotationDegN0:
+		return true
+	case UnderlayRotationDegN180:
+		return true
+	case UnderlayRotationDegN270:
+		return true
+	case UnderlayRotationDegN90:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UnderlayPatchRotationDeg.
+const (
+	UnderlayPatchRotationDegN0   UnderlayPatchRotationDeg = 0
+	UnderlayPatchRotationDegN180 UnderlayPatchRotationDeg = 180
+	UnderlayPatchRotationDegN270 UnderlayPatchRotationDeg = 270
+	UnderlayPatchRotationDegN90  UnderlayPatchRotationDeg = 90
+)
+
+// Valid indicates whether the value is a known member of the UnderlayPatchRotationDeg enum.
+func (e UnderlayPatchRotationDeg) Valid() bool {
+	switch e {
+	case UnderlayPatchRotationDegN0:
+		return true
+	case UnderlayPatchRotationDegN180:
+		return true
+	case UnderlayPatchRotationDegN270:
+		return true
+	case UnderlayPatchRotationDegN90:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Healthz200JSONResponseBodyStatus.
 const (
 	Ok Healthz200JSONResponseBodyStatus = "ok"
@@ -741,6 +811,11 @@ type Plan struct {
 	// 前端据此提示「原来给客厅起的名字已失效」，并允许一键清理。
 	StaleRooms []StaleRoom `json:"staleRooms"`
 
+	// Underlay 垫在画布下面的底图元数据。没有底图时是 `null`。
+	// 图片字节不在 JSON 里，走 `GET /api/plan/underlay/image`；
+	// 换图、定标、透明度这些改动都不改变户型版本号。
+	Underlay *Underlay `json:"underlay,omitempty"`
+
 	// Version 平面图版本号。每次整份替换成功后 +1，撤销/重做靠它做乐观并发：
 	// 写回时带上旧版本号，服务端发现对不上就返回 409，客户端重新取全量。
 	Version int64  `json:"version"`
@@ -813,6 +888,44 @@ type StaleRoom struct {
 
 // StaleRoomKind defines model for StaleRoom.Kind.
 type StaleRoomKind string
+
+// Underlay 底图的元数据。`cmPerPx` 与 `offsetXCm/offsetYCm` 一起定义「图片像素 → 世界厘米」的映射：
+// 图片左上角落在 `(offsetXCm, offsetYCm)`，每像素宽 `cmPerPx` 厘米，旋转绕图片中心。
+type Underlay struct {
+	// CmPerPx 一个像素等于多少厘米；未定标时是上传时按包围盒铺满算出的估计值
+	CmPerPx     float64             `json:"cmPerPx"`
+	ContentType UnderlayContentType `json:"contentType"`
+	HeightPx    int                 `json:"heightPx"`
+	OffsetXCm   float64             `json:"offsetXCm"`
+	OffsetYCm   float64             `json:"offsetYCm"`
+	Opacity     float64             `json:"opacity"`
+	RotationDeg UnderlayRotationDeg `json:"rotationDeg"`
+
+	// Sha256 图片字节的摘要，前端可据此判断要不要重新拉图
+	Sha256    string    `json:"sha256"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Visible   bool      `json:"visible"`
+	WidthPx   int       `json:"widthPx"`
+}
+
+// UnderlayContentType defines model for Underlay.ContentType.
+type UnderlayContentType string
+
+// UnderlayRotationDeg defines model for Underlay.RotationDeg.
+type UnderlayRotationDeg int
+
+// UnderlayPatch 只改出现的字段。
+type UnderlayPatch struct {
+	CmPerPx     *float64                  `json:"cmPerPx,omitempty"`
+	OffsetXCm   *float64                  `json:"offsetXCm,omitempty"`
+	OffsetYCm   *float64                  `json:"offsetYCm,omitempty"`
+	Opacity     *float64                  `json:"opacity,omitempty"`
+	RotationDeg *UnderlayPatchRotationDeg `json:"rotationDeg,omitempty"`
+	Visible     *bool                     `json:"visible,omitempty"`
+}
+
+// UnderlayPatchRotationDeg defines model for UnderlayPatch.RotationDeg.
+type UnderlayPatchRotationDeg int
 
 // Wall defines model for Wall.
 type Wall struct {
@@ -908,6 +1021,9 @@ type UpdateOpeningJSONRequestBody = OpeningPatch
 // ReplacePlanJSONRequestBody defines body for ReplacePlan for application/json ContentType.
 type ReplacePlanJSONRequestBody = PlanInput
 
+// UpdateUnderlayJSONRequestBody defines body for UpdateUnderlay for application/json ContentType.
+type UpdateUnderlayJSONRequestBody = UnderlayPatch
+
 // UpdateRoomNameJSONRequestBody defines body for UpdateRoomName for application/json ContentType.
 type UpdateRoomNameJSONRequestBody = RoomNameInput
 
@@ -970,6 +1086,15 @@ type ServerInterface interface {
 	// ReplacePlan 整份替换户型（撤销/重做）
 	// (PUT /api/plan)
 	ReplacePlan(w http.ResponseWriter, r *http.Request)
+	// ClearUnderlay 删除底图（连图片字节）
+	// (DELETE /api/plan/underlay)
+	ClearUnderlay(w http.ResponseWriter, r *http.Request)
+	// UpdateUnderlay 改底图的定标与显示参数
+	// (PATCH /api/plan/underlay)
+	UpdateUnderlay(w http.ResponseWriter, r *http.Request)
+	// UploadUnderlay 上传底图（整张替换）
+	// (PUT /api/plan/underlay)
+	UploadUnderlay(w http.ResponseWriter, r *http.Request)
 	// ClearRoomName 清掉房间名
 	// (DELETE /api/rooms/{hash})
 	ClearRoomName(w http.ResponseWriter, r *http.Request, hash string)
@@ -1090,6 +1215,24 @@ func (_ Unimplemented) GetPlan(w http.ResponseWriter, r *http.Request) {
 // ReplacePlan 整份替换户型（撤销/重做）
 // (PUT /api/plan)
 func (_ Unimplemented) ReplacePlan(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ClearUnderlay 删除底图（连图片字节）
+// (DELETE /api/plan/underlay)
+func (_ Unimplemented) ClearUnderlay(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateUnderlay 改底图的定标与显示参数
+// (PATCH /api/plan/underlay)
+func (_ Unimplemented) UpdateUnderlay(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UploadUnderlay 上传底图（整张替换）
+// (PUT /api/plan/underlay)
+func (_ Unimplemented) UploadUnderlay(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1487,6 +1630,48 @@ func (siw *ServerInterfaceWrapper) ReplacePlan(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ClearUnderlay operation middleware
+func (siw *ServerInterfaceWrapper) ClearUnderlay(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClearUnderlay(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateUnderlay operation middleware
+func (siw *ServerInterfaceWrapper) UpdateUnderlay(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateUnderlay(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UploadUnderlay operation middleware
+func (siw *ServerInterfaceWrapper) UploadUnderlay(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UploadUnderlay(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClearRoomName operation middleware
 func (siw *ServerInterfaceWrapper) ClearRoomName(w http.ResponseWriter, r *http.Request) {
 
@@ -1735,6 +1920,15 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Put(options.BaseURL+"/api/plan", wrapper.ReplacePlan)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/api/plan/underlay", wrapper.ClearUnderlay)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/api/plan/underlay", wrapper.UpdateUnderlay)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/api/plan/underlay", wrapper.UploadUnderlay)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/api/walls", wrapper.CreateWall)

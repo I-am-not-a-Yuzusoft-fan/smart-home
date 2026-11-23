@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
-import { Circle, Group, Layer, Line, Path, Rect, Stage, Text } from 'react-konva'
+import { Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
 import {
   ApiError,
   createItem,
   createOpening,
   clearRoomName,
+  clearUnderlay,
   createWall,
   deleteItem,
   deleteOpening,
@@ -16,6 +17,9 @@ import {
   logout,
   updateItem,
   updateRoomName,
+  updateUnderlay,
+  uploadUnderlay,
+  underlayImageUrl,
   updateWall,
   type Corner,
   type Item,
@@ -25,10 +29,13 @@ import {
   type Room,
   type RoomKind,
   type SessionUser,
+  type Underlay,
+  type UnderlayPatch,
   type Wall,
 } from '../api/client.ts'
 import ItemInspector from '../components/ItemInspector.tsx'
 import ItemSidebar, { type ItemFilters } from '../components/ItemSidebar.tsx'
+import { UnderlayPanel } from '../components/UnderlayPanel.tsx'
 import TypeManager from '../components/TypeManager.tsx'
 import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from '../features/plan/edit.ts'
 import {
@@ -36,11 +43,27 @@ import {
   distanceToSegment,
   nearestWallAnchor,
   pointInPolygon,
+  type Pt,
   type Seg,
 } from '../features/plan/geometry.ts'
 import { DEFAULT_RULES, snap as snapTo, type Guide as SnapGuide, type SnapRule } from '../features/plan/snap.ts'
-import { collinearRuns } from '../features/plan/dimensions.ts'
+import {
+  axisSegments,
+  collinearRuns,
+  outerRunsInBounds,
+  polygonCentroid,
+  type AxisSegment,
+} from '../features/plan/dimensions.ts'
+import {
+  calibrate,
+  imageCenter,
+  imageRect,
+  imageToPlan,
+  planToImage,
+  type UnderlayTransform,
+} from '../features/plan/underlay.ts'
 import { replacePlan, type WallSnapshot } from '../api/client.ts'
+import { sampleAsFile, syntheticCalibrations, type UnderlaySample } from '../features/plan/samples.ts'
 
 type Props = {
   user: SessionUser
@@ -54,8 +77,22 @@ const PX_PER_CM = 1
 /** 端点/墙线吸附半径（屏幕像素）。换算成世界单位要除以缩放。 */
 const SNAP_PX = 12
 /** 短于这个长度的拖拽当成点击，不建墙（屏幕像素）。 */
+/** 元数据 → 纯函数用的变换参数：字段名对得上，只是把接口类型收窄成数学类型。 */
+function transformOf(u: Underlay): UnderlayTransform {
+  return {
+    widthPx: u.widthPx,
+    heightPx: u.heightPx,
+    cmPerPx: u.cmPerPx,
+    offsetXCm: u.offsetXCm,
+    offsetYCm: u.offsetYCm,
+    rotationDeg: u.rotationDeg,
+  }
+}
+
 const MIN_DRAG_PX = 8
-const ZOOM_MIN = 0.25
+// 下限要低于 25%：annotations 占的是一圈固定的屏幕像素（约 110px），
+// 窄窗口里 25% 会把户型撑到边缘，最外一排尺寸被画布裁掉。
+const ZOOM_MIN = 0.18
 const ZOOM_MAX = 4
 
 type Viewport = { scale: number; x: number; y: number }
@@ -116,6 +153,15 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     past: [],
     future: [],
   })
+  const [showUnderlay, setShowUnderlay] = useState(false)
+  // 画布左上角那行操作提示：一开始给新用户看，真开始缩放/平移之后就淡出——
+  // 它没有背景，高倍时底下的墙和标注正好从字后面穿过去，看着像字糊在一起。
+  const [hintHidden, setHintHidden] = useState(false)
+  const [underlayBusy, setUnderlayBusy] = useState(false)
+  const [underlayImage, setUnderlayImage] = useState<HTMLImageElement | null>(null)
+  // 两点定标：进入后画布点击只标点，不画墙；点满两个再填真实长度。
+  const [calibrating, setCalibrating] = useState(false)
+  const [calibPoints, setCalibPoints] = useState<Pt[]>([])
   const [size, setSize] = useState({ width: 800, height: 600 })
   // 画布真实尺寸要等 ResizeObserver 报一次；在那之前 fit 会按 800×600 算，
   // 结果内容偏在左上角（第一次打开时尤其明显）。
@@ -126,12 +172,122 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     rooms: [],
     openings: [],
     openWalls: 0,
+    underlay: null,
     staleRooms: [],
     version: 0,
   })
   // 回调里要读「最新」的户型：闭包捕获的 plan 可能落后一次渲染。
   const planRef = useRef<Plan>(plan)
   planRef.current = plan
+
+  // 底图的「图片像素 ↔ 世界厘米」变换：只从元数据算，不从画布读。
+  const underlayTransform = useMemo<UnderlayTransform | null>(
+    () => (plan.underlay ? transformOf(plan.underlay) : null),
+    [plan.underlay],
+  )
+
+  // 图片按 sha 拉一次：换图必然换 sha，所以不必担心拿到旧缓存。
+  useEffect(() => {
+    const sha = plan.underlay?.sha256
+    if (!sha) {
+      setUnderlayImage(null)
+      return
+    }
+    let cancelled = false
+    const img = new window.Image()
+    img.onload = () => {
+      if (!cancelled) setUnderlayImage(img)
+    }
+    img.onerror = () => {
+      if (!cancelled) setUnderlayImage(null)
+    }
+    img.src = underlayImageUrl(sha)
+    return () => {
+      cancelled = true
+    }
+  }, [plan.underlay?.sha256])
+
+  /** 底图相关的异步操作都有同一套收尾：置忙、统一报错、复位忙。 */
+  const withUnderlayBusy = async (fallback: string, run: () => Promise<void>) => {
+    setUnderlayBusy(true)
+    try {
+      await run()
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : fallback)
+    } finally {
+      setUnderlayBusy(false)
+    }
+  }
+
+  const saveUnderlay = (file: File) =>
+    withUnderlayBusy('上传底图失败', async () => {
+      setPlan(await uploadUnderlay(file))
+      // 换图是一次硬操作：撤销栈里的快照只含墙，回退过去会让人误以为能"撤销换图"。
+      setHistory({ past: [], future: [] })
+    })
+
+  const dropUnderlay = () =>
+    withUnderlayBusy('删除底图失败', async () => {
+      await clearUnderlay()
+      setPlan(await getPlan())
+      setHistory({ past: [], future: [] })
+    })
+
+  /** 示例图：上传后若图自带定标点，顺手把比例与应用内真实尺寸对上。 */
+  const loadSample = (sample: UnderlaySample) =>
+    withUnderlayBusy('示例图加载失败', async () => {
+      const next = await uploadUnderlay(await sampleAsFile(sample))
+      const calibration = (await syntheticCalibrations()).get(sample.path)
+      if (!calibration || !next.underlay) {
+        setPlan(next)
+        return
+      }
+      const t = transformOf(next.underlay)
+      // 钉住第一个标定点，只改比例与平移——和手动定标走同一个函数。
+      const anchor = imageToPlan(calibration.p1, t)
+      setPlan(
+        await updateUnderlay(
+          calibrate(calibration.p1, calibration.p2, anchor, calibration.lengthCm, t),
+        ),
+      )
+    })
+
+  const patchUnderlay = (patch: UnderlayPatch) =>
+    withUnderlayBusy('修改底图失败', async () => {
+      setPlan(await updateUnderlay(patch))
+    })
+
+  const startCalibration = () => {
+    if (!plan.underlay) return
+    setCalibrating(true)
+    setCalibPoints([])
+    setError(null)
+  }
+
+  const cancelCalibration = () => {
+    setCalibrating(false)
+    setCalibPoints([])
+  }
+
+  const applyCalibration = (lengthCm: number) => {
+    if (!underlayTransform || calibPoints.length !== 2) return
+    return withUnderlayBusy('定标失败', async () => {
+      const [p1, p2] = calibPoints
+      // 用户点的是世界坐标；定标要在图片像素里量距离，所以反解回去。
+      const u1 = planToImage(p1, underlayTransform)
+      const u2 = planToImage(p2, underlayTransform)
+      setPlan(await updateUnderlay(calibrate(u1, u2, p1, lengthCm, underlayTransform)))
+      setCalibPoints([])
+      setCalibrating(false)
+    })
+  }
+
+  // 两个点在图上的当前距离：给用户一个「现在是多少」的参照，默认值也用它。
+  const calibMeasureCm =
+    calibPoints.length === 2
+      ? Math.round(Math.hypot(calibPoints[1].x - calibPoints[0].x, calibPoints[1].y - calibPoints[0].y))
+      : null
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -329,6 +485,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }, [history.past, history.future, snapshotOf, applySnapshot])
 
   const fitToContent = useCallback(() => {
+    setHintHidden(false)
     if (plan.corners.length === 0) {
       setViewport({ scale: 1, x: 0, y: 0 })
       return
@@ -343,8 +500,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       maxX = Math.max(maxX, c.x)
       maxY = Math.max(maxY, c.y)
     }
-    // 四级标注画在户型外侧，全览必须留出这一圈，否则尺寸线被裁在视口外
-    const pad = 96
+    // 三级标注画在户型外侧（墙厚/2 + 102px 起），全览必须留出这一圈，
+    // 否则最外一排总尺寸会被裁在视口外。132 是「102 + 数字高度 + 余量」。
+    const pad = 120
     const bw = Math.max(maxX - minX, 1)
     const bh = Math.max(maxY - minY, 1)
     const scale = clamp(Math.min((size.width - pad * 2) / bw, (size.height - pad * 2) / bh), ZOOM_MIN, ZOOM_MAX)
@@ -395,6 +553,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         return
       }
       if (e.key === 'Escape') {
+        setCalibrating(false)
+        setCalibPoints([])
         setDraft(null)
         setEditing(null)
         setGuide({ kind: 'none' })
@@ -427,6 +587,92 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
   // 只认"被墙引用"的端点：删墙后留下的孤立端点既不该画出来，也不该被吸附——
   // 否则用户会吸到一个看不见的点上，还以为是 bug。
+  // 墙的四个角点：两端各按「斜接」裁一刀。
+  //
+  // 以前的画法是四边形沿轴线外延半个墙厚——90° 恰好拼成方角，斜角就会探出方头，
+  // 放大看像墙头被啃了一口。现在把每面墙的端面直接取成**斜接线**：
+  // 两面墙在转角处共用同一条 `M外—M内` 线段，任意夹角都严丝合缝，
+  // 直角时它就是那条 45° 斜接线，和制图习惯一致。
+  const { wallQuads } = useMemo(() => {
+    const byCorner = new Map<string, typeof plan.walls>()
+    for (const wall of plan.walls) {
+      for (const id of [wall.aId, wall.bId]) {
+        const list = byCorner.get(id)
+        if (list) list.push(wall)
+        else byCorner.set(id, [wall])
+      }
+    }
+    const unit = (dx: number, dy: number): Pt | null => {
+      const len = Math.hypot(dx, dy)
+      return len < 1e-6 ? null : { x: dx / len, y: dy / len }
+    }
+    /** 从 p 出发、沿这面墙指向另一端的方向。 */
+    const outOf = (wall: Wall, p: Pt): Pt | null => {
+      const da = Math.hypot(wall.ax - p.x, wall.ay - p.y)
+      const db = Math.hypot(wall.bx - p.x, wall.by - p.y)
+      if (Math.min(da, db) > 1) return null
+      return da <= db ? unit(wall.bx - wall.ax, wall.by - wall.ay) : unit(wall.ax - wall.bx, wall.ay - wall.by)
+    }
+    /** 两墙夹角的一半正弦；自由端 / T 型路口返回 null。 */
+    const sinHalfAt = (wall: Wall, p: Pt, corner: typeof plan.walls): number | null => {
+      if (corner.length !== 2) return null
+      const a = outOf(wall, p)
+      const other = corner[0] === wall ? corner[1] : corner[0]
+      const b = outOf(other, p)
+      if (!a || !b) return null
+      const cos = Math.min(1, Math.max(-1, a.x * b.x + a.y * b.y))
+      return Math.sin(Math.acos(cos) / 2)
+    }
+    // 法线必须始终按 a→b 方向算。以前用的是「从 p 指向另一端」的方向，
+    // 到 b 端就反了过来，端面两点的正负号跟着翻转，四边形被拧成蝴蝶结，
+    // 画出来就是转角处飞出去的尖刺。
+    const wallNormal = (wall: Wall): Pt => {
+      const dir = unit(wall.bx - wall.ax, wall.by - wall.ay)
+      return dir ? { x: -dir.y, y: dir.x } : { x: 1, y: 0 }
+    }
+    const endFace = (wall: Wall, p: Pt, corner: typeof plan.walls, normal: Pt): [Pt, Pt] => {
+      const half = Math.max(wall.thickness, 4) / 2
+      const dir = outOf(wall, p)
+      const flat = (): [Pt, Pt] => [
+        { x: p.x + normal.x * half, y: p.y + normal.y * half },
+        { x: p.x - normal.x * half, y: p.y - normal.y * half },
+      ]
+      const sinHalf = sinHalfAt(wall, p, corner)
+      if (!dir || sinHalf === null) return flat()
+      // 所有转角统一走斜接，只用「斜接上限」防尖刺：
+      // 上限内是标准斜接（90° 就是方角），超了就把斜接点截短，
+      // 锐角于是变成一个短短的尖，不会甩出长针。两面墙共用同一个 reach，
+      // 端面始终重合，所以不会再出现「一个圆角一个尖角」这种混合接头。
+      const other = corner[0] === wall ? corner[1] : corner[0]
+      const otherDir = outOf(other, p)
+      if (!otherDir) return flat()
+      const sum = { x: dir.x + otherDir.x, y: dir.y + otherDir.y }
+      const sumLen = Math.hypot(sum.x, sum.y)
+      if (sumLen < 1e-6) return flat()
+      const shared = Math.max(half, Math.max(other.thickness, 4) / 2)
+      const reach = Math.min(shared / sinHalf, 2.5 * shared)
+      const ux = sum.x / sumLen
+      const uy = sum.y / sumLen
+      const a = { x: p.x - ux * reach, y: p.y - uy * reach }
+      const b = { x: p.x + ux * reach, y: p.y + uy * reach }
+      const da = a.x * normal.x + a.y * normal.y
+      const db = b.x * normal.x + b.y * normal.y
+      return da >= db ? [a, b] : [b, a]
+    }
+    const quads = new Map<string, Pt[]>()
+    for (const wall of plan.walls) {
+      const a = { x: wall.ax, y: wall.ay }
+      const b = { x: wall.bx, y: wall.by }
+      const normal = wallNormal(wall)
+      const [aPlus, aMinus] = endFace(wall, a, byCorner.get(wall.aId) ?? [], normal)
+      const [bPlus, bMinus] = endFace(wall, b, byCorner.get(wall.bId) ?? [], normal)
+      quads.set(wall.id, [aPlus, aMinus, bMinus, bPlus])
+    }
+    // 斜接是端点自带的，不再额外补圆点——以前锐角补圆、直角斜接，
+    // 同一个三角形上就会出现「一个圆角一个尖角」。
+    return { wallQuads: quads }
+  }, [plan.walls])
+
   const liveCorners = useMemo(
     () => plan.corners.filter((c) => plan.walls.some((w) => w.aId === c.id || w.bId === c.id)),
     [plan.corners, plan.walls],
@@ -445,6 +691,45 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     () => new Set(runs.filter((run) => run.wallIds.length === 1).flatMap((run) => run.wallIds)),
     [runs],
   )
+
+  /** 只有外轮廓上的链才画尺寸线；内墙的长度由墙上的标签负责。 */
+  const outerRuns = useMemo(() => {
+    if (plan.corners.length === 0) return []
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const c of plan.corners) {
+      if (c.x < minX) minX = c.x
+      if (c.x > maxX) maxX = c.x
+      if (c.y < minY) minY = c.y
+      if (c.y > maxY) maxY = c.y
+    }
+    return outerRunsInBounds(runs, { minX, minY, maxX, maxY })
+  }, [runs, plan.corners])
+
+  /**
+   * 尺寸只标在**下方与左方**两侧。
+   *
+   * GB/T 50001—2017 §11.2 要求尺寸线尽量注写在图形轮廓线以外、同一方向的尺寸集中排列；
+   * 制图惯例是一个方向只标一侧——开间标在下方、进深标在左方，四边都标属于重复标注。
+   * 这里按惯例取「下 + 左」，同时把四边都有的绿色预览、悬停标签留给交互用。
+   */
+  const dimRuns = useMemo(() => {
+    if (outerRuns.length === 0) return []
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const c of plan.corners) {
+      if (c.x < minX) minX = c.x
+      if (c.x > maxX) maxX = c.x
+      if (c.y < minY) minY = c.y
+      if (c.y > maxY) maxY = c.y
+    }
+    const near = (a: number, b: number) => Math.abs(a - b) < 1
+    return outerRuns.filter((run) =>
+      run.horizontal
+        ? near(run.a.y, maxY) && near(run.b.y, maxY)
+        : near(run.a.x, minX) && near(run.b.x, minX),
+    )
+  }, [outerRuns, plan.corners])
+
+  /** 每个房间的开间×进深：后端的栋深多边形是绕中线走的，这里只报边长，不改几何。 */
 
   const center = (() => {
     if (plan.corners.length === 0) return { x: 0, y: 0 }
@@ -561,6 +846,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     // 中键或按住空格：拖画布，不画墙。
     if (e.evt.button === 1 || spaceDown) {
       panRef.current = { sx: raw.x, sy: raw.y, vx: viewport.x, vy: viewport.y }
+      setHintHidden(true)
       return
     }
     if (e.evt.button === 2) {
@@ -568,6 +854,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       setDraft(null)
       setEditing(null)
       setGuide({ kind: 'none' })
+      return
+    }
+
+    // 定标模式下点击只落两个点，不画墙、不选中，第三个点重新开始。
+    if (calibrating) {
+      setCalibPoints((cur) => (cur.length >= 2 ? [p] : [...cur, p]))
       return
     }
 
@@ -703,6 +995,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     // 以指针为锚点缩放：缩放前后，指针下面的那个点不动。
     const before = toWorld(raw)
     const factor = e.evt.deltaY < 0 ? 1.1 : 1 / 1.1
+    setHintHidden(true)
     const scale = clamp(viewport.scale * factor, ZOOM_MIN, ZOOM_MAX)
     setViewport({ scale, x: raw.x - before.x * scale, y: raw.y - before.y * scale })
   }
@@ -1240,6 +1533,20 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           <span className="text-xs" style={{ color: 'var(--color-muted)' }}>
             {Math.round(viewport.scale * 100)}%
           </span>
+          <button
+            onClick={() => setShowUnderlay((v) => !v)}
+            aria-pressed={showUnderlay}
+            title="上传一张户型图垫在画布下面照着描"
+            className="whitespace-nowrap px-2 py-1 text-xs"
+            style={{
+              border: `1px solid ${showUnderlay ? 'var(--color-primary)' : 'var(--color-border)'}`,
+              borderRadius: 'var(--radius-sm)',
+              background: showUnderlay ? 'var(--color-primary-weak)' : 'var(--color-bg)',
+              color: showUnderlay ? 'var(--color-primary)' : 'inherit',
+            }}
+          >
+            底图
+          </button>
           {user.role === 'admin' ? (
             <button
               onClick={() => setShowTypes(true)}
@@ -1427,12 +1734,35 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             </div>
           </div>
         )}
+        {/* 提示放左上角：下方与左方现在是尺寸标注的地盘，压在数字上会糊成一团 */}
         <div
-          className="pointer-events-none absolute bottom-2 left-3 text-xs"
-          style={{ color: 'var(--color-muted)' }}
+          className="pointer-events-none absolute left-3 top-2 rounded px-2 py-1 text-xs transition-opacity duration-300"
+          style={{
+            color: 'var(--color-muted)',
+            background: 'color-mix(in srgb, var(--color-bg) 82%, transparent)',
+            opacity: hintHidden ? 0 : 1,
+          }}
         >
           拖拽画墙 · 点墙选中后 Delete 删除 · 空格/中键平移 · 滚轮缩放 · Shift 自由角度 · 拖端点改墙
         </div>
+        {showUnderlay ? (
+          <UnderlayPanel
+            underlay={plan.underlay}
+            isAdmin={user.role === 'admin'}
+            busy={underlayBusy}
+            onUpload={(file) => void saveUnderlay(file)}
+            onClear={() => void dropUnderlay()}
+            onClose={() => setShowUnderlay(false)}
+            calibrating={calibrating}
+            calibCount={calibPoints.length}
+            calibMeasureCm={calibMeasureCm}
+            onStartCalibration={startCalibration}
+            onCancelCalibration={cancelCalibration}
+            onCalibrate={(lengthCm) => void applyCalibration(lengthCm)}
+            onPatch={(patch) => void patchUnderlay(patch)}
+            onSample={(sample) => void loadSample(sample)}
+          />
+        ) : null}
         <Stage
           ref={stageRef}
           width={size.width}
@@ -1460,15 +1790,31 @@ export default function PlanPage({ user, onSignedOut }: Props) {
               <RoomShape
                 key={room.hash}
                 room={room}
-                labelSize={13 / viewport.scale}
                 selected={room.hash === selectedRoomHash}
               />
             ))}
           </Layer>
 
+          {/* 房间填充在底图下面、底图在墙下面：底图不压色，墙压在最上面才看得清边界 */}
+          {underlayTransform && underlayImage && plan.underlay?.visible ? (
+            <Layer listening={false}>
+              <KonvaImage
+                image={underlayImage}
+                x={imageCenter(underlayTransform).x}
+                y={imageCenter(underlayTransform).y}
+                offsetX={imageRect(underlayTransform).w / 2}
+                offsetY={imageRect(underlayTransform).h / 2}
+                width={imageRect(underlayTransform).w}
+                height={imageRect(underlayTransform).h}
+                rotation={plan.underlay.rotationDeg}
+                opacity={plan.underlay.opacity}
+              />
+            </Layer>
+          ) : null}
+
           {showDims ? (
             <Layer>
-              {runs.map((run) => (
+              {dimRuns.map((run) => (
                 <RunDimension
                   key={`dim-${run.wallIds.join('-')}`}
                   run={run}
@@ -1486,6 +1832,34 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                   }
                 />
               ))}
+              {/* 第二排：轴线尺寸。它读的是开间/进深，所以内隔墙也参与。 */}
+              {dimRuns.map((run, i) => {
+                const min = run.horizontal
+                  ? Math.min(run.a.x, run.b.x)
+                  : Math.min(run.a.y, run.b.y)
+                const max = run.horizontal
+                  ? Math.max(run.a.x, run.b.x)
+                  : Math.max(run.a.y, run.b.y)
+                const segments = axisSegments(
+                  plan.walls.map((w) => ({ id: w.id, ax: w.ax, ay: w.ay, bx: w.bx, by: w.by })),
+                  run.horizontal,
+                  min,
+                  max,
+                )
+                if (segments.length < 2) return null
+                return (
+                  <AxisChain
+                    key={`axis-${i}`}
+                    run={run}
+                    center={center}
+                    scale={viewport.scale}
+                    thickness={Math.max(
+                      ...run.wallIds.map((id) => wallsById.get(id)?.thickness ?? 10),
+                    )}
+                    segments={segments}
+                  />
+                )
+              })}
             </Layer>
           ) : null}
 
@@ -1494,13 +1868,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
               <WallLine
                 key={`line-${w.id}`}
                 wall={w}
+                quad={wallQuads.get(w.id)}
                 selected={w.id === selectedId}
                 hovered={w.id === hoverId}
                 scale={viewport.scale}
               />
             ))}
             {renderWalls
-              .filter((w) => !showDims || !singleRunWallIds.has(w.id))
+              .filter((w) => !showDims || w.id === selectedId || w.id === hoverId)
               .map((w) => (
               <WallLabel
                 key={`label-${w.id}`}
@@ -1611,10 +1986,30 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             ))}
           </Layer>
 
+          {/* 房间名/面积/开间进深压在最上面：它们是读图的入口，不能被家具标签盖住 */}
           <Layer listening={false}>
-            {liveCorners.map((c) => (
-              <Circle key={c.id} x={c.x} y={c.y} radius={3 / viewport.scale} fill="#8b8b9e" />
+            {plan.rooms.map((room) => (
+              <RoomLabel
+                key={`room-label-${room.hash}`}
+                room={room}
+                scale={viewport.scale}
+                selected={room.hash === selectedRoomHash}
+              />
             ))}
+          </Layer>
+
+          <Layer listening={false}>
+            {/* 端点小圆点只在「正在画墙」或「悬停/选中某面墙」时出现：
+                墙现在是实心的，常显的圆点会变成一个个关节疙瘩，糊住转角。 */}
+            {liveCorners
+              .filter((c) => {
+                if (draft) return true
+                const w = wallsById.get(selectedId ?? hoverId ?? '')
+                return w ? w.aId === c.id || w.bId === c.id : false
+              })
+              .map((c) => (
+                <Circle key={c.id} x={c.x} y={c.y} radius={3 / viewport.scale} fill="#8b8b9e" />
+              ))}
             {guide.kind === 'point' && (
               <Circle
                 x={guide.x}
@@ -1666,14 +2061,26 @@ type WallShapeProps = {
   scale: number
 }
 
-function WallLine({ wall, selected, hovered, scale }: WallShapeProps) {
-  const stroke = selected ? '#4f6bed' : hovered ? '#6b6b8f' : '#3a3a4d'
+function WallLine({ wall, quad, selected, hovered, scale }: WallShapeProps & { quad?: Pt[] }) {
+  const fill = selected ? '#4f6bed' : hovered ? '#55557a' : '#3a3a4d'
+  // 没有四角数据（例如刚画完还没重算）时退回中心线描边，至少不会消失。
+  const points = quad
+    ? quad.flatMap((p) => [p.x, p.y])
+    : [wall.ax, wall.ay, wall.bx, wall.by]
   return (
     <Line
-      points={[wall.ax, wall.ay, wall.bx, wall.by]}
-      stroke={stroke}
-      strokeWidth={Math.max(wall.thickness, 4) + (selected || hovered ? 2 / scale : 0)}
+      points={points}
+      closed={Boolean(quad)}
+      // 同色描边 1px：相邻两面墙共用一条斜接线，两块多边形各自抗锯齿会在公共边上
+      // 混进一点背景色，放大后能看到一条发丝缝；描一圈同色就把它盖住了。
+      stroke={quad ? (selected ? '#ffffff' : fill) : fill}
+      strokeWidth={quad ? (selected ? 1.5 / scale : 2 / scale) : Math.max(wall.thickness, 4)}
+      // 同色描边是为了盖住两块多边形公共边的发丝缝；但默认的 miter join 会在
+      // 方角外侧顶出一个小尖，放大看就是「角上多出来一个小点」。圆角连接不会外凸。
+      lineJoin="round"
       lineCap="round"
+      fill={quad ? fill : undefined}
+      listening={false}
     />
   )
 }
@@ -1708,7 +2115,7 @@ function WallLabel({
   // 横墙的法线是竖直的，让开半高；竖墙的法线是水平的，而数字是横排的，得让开半个字宽。
   // 所以两种朝向看起来一样「贴」，只是让开的量不同。
   const vertical = Math.abs(dy) > Math.abs(dx)
-  const text = formatCm(len)
+  const text = formatMm(len)
   // 外法线的单位向量，从户型中心指向墙外侧
   let nx = -dy / len
   let ny = dx / len
@@ -1739,9 +2146,10 @@ function WallLabel({
       text={text}
       fontSize={labelSize}
       fill={tint}
-      // 描一圈背景色，标签压在墙上时也能读清
+      // 描一圈背景色，标签压在墙上时也能读清。白边按屏幕像素给，且别太肥：
+      // 3px 的白边在 11px 的字上会把字缝糊住（放大后尤其明显）。
       stroke="#fafafd"
-      strokeWidth={3 / scale}
+      strokeWidth={Math.min(2.4, Math.max(1.2, labelSize * scale * 0.18)) / scale}
       fillAfterStrokeEnabled
       offsetY={labelSize / 2}
       // 标签离墙 17–52 px，超出几何命中区，只能自己接事件；
@@ -1754,6 +2162,16 @@ function WallLabel({
       onMouseLeave={() => onHover(null)}
     />
   )
+}
+
+/**
+ * 图上的尺寸数字：毫米、不注单位（GB/T 50001—2017 §11.2.1）。
+ *
+ * 面板、按钮这些「操作界面」里仍用米/厘米并带单位——那是给人输入的数据，
+ * 不是图纸上的标注，两者不同口径是有意的。
+ */
+function formatMm(cm: number): string {
+  return String(Math.round(cm * 10))
 }
 
 /** 长度显示：小于 1 m 用厘米，否则用米（两位小数），都带单位。 */
@@ -1786,40 +2204,204 @@ function clamp(v: number, min: number, max: number): number {
  * 面积与顶点都来自后端，这里只画——前端若自己也推导一遍，两套实现迟早分叉，
  * 就会出现「画布上是一间、列表里是两间」。
  */
-function RoomShape({
-  room,
-  labelSize,
-  selected,
-}: {
-  room: Room
-  labelSize: number
-  selected: boolean
-}) {
+function RoomShape({ room, selected }: { room: Room; selected: boolean }) {
   const points = room.ring.flatMap((p) => [p.x, p.y])
-  const cx = room.ring.reduce((sum, p) => sum + p.x, 0) / room.ring.length
-  const cy = room.ring.reduce((sum, p) => sum + p.y, 0) / room.ring.length
-  const label = room.name ? `${room.name}　${room.areaM2.toFixed(1)} ㎡` : `${room.areaM2.toFixed(1)} ㎡`
-
   return (
-    <>
-      <Line
-        points={points}
-        closed
-        fill={selected ? 'rgba(79,107,237,0.22)' : 'rgba(79,107,237,0.10)'}
-        stroke={selected ? '#4f6bed' : 'rgba(79,107,237,0.35)'}
-        strokeWidth={selected ? 2 : 1}
-      />
-      <Text x={cx} y={cy} text={label} fontSize={labelSize} fill="#3a4a8f" offsetX={labelSize * 1.4} />
-    </>
+    <Line
+      points={points}
+      closed
+      fill={selected ? 'rgba(79,107,237,0.22)' : 'rgba(79,107,237,0.10)'}
+      stroke={selected ? '#4f6bed' : 'rgba(79,107,237,0.35)'}
+      strokeWidth={selected ? 2 : 1}
+    />
   )
 }
 
 /**
- * 一级标注：一条标注链的总长。
+ * 房间标签：名字 + 面积 + 开间×进深。
  *
- * 画在户型外侧，所以要先判断链在中心的哪一侧——把尺寸线放到外侧，
- * 否则和室内的家具、设备图标挤在一起。
+ * 单独画在最上层、垫一块半透明白板——否则"客厅 23.1 ㎡"正好被沙发、茶几
+ * 的标签压住，压在房间里最该读的位置。
  */
+/** 从给的点出发，保证落在多边形内部：不在就朝各顶点方向逐步试，全失败退回包围盒中心。 */
+function insideAnchor(ring: Pt[], from: Pt): Pt {
+  if (pointInPolygon(from, ring)) return from
+  for (const step of [0.5, 0.35, 0.2]) {
+    for (const v of ring) {
+      const p = { x: from.x + (v.x - from.x) * step, y: from.y + (v.y - from.y) * step }
+      if (pointInPolygon(p, ring)) return p
+    }
+  }
+  return from
+}
+
+function RoomLabel({
+  room,
+  scale,
+  selected,
+}: {
+  room: Room
+  scale: number
+  selected: boolean
+}) {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const p of room.ring) {
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  const wPx = (maxX - minX) * scale
+  const hPx = (maxY - minY) * scale
+  // 房间在屏幕上小于这个尺寸时，标签会把整个户型盖住——那还不如不画，
+  // 缩放进来自然就有了。
+  if (Math.min(wPx, hPx) < 40) return null
+  // 字号以**世界单位**为主（34cm，跟打印图纸一个量级），再夹到 7–15px 的屏幕区间：
+  // 太小读不了，太大又会溢出到隔壁房间。
+  const size = Math.min(Math.max(34, 7 / scale), 15 / scale)
+  // 房间轮廓是**墙中线**：只按字号留 pad，文字会压在墙上（20cm 外墙放大后很明显）。
+  // 再让开半墙厚 + 一点余量，标签就落在房间内侧了。
+  const pad = size * 1.1 + 12
+  // 三角形/L 形的包围盒左上角常常落在房间外面（在凹口或房间之外），
+  // 直接摆上去文字会浮在空白处。此时退回形心，形心也不在里面就沿对角线找第一个落点。
+  const corner = { x: minX + pad, y: minY + pad }
+  const anchor = pointInPolygon(corner, room.ring) ? corner : insideAnchor(room.ring, polygonCentroid(room.ring))
+  // 房间标签只写名字 + 面积。宽×深一律不标：矩形房间的外接矩形恰好等于房间本身，
+  // 异形的却会写出一个图上看不出来的矩形；房间尺寸本来就该由墙上的尺寸链回答。
+  const lines: string[] = [room.name ? room.name : `${room.areaM2.toFixed(1)} ㎡`]
+  if (room.name && wPx >= 96) lines.push(`${room.areaM2.toFixed(1)} ㎡`)
+  return (
+    <Text
+      x={anchor.x}
+      y={anchor.y}
+      text={lines.join('\n')}
+      fontSize={size}
+      lineHeight={1.25}
+      fill={selected ? '#3b5bdb' : 'rgba(58,74,143,0.9)'}
+      stroke="#ffffff"
+      // 描边必须是**屏幕像素**而不是世界单位：字号随缩放缩小，而世界的 3cm 描边会跟着放大，
+      // 到 300% 以上白边能有几十像素，字就被自己的描边糊成一坨了。
+      strokeWidth={Math.min(2.4, Math.max(1.2, size * scale * 0.18)) / scale}
+      fillAfterStrokeEnabled
+      listening={false}
+    />
+  )
+}
+
+function AxisChain({
+  run,
+  center,
+  scale,
+  thickness,
+  segments,
+}: {
+  run: { a: Pt; b: Pt; horizontal: boolean }
+  center: Pt
+  scale: number
+  thickness: number
+  segments: AxisSegment[]
+}) {
+  const midX = (run.a.x + run.b.x) / 2
+  const midY = (run.a.y + run.b.y) / 2
+  const outward = run.horizontal
+    ? midY < center.y
+      ? -1
+      : 1
+    : midX < center.x
+      ? -1
+      : 1
+  // 比总尺寸链往里一档，两条线才不会叠在一起。
+  const offset = thickness / 2 + (run.horizontal ? 40 : 56) / scale
+  const x1 = run.a.x + (run.horizontal ? 0 : outward * offset)
+  const y1 = run.a.y + (run.horizontal ? outward * offset : 0)
+  const x2 = run.b.x + (run.horizontal ? 0 : outward * offset)
+  const y2 = run.b.y + (run.horizontal ? outward * offset : 0)
+  const ticks = [segments[0].a, ...segments.map((s) => s.b)]
+  return (
+    <>
+      <Line
+        points={[x1, y1, x2, y2]}
+        stroke="rgba(90, 100, 120, 0.5)"
+        strokeWidth={1 / scale}
+        listening={false}
+      />
+      {ticks.map((t, i) => {
+        const tx = run.horizontal ? t : x1
+        const ty = run.horizontal ? y1 : t
+        return (
+          <Line
+            key={`axis-tick-${i}`}
+            points={[tx - 3 / scale, ty + 3 / scale, tx + 3 / scale, ty - 3 / scale]}
+            stroke="rgba(90, 100, 120, 0.75)"
+            strokeWidth={2 / scale}
+            listening={false}
+          />
+        )
+      })}
+      {segments.map((seg, i) => (
+        <AxisLabel
+          key={`axis-label-${i}`}
+          x={run.horizontal ? (seg.a + seg.b) / 2 : x1}
+          y={run.horizontal ? y1 : (seg.a + seg.b) / 2}
+          horizontal={run.horizontal}
+          scale={scale}
+          text={formatMm(seg.length)}
+        />
+      ))}
+    </>
+  )
+}
+
+/** 轴线链上的一个数字。排版规则与总尺寸相同：横排在线之上，竖排逆时针 90° 在线之左。 */
+function AxisLabel({
+  x,
+  y,
+  horizontal,
+  scale,
+  text,
+}: {
+  x: number
+  y: number
+  horizontal: boolean
+  scale: number
+  text: string
+}) {
+  const ref = useRef<Konva.Text | null>(null)
+  useLayoutEffect(() => {
+    const node = ref.current
+    if (!node) return
+    const w = node.getTextWidth()
+    const h = node.fontSize()
+    if (horizontal) {
+      node.offsetX(w / 2)
+      node.offsetY(h)
+      node.position({ x, y: y - 4 / scale })
+    } else {
+      node.offsetX(w / 2)
+      node.offsetY(h / 2)
+      node.position({ x: x - 5 / scale - h / 2, y })
+    }
+  })
+  return (
+    <Text
+      ref={ref}
+      x={x}
+      y={y}
+      rotation={horizontal ? 0 : -90}
+      text={text}
+      fontSize={11 / scale}
+      fill="#5a6478"
+      stroke="#fafafd"
+      strokeWidth={Math.min(2.4, Math.max(1.2, 11 * 0.18)) / scale}
+      fillAfterStrokeEnabled
+      listening={false}
+    />
+  )
+}
+
 function RunDimension({
   run,
   center,
@@ -1846,15 +2428,15 @@ function RunDimension({
       : 1
   // 分段标签贴着墙（17 / 52 px），一级标注必须再往外一档，否则两个数字叠在一起。
   // 单墙链没有内圈的分段数字，就贴着墙标——否则一面 4 米的墙会白留出两道空隙。
-  const offset =
-    thickness / 2 + (onPick ? (run.horizontal ? 17 : 52) : run.horizontal ? 52 : 76) / scale
+  // 三排标注由内到外：墙上分段（默认隐藏）→ 轴线（第二排）→ 总尺寸（最外）
+  const offset = thickness / 2 + (run.horizontal ? 64 : 82) / scale
 
   const x1 = run.a.x + (run.horizontal ? 0 : outward * offset)
   const y1 = run.a.y + (run.horizontal ? outward * offset : 0)
   const x2 = run.b.x + (run.horizontal ? 0 : outward * offset)
   const y2 = run.b.y + (run.horizontal ? outward * offset : 0)
 
-  const text = run.total >= 100 ? `${(run.total / 100).toFixed(2)} m` : `${Math.round(run.total)} cm`
+  const text = formatMm(run.total)
   const fontPx = 11 / scale
   const lineMidX = (x1 + x2) / 2
   const lineMidY = (y1 + y2) / 2
@@ -1932,7 +2514,7 @@ function RunDimension({
         fontSize={fontPx}
         fill="#5a6478"
         stroke="#fafafd"
-        strokeWidth={3 / scale}
+        strokeWidth={Math.min(2.4, Math.max(1.2, fontPx * scale * 0.18)) / scale}
         fillAfterStrokeEnabled
         listening={Boolean(onPick)}
         onMouseDown={
@@ -2072,6 +2654,8 @@ function ItemShape({
   // 标签是 Group 的兄弟节点（文字不能跟着物品转，否则 180° 的窗帘会倒过来），
   // 所以拖动时它不会自己走：用同一个 Konva 节点的位置手推一下。
   const labelRef = useRef<Konva.Text | null>(null)
+  // 家具名只在悬停/选中时出现：常显的话，一屋子标签会把房间名和尺寸压得没法读。
+  const [hovered, setHovered] = useState(false)
   function syncLabel(node: Konva.Node) {
     const p = node.position()
     labelRef.current?.position({ x: p.x - width / 2, y: p.y - 7 / scale })
@@ -2098,6 +2682,8 @@ function ItemShape({
           onSelect()
         }}
         onDragStart={onSelect}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         onDragMove={(e) => syncLabel(e.target)}
         onDragEnd={(e) => {
           onDragEnd(e)
@@ -2114,7 +2700,7 @@ function ItemShape({
           cornerRadius={2 / scale}
         />
       </Group>
-      {selected || width >= 40 ? (
+      {selected || hovered ? (
         <Text
           ref={labelRef}
           x={item.x - width / 2}

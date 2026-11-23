@@ -130,6 +130,75 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/plan/underlay:
+    put:
+      operationId: uploadUnderlay
+      summary: 上传底图（整张替换）
+      description: |
+        请求体是**图片原始字节**（`application/octet-stream`，不是 base64、不是 multipart）。
+        服务端按魔数判定真实类型，只接受 PNG / JPEG / WebP，单张不超过 5 MiB、
+        任一边像素不超过 8000。上传成功会重置定标参数与显示选项（比例按铺满户型包围盒算），
+        并清空前端撤销栈——换图是一次硬操作。
+
+        只有管理员能上传。图片字节之后用 `GET /api/plan/underlay/image` 取回，
+        按存储时的 content type 原样返回，前端直接当 `<img>` / canvas 的图源。
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: 上传后的户型（含新的底图元数据）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    patch:
+      operationId: updateUnderlay
+      summary: 改底图的定标与显示参数
+      description: |
+        只改元数据，不动图片字节。未出现的字段保持不变——前端拖一次透明度不必回传整份参数。
+        旋转只接受 90 的整数倍；比例必须大于 0。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UnderlayPatch"
+      responses:
+        "200":
+          description: 改完的户型
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: clearUnderlay
+      summary: 删除底图（连图片字节）
+      responses:
+        "204":
+          description: 已删除；本来就没有也返回 204（幂等）
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /api/walls:
     post:
       operationId: createWall
@@ -733,6 +802,14 @@ components:
             前端据此提示「原来给客厅起的名字已失效」，并允许一键清理。
           items:
             $ref: "#/components/schemas/StaleRoom"
+        underlay:
+          nullable: true
+          description: |
+            垫在画布下面的底图元数据。没有底图时是 `null`。
+            图片字节不在 JSON 里，走 `GET /api/plan/underlay/image`；
+            换图、定标、透明度这些改动都不改变户型版本号。
+          allOf:
+            - $ref: "#/components/schemas/Underlay"
         version:
           type: integer
           format: int64
@@ -910,6 +987,73 @@ components:
         history:
           type: boolean
           description: 值变化时是否写 state_history
+    Underlay:
+      type: object
+      required: [contentType, widthPx, heightPx, sha256, cmPerPx, offsetXCm, offsetYCm,
+                 rotationDeg, opacity, visible, updatedAt]
+      additionalProperties: false
+      description: |
+        底图的元数据。`cmPerPx` 与 `offsetXCm/offsetYCm` 一起定义「图片像素 → 世界厘米」的映射：
+        图片左上角落在 `(offsetXCm, offsetYCm)`，每像素宽 `cmPerPx` 厘米，旋转绕图片中心。
+      properties:
+        contentType:
+          type: string
+          enum: [image/png, image/jpeg, image/webp]
+        widthPx:
+          type: integer
+        heightPx:
+          type: integer
+        sha256:
+          type: string
+          description: 图片字节的摘要，前端可据此判断要不要重新拉图
+        cmPerPx:
+          type: number
+          format: double
+          description: 一个像素等于多少厘米；未定标时是上传时按包围盒铺满算出的估计值
+        offsetXCm:
+          type: number
+          format: double
+        offsetYCm:
+          type: number
+          format: double
+        rotationDeg:
+          type: integer
+          enum: [0, 90, 180, 270]
+        opacity:
+          type: number
+          format: double
+          minimum: 0.1
+          maximum: 1
+        visible:
+          type: boolean
+        updatedAt:
+          type: string
+          format: date-time
+    UnderlayPatch:
+      type: object
+      additionalProperties: false
+      description: 只改出现的字段。
+      properties:
+        cmPerPx:
+          type: number
+          format: double
+          exclusiveMinimum: 0
+        offsetXCm:
+          type: number
+          format: double
+        offsetYCm:
+          type: number
+          format: double
+        rotationDeg:
+          type: integer
+          enum: [0, 90, 180, 270]
+        opacity:
+          type: number
+          format: double
+          minimum: 0.1
+          maximum: 1
+        visible:
+          type: boolean
     Opening:
       type: object
       required: [id, wallId, kind, offset, width, height, sill]
