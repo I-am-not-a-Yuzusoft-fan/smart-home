@@ -3,6 +3,7 @@ import { Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage, Tex
 import type Konva from 'konva'
 import {
   ApiError,
+  advanceSimulation,
   createItem,
   createOpening,
   clearRoomName,
@@ -1844,6 +1845,26 @@ export default function PlanPage({ user, onSignedOut }: Props) {
               }}
             >
               类型管理
+            </button>
+          ) : null}
+          {user.role === 'admin' ? (
+            <button
+              onClick={async () => {
+                try {
+                  await advanceSimulation(60)
+                  setError(null)
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : '推进模拟时间失败')
+                }
+              }}
+              className="whitespace-nowrap px-2 py-1 text-xs"
+              style={{
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--color-bg)',
+              }}
+            >
+              推进60分钟
             </button>
           ) : null}
           <span className="whitespace-nowrap">

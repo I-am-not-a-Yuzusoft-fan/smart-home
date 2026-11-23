@@ -1154,6 +1154,11 @@ type ListItemsParams struct {
 // ListItemsParamsKind defines parameters for ListItems.
 type ListItemsParamsKind string
 
+// AdvanceSimulationJSONBody defines parameters for AdvanceSimulation.
+type AdvanceSimulationJSONBody struct {
+	Minutes int `json:"minutes"`
+}
+
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
@@ -1186,6 +1191,9 @@ type UpdateUnderlayJSONRequestBody = UnderlayPatch
 
 // UpdateRoomNameJSONRequestBody defines body for UpdateRoomName for application/json ContentType.
 type UpdateRoomNameJSONRequestBody = RoomNameInput
+
+// AdvanceSimulationJSONRequestBody defines body for AdvanceSimulation for application/json ContentType.
+type AdvanceSimulationJSONRequestBody AdvanceSimulationJSONBody
 
 // CreateWallJSONRequestBody defines body for CreateWall for application/json ContentType.
 type CreateWallJSONRequestBody = WallInput
@@ -1270,6 +1278,9 @@ type ServerInterface interface {
 	// UpdateRoomName 给房间起名或改用途
 	// (PATCH /api/rooms/{hash})
 	UpdateRoomName(w http.ResponseWriter, r *http.Request, hash string)
+	// AdvanceSimulation 推进模拟器指定分钟数
+	// (POST /api/sim/tick)
+	AdvanceSimulation(w http.ResponseWriter, r *http.Request)
 	// CreateWall 画一面墙
 	// (POST /api/walls)
 	CreateWall(w http.ResponseWriter, r *http.Request)
@@ -1432,6 +1443,12 @@ func (_ Unimplemented) ClearRoomName(w http.ResponseWriter, r *http.Request, has
 // UpdateRoomName 给房间起名或改用途
 // (PATCH /api/rooms/{hash})
 func (_ Unimplemented) UpdateRoomName(w http.ResponseWriter, r *http.Request, hash string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// AdvanceSimulation 推进模拟器指定分钟数
+// (POST /api/sim/tick)
+func (_ Unimplemented) AdvanceSimulation(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1996,6 +2013,20 @@ func (siw *ServerInterfaceWrapper) UpdateRoomName(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// AdvanceSimulation operation middleware
+func (siw *ServerInterfaceWrapper) AdvanceSimulation(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdvanceSimulation(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // CreateWall operation middleware
 func (siw *ServerInterfaceWrapper) CreateWall(w http.ResponseWriter, r *http.Request) {
 
@@ -2255,6 +2286,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/items/{id}/states", wrapper.ListItemStates)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/sim/tick", wrapper.AdvanceSimulation)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/command-logs", wrapper.ListCommandLogs)

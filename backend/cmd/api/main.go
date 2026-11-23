@@ -69,6 +69,21 @@ func main() {
 	)
 	srv.SetHub(hub)
 
+	sensorReporter := control.NewSensorReporter(pool, hub)
+	srv.SetSensorReporter(sensorReporter)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = sensorReporter.Report(ctx)
+			}
+		}
+	}()
+
 	httpServer := &http.Server{
 		Addr:              cfg.addr,
 		Handler:           srv.Router(),

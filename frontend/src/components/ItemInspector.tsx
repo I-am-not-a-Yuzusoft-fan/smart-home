@@ -33,6 +33,7 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
   const [capabilityValues, setCapabilityValues] = useState<CapabilityValues>({})
   const [draftValues, setDraftValues] = useState<CapabilityValues>({})
   const [controlState, setControlState] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle')
+  const [stateUpdatedAt, setStateUpdatedAt] = useState<Record<string, string>>({})
   const liveStates = useLiveStore((store) => store.states)
   const liveConnected = useLiveStore((store) => store.connected)
 
@@ -45,6 +46,8 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
     () => mergeControlValues(capabilityValues, liveValues, draftValues),
     [capabilityValues, liveValues, draftValues],
   )
+  // 陈旧判定优先用推送带来的时间，没收到推送时退回一次性拉取的时间。
+  const updatedAtOf = (key: string) => liveStates[`${item?.id}:${key}`]?.ts ?? stateUpdatedAt[key]
 
   useEffect(() => {
     if (!item) return
@@ -61,6 +64,7 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
       void listItemStates(item.id)
         .then((states) => {
           setCapabilityValues(Object.fromEntries(states.map((state) => [state.capabilityKey, state.value])))
+          setStateUpdatedAt(Object.fromEntries(states.map((state) => [state.capabilityKey, state.updatedAt])))
         })
         .catch((e) => setError(e instanceof Error ? e.message : '读取设备状态失败'))
     } else {
@@ -210,9 +214,22 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
               {liveConnected ? '实时' : '重连中'}
             </span>
           </div>
+          {type.capabilities.some((capability) => {
+            const updatedAt = updatedAtOf(capability.key)
+            return !capability.writable && (!updatedAt || Date.now() - Date.parse(updatedAt) > 60_000)
+          }) ? (
+            <p className="text-xs" style={{ color: 'var(--color-danger)' }} role="status">传感器读数不可用：超过更新时间窗口</p>
+          ) : null}
           <CapabilityForm
             capabilities={type.capabilities}
-            values={mergedValues}
+            values={Object.fromEntries(
+              type.capabilities.map((capability) => {
+                const updatedAt = updatedAtOf(capability.key)
+                const stale = !capability.writable &&
+                  (!updatedAt || Date.now() - Date.parse(updatedAt) > 60_000)
+                return [capability.key, stale ? undefined : mergedValues[capability.key]]
+              }),
+            )}
             idPrefix={`control-${item.id}`}
             onChange={(key, value) => setDraftValues((current) => ({ ...current, [key]: value }))}
             disabled={controlState === 'sending'}
@@ -245,7 +262,8 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
                     })
                     const states = await listItemStates(item.id)
                     setCapabilityValues(Object.fromEntries(states.map((state) => [state.capabilityKey, state.value])))
-                            setControlState('ok')
+                    setStateUpdatedAt(Object.fromEntries(states.map((state) => [state.capabilityKey, state.updatedAt])))
+                    setControlState('ok')
                   } catch (e) {
                     setError(e instanceof Error ? e.message : '设备命令执行失败')
                     setControlState('error')
