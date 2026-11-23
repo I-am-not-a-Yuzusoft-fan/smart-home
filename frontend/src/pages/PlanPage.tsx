@@ -352,8 +352,31 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const pressRef = useRef<{ x: number; y: number; wallId: string | null; roomHash: string | null } | null>(
     null,
   )
+  // 按下时就把「要不要拉弧」记下来：先松 ⌥ 再松鼠标的人很多，
+  // 只认 mouseup 那一刻的 altKey 会静默退化成画直墙。
+  const arcKeyRef = useRef(false)
+  // 按住修饰键时给一句提示，否则「拖出弧」这个手势没人猜得到。
+  const [arcKeyHeld, setArcKeyHeld] = useState(false)
   const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
   const fittedRef = useRef(false)
+
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => {
+      if (e.key === 'Alt' || e.key === 'Control') setArcKeyHeld(true)
+    }
+    const onUp = (e: KeyboardEvent) => {
+      if (e.key === 'Alt' || e.key === 'Control') setArcKeyHeld(false)
+    }
+    const onBlur = () => setArcKeyHeld(false)
+    window.addEventListener('keydown', onDown)
+    window.addEventListener('keyup', onUp)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keydown', onDown)
+      window.removeEventListener('keyup', onUp)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [])
 
   const load = useCallback(async () => {
     try {
@@ -926,6 +949,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }
 
   function onMouseDown(e: Konva.KonvaEventObject<MouseEvent>) {
+    arcKeyRef.current = e.evt.altKey || e.evt.ctrlKey
     if (bend) {
       const b = bend
       setBend(null)
@@ -1090,7 +1114,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     })
     const wall = { ax: d.ax, ay: d.ay, bx: end.x, by: end.y }
     if (Math.hypot(wall.bx - wall.ax, wall.by - wall.ay) < MIN_DRAG_PX / viewport.scale) return
-    if (e.evt.ctrlKey || e.evt.altKey) {
+    const wantsArc = e.evt.altKey || e.evt.ctrlKey || arcKeyRef.current
+    arcKeyRef.current = false
+    if (wantsArc) {
       // 拉弧模式：墙先不落库，指针定弧度，再点一下才建。
       setBend({ ...wall, arcExtent: 0 })
       return
@@ -2176,6 +2202,17 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             )}
           </Layer>
         </Stage>
+
+        {!loading && (arcKeyHeld || bend) && (
+          <div
+            className="pointer-events-none absolute left-1/2 top-24 -translate-x-1/2 rounded px-3 py-1.5 text-xs"
+            style={{ color: '#1f4fa8', background: 'rgba(255,255,255,0.92)', border: '1px solid #cfd8ea', borderRadius: 8 }}
+          >
+            {bend
+              ? '移动鼠标定弧度 → 单击落定（Esc 取消）'
+              : `${arcModifier} 已按住：拖出一段弦 → 松手 → 移动鼠标定弧度 → 单击落定`}
+          </div>
+        )}
 
         {!loading && hint && (
           <div
