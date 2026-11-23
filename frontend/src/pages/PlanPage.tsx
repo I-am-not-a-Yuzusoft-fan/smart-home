@@ -95,6 +95,16 @@ function transformOf(u: Underlay): UnderlayTransform {
 }
 
 const MIN_DRAG_PX = 8
+
+// 临时调试：把关键交互送到服务端日志（/api/debug/events），排查"点了没反应"。
+function debugLog(tag: string, data: Record<string, unknown>) {
+  if (!import.meta.env.DEV) return
+  void fetch('/api/debug/events', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+    body: JSON.stringify({ tag, data }),
+  }).catch(() => {})
+}
 // 下限要低于 25%：annotations 占的是一圈固定的屏幕像素（约 110px），
 // 窄窗口里 25% 会把户型撑到边缘，最外一排尺寸被画布裁掉。
 const ZOOM_MIN = 0.18
@@ -967,6 +977,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     if (bend) {
       const b = bend
       const extent = Math.round(b.arcExtent ?? 0)
+      debugLog('bend-commit', { button: e.evt.button, extent, ax: b.ax, ay: b.ay, bx: b.bx, by: b.by })
       if (e.evt.button === 0) {
         // 松手后没动鼠标就点了一下：这时弧度还是 0，落定等于画一条直墙，
         // 十有八九还会和已有的墙撞上（409）。直接说清楚，别让人以为"点了没反应"。
@@ -1132,7 +1143,11 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     }
     // 开始画墙就离开房间面板，否则属性面板会一直压着画布右边。
     setSelectedRoomHash(null)
-    if (!d) return
+    if (!d) {
+      // 以前这里静默 return，用户只会看到"拖了半天没反应"。
+      setError('没进入画墙状态：请从空白处按住鼠标拖动，而不是单击一下')
+      return
+    }
 
     // 终点要用松手那一刻的指针，不能用最后一次 mousemove 的位置：
     // 浏览器可能在松手前不再发 mousemove，那样墙会短一截、四个角对不上。
@@ -1145,11 +1160,15 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       orthogonal: !e.evt.shiftKey && !arcWanted,
     })
     const wall = { ax: d.ax, ay: d.ay, bx: end.x, by: end.y }
-    if (Math.hypot(wall.bx - wall.ax, wall.by - wall.ay) < MIN_DRAG_PX / viewport.scale) return
+    if (Math.hypot(wall.bx - wall.ax, wall.by - wall.ay) < MIN_DRAG_PX / viewport.scale) {
+      setError(`拖得太短了：至少拖出 ${Math.round(MIN_DRAG_PX)} 像素再松手`)
+      return
+    }
     const wantsArc = arcWanted
     arcKeyRef.current = false
     if (wantsArc) {
       // 拉弧模式：墙先不落库，指针定弧度，再点一下才建。
+      debugLog('bend-start', { ...wall, arcMode })
       setBend({ ...wall, arcExtent: 0 })
       return
     }
@@ -1175,6 +1194,32 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     try {
       const before = new Set(plan.walls.map((w) => w.id))
       const snapshot = snapshotOf(plan)
+      // 弦正好压在已有的墙上（画弧最常见的动作：把一面直墙改成弧墙）：
+      // 后端对"同一对端点"的建墙是幂等的——只 bump 版本、不建新墙，
+      // 所以以前会看到"弧线消失了、什么都没发生"。这里改成直接更新那面墙。
+      const same = (x: number, y: number, px: number, py: number) => Math.abs(x - px) < 1 && Math.abs(y - py) < 1
+      const hit = plan.walls.find(
+        (w) =>
+          (same(w.ax, w.ay, d.ax, d.ay) && same(w.bx, w.by, d.bx, d.by)) ||
+          (same(w.ax, w.ay, d.bx, d.by) && same(w.bx, w.by, d.ax, d.ay)),
+      )
+      if (hit) {
+        setError(null)
+        if (d.arcExtent === undefined) {
+          setSelectedId(hit.id)
+          setError('这面墙已经存在：想改弧度就选中它改，或者用「画弧」把它改成弧墙')
+          return
+        }
+        debugLog('reuse-wall', { id: hit.id, arcExtent: d.arcExtent })
+        const next = await updateWall(hit.id, { arcExtent: d.arcExtent })
+        if (seq === writeSeq.current) {
+          remember(snapshot)
+          setPlan(next)
+          setSelectedId(hit.id)
+        }
+        return
+      }
+      debugLog('create-wall', { ...d })
       const next = await createWall({
         ax: d.ax,
         ay: d.ay,
@@ -1193,7 +1238,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         }
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : '保存失败')
+      const msg = e instanceof Error ? e.message : '保存失败'
+      debugLog('create-wall-error', { message: msg, ...d })
+      setError(msg)
     } finally {
       setSaving(false)
     }

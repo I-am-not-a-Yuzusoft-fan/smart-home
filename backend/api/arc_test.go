@@ -111,3 +111,43 @@ func TestPartialWallUpdateKeepsArcAndThickness(t *testing.T) {
 		t.Fatalf("只改坐标后厚度应保持 20，实际 %v", got.Thickness)
 	}
 }
+
+// 只传弧度的 PATCH 不能把端点写成 0：前端"把一面直墙改成弧墙"走的就是这条路。
+func TestPatchWallArcOnlyKeepsEndpoints(t *testing.T) {
+	h := newTestServer(t)
+	admin := loginAs(t, h, "zhang")
+
+	w := do(t, h, http.MethodPost, "/api/walls",
+		`{"ax":1000,"ay":2000,"bx":1400,"by":2000}`, admin)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("建墙应 201，实际 %d：%s", w.Code, w.Body.String())
+	}
+	var plan planBody
+	if err := json.Unmarshal(w.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("解析户型失败: %v", err)
+	}
+	wallID := plan.Walls[len(plan.Walls)-1].ID
+	t.Cleanup(func() { do(t, h, http.MethodDelete, "/api/walls/"+wallID, "", admin) })
+
+	// 只带弧度：前端"画弧"把已有直墙改成弧墙时发的最小请求体。
+	w = do(t, h, http.MethodPatch, "/api/walls/"+wallID, `{"arcExtent":60}`, admin)
+	if w.Code != http.StatusOK {
+		t.Fatalf("只改弧度应 200，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("解析户型失败: %v", err)
+	}
+	for _, wall := range plan.Walls {
+		if wall.ID != wallID {
+			continue
+		}
+		if wall.ArcExtent != 60 {
+			t.Fatalf("弧度应为 60，实际 %v", wall.ArcExtent)
+		}
+		if wall.AX != 1000 || wall.AY != 2000 || wall.BX != 1400 || wall.BY != 2000 {
+			t.Fatalf("端点被改坏了：(%v,%v)-(%v,%v)", wall.AX, wall.AY, wall.BX, wall.BY)
+		}
+		return
+	}
+	t.Fatal("响应里找不到被改的墙")
+}

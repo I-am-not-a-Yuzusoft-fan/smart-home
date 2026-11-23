@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -28,6 +29,8 @@ func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
+	// 临时：把 /api 的写请求与失败请求打一行日志，排查"点了没反应"。
+	r.Use(logRequests(s.log))
 
 	// 先挡跨站写请求，再谈有没有会话：否则攻击者能从 401/403 的差异里
 	// 探出"这个会话是不是还有效"。
@@ -43,14 +46,52 @@ func (s *Server) Router() http.Handler {
 		},
 	})
 
+	// 临时调试通道：前端把关键交互打到这里，服务端日志里能实时看到。
+	r.Post("/api/debug/events", s.DebugEvent)
+
 	// 底图字节不走生成代码：一个 200 响应可能带三种 content type，
 	// 契约里写出来只会让 codegen 生成难用的 union。鉴权链是同一个。
 	r.Get("/api/plan/underlay/image", s.ServeUnderlayImage)
 	return r
 }
 
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusRecorder) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// logRequests 只记录写请求与 4xx/5xx，避免刷屏。
+func logRequests(log interface {
+	InfoContext(context.Context, string, ...any)
+	WarnContext(context.Context, string, ...any)
+}) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			start := time.Now()
+			next.ServeHTTP(rec, r)
+			elapsed := time.Since(start)
+			write := r.Method != http.MethodGet && r.Method != http.MethodHead
+			if !write && rec.status < 400 {
+				return
+			}
+			if rec.status >= 400 {
+				log.WarnContext(r.Context(), "请求失败", "method", r.Method, "path", r.URL.Path, "status", rec.status, "ms", elapsed.Milliseconds())
+				return
+			}
+			log.InfoContext(r.Context(), "请求已处理", "method", r.Method, "path", r.URL.Path, "status", rec.status, "ms", elapsed.Milliseconds())
+		})
+	}
+}
+
 var publicPaths = map[string]bool{
 	"/api/healthz":     true,
+	"/api/debug/events": true,
 	"/api/auth/login":  true,
 	"/api/auth/logout": true,
 }
