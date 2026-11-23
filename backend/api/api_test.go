@@ -240,7 +240,8 @@ func TestSendLightCommandAndRangeReject(t *testing.T) {
 	if logs.Code != http.StatusOK {
 		t.Fatalf("读取操作记录应 200，实际 %d", logs.Code)
 	}
-	if !strings.Contains(logs.Body.String(), `"status":"rejected"`) {
+	if !strings.Contains(logs.Body.String(), `10000000-0000-4000-8000-000000000002`) ||
+		!strings.Contains(logs.Body.String(), `"status":"rejected"`) {
 		t.Fatalf("越界应写 rejected 操作记录：%s", logs.Body.String())
 	}
 }
@@ -265,5 +266,31 @@ func TestSendAirConditionerCommand(t *testing.T) {
 		`{"capabilityKey":"target_temp","value":31,"requestId":"20000000-0000-4000-8000-000000000003"}`, cookie)
 	if rangeReject.Code != http.StatusBadRequest {
 		t.Fatalf("空调温度越界应 400，实际 %d", rangeReject.Code)
+	}
+}
+
+func TestStatesOfMissingItemReturns404(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+	w := do(t, h, http.MethodGet,
+		"/api/items/99999999-0000-4000-8000-000000000999/states", "", cookie)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("不存在物品的状态应 404，实际 %d：%s", w.Code, w.Body.String())
+	}
+}
+
+func TestWrongCapabilityTypeIsValidationFailed(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+	w := do(t, h, http.MethodPost,
+		"/api/items/00000000-0000-4000-8000-000000000301/commands",
+		`{"capabilityKey":"brightness","value":"hot","requestId":"30000000-0000-4000-8000-000000000001"}`, cookie)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("不存在能力应 400，实际 %d：%s", w.Code, w.Body.String())
+	}
+	if code := errorCode(t, w); code != "VALIDATION_FAILED" {
+		t.Fatalf("类型错误应 VALIDATION_FAILED，实际 %q", code)
 	}
 }

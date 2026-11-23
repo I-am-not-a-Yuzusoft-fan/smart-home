@@ -127,7 +127,6 @@ func (e CommandResultStatus) Valid() bool {
 
 // Defines values for ErrorErrorCode.
 const (
-	CONFIRMATIONREQUIRED   ErrorErrorCode = "CONFIRMATION_REQUIRED"
 	CONFLICT               ErrorErrorCode = "CONFLICT"
 	DEVICETIMEOUT          ErrorErrorCode = "DEVICE_TIMEOUT"
 	DEVICEUNAVAILABLE      ErrorErrorCode = "DEVICE_UNAVAILABLE"
@@ -144,8 +143,6 @@ const (
 // Valid indicates whether the value is a known member of the ErrorErrorCode enum.
 func (e ErrorErrorCode) Valid() bool {
 	switch e {
-	case CONFIRMATIONREQUIRED:
-		return true
 	case CONFLICT:
 		return true
 	case DEVICETIMEOUT:
@@ -710,7 +707,7 @@ type Error struct {
 	Error struct {
 		// Code 机器可读的错误码。本版只用到前三个，其余是后续票的预留：
 		// UNAUTHENTICATED、VALIDATION_FAILED、INTERNAL、
-		// FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、CONFIRMATION_REQUIRED、
+		// FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、
 		// CONFLICT、ROOM_NOT_CLOSED、DEVICE_UNAVAILABLE、DEVICE_TIMEOUT、
 		// IMPORT_VALIDATION_FAILED
 		Code    ErrorErrorCode `json:"code"`
@@ -720,7 +717,7 @@ type Error struct {
 
 // ErrorErrorCode 机器可读的错误码。本版只用到前三个，其余是后续票的预留：
 // UNAUTHENTICATED、VALIDATION_FAILED、INTERNAL、
-// FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、CONFIRMATION_REQUIRED、
+// FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、
 // CONFLICT、ROOM_NOT_CLOSED、DEVICE_UNAVAILABLE、DEVICE_TIMEOUT、
 // IMPORT_VALIDATION_FAILED
 type ErrorErrorCode string

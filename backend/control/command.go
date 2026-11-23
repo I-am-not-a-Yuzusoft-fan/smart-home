@@ -126,7 +126,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	if !capability.Writable {
 		return CommandResult{}, &CommandError{Code: "VALIDATION_FAILED", Message: "能力项 " + command.CapabilityKey + " 不可写"}
 	}
-	if msg, ok := validateValue(command.Value, capability); !ok {
+	if msg, code, ok := validateValue(command.Value, capability); !ok {
 		target, _ := json.Marshal(command.Value)
 		tx, err := h.pool.Begin(ctx)
 		if err != nil {
@@ -158,7 +158,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 		if err := tx.Commit(ctx); err != nil {
 			return CommandResult{}, err
 		}
-		return CommandResult{}, &CommandError{Code: "RANGE_OUT_OF_BOUNDS", Message: msg}
+		return CommandResult{}, &CommandError{Code: code, Message: msg}
 	}
 
 	target, _ := json.Marshal(command.Value)
@@ -269,42 +269,42 @@ func validateValue(value any, capability *struct {
 		Value string `json:"value"`
 	} `json:"options"`
 	Writable bool `json:"writable"`
-}) (string, bool) {
+}) (string, string, bool) {
 	switch capability.Type {
 	case "bool":
 		_, ok := value.(bool)
 		if !ok {
-			return fmt.Sprintf("「%s」必须是布尔值", capability.Key), false
+			return fmt.Sprintf("「%s」必须是布尔值", capability.Key), "VALIDATION_FAILED", false
 		}
 	case "number":
 		n, ok := value.(float64)
 		if !ok {
-			return fmt.Sprintf("「%s」必须是数字", capability.Key), false
+			return fmt.Sprintf("「%s」必须是数字", capability.Key), "VALIDATION_FAILED", false
 		}
 		if capability.Min != nil && n < *capability.Min {
-			return fmt.Sprintf("「%s」不能小于 %v", capability.Key, *capability.Min), false
+			return fmt.Sprintf("「%s」不能小于 %v", capability.Key, *capability.Min), "RANGE_OUT_OF_BOUNDS", false
 		}
 		if capability.Max != nil && n > *capability.Max {
-			return fmt.Sprintf("「%s」不能大于 %v", capability.Key, *capability.Max), false
+			return fmt.Sprintf("「%s」不能大于 %v", capability.Key, *capability.Max), "RANGE_OUT_OF_BOUNDS", false
 		}
 	case "enum":
 		s, ok := value.(string)
 		if !ok {
-			return fmt.Sprintf("「%s」必须是字符串枚举值", capability.Key), false
+			return fmt.Sprintf("「%s」必须是字符串枚举值", capability.Key), "VALIDATION_FAILED", false
 		}
 		for _, option := range capability.Options {
 			if option.Value == s {
-				return "", true
+				return "", "", true
 			}
 		}
-		return fmt.Sprintf("「%s」的值不在允许选项中", capability.Key), false
+		return fmt.Sprintf("「%s」的值不在允许选项中", capability.Key), "VALIDATION_FAILED", false
 	case "string":
 		_, ok := value.(string)
 		if !ok {
-			return fmt.Sprintf("「%s」必须是字符串", capability.Key), false
+			return fmt.Sprintf("「%s」必须是字符串", capability.Key), "VALIDATION_FAILED", false
 		}
 	default:
-		return "能力类型不受支持", false
+		return "能力类型不受支持", "VALIDATION_FAILED", false
 	}
-	return "", true
+	return "", "", true
 }

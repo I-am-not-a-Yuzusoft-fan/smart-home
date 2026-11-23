@@ -1577,7 +1577,7 @@ components:
               description: |
                 机器可读的错误码。本版只用到前三个，其余是后续票的预留：
                 UNAUTHENTICATED、VALIDATION_FAILED、INTERNAL、
-                FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、CONFIRMATION_REQUIRED、
+                FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、
                 CONFLICT、ROOM_NOT_CLOSED、DEVICE_UNAVAILABLE、DEVICE_TIMEOUT、
                 IMPORT_VALIDATION_FAILED
               enum:
@@ -1587,7 +1587,6 @@ components:
                 - FORBIDDEN
                 - NOT_FOUND
                 - RANGE_OUT_OF_BOUNDS
-                - CONFIRMATION_REQUIRED
                 - CONFLICT
                 - ROOM_NOT_CLOSED
                 - DEVICE_UNAVAILABLE

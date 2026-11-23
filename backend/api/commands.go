@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api/gen"
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
+	itemstore "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store"
 	storegen "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
 
@@ -44,16 +44,6 @@ func (s *Server) SendItemCommand(w http.ResponseWriter, r *http.Request, id open
 		CreatedBy:     accountID,
 	})
 	if err != nil {
-		message := err.Error()
-		if strings.Contains(message, "不能小于") ||
-			strings.Contains(message, "不能大于") ||
-			strings.Contains(message, "不在允许选项") ||
-			strings.Contains(message, "必须是数字") ||
-			strings.Contains(message, "必须是布尔值") ||
-			strings.Contains(message, "必须是字符串") {
-			writeError(w, http.StatusBadRequest, gen.RANGEOUTOFBOUNDS, message)
-			return
-		}
 		var commandErr *control.CommandError
 		if errors.As(err, &commandErr) {
 			s.log.InfoContext(r.Context(), "命令校验错误", "code", commandErr.Code, "message", commandErr.Message)
@@ -68,6 +58,8 @@ func (s *Server) SendItemCommand(w http.ResponseWriter, r *http.Request, id open
 				status, code = http.StatusNotFound, gen.NOTFOUND
 			case "RANGE_OUT_OF_BOUNDS":
 				status, code = http.StatusBadRequest, gen.RANGEOUTOFBOUNDS
+			case "VALIDATION_FAILED":
+				status, code = http.StatusBadRequest, gen.VALIDATIONFAILED
 			case "DEVICE_UNAVAILABLE":
 				status, code = http.StatusServiceUnavailable, gen.DEVICEUNAVAILABLE
 			case "DEVICE_TIMEOUT":
@@ -133,6 +125,15 @@ func (s *Server) ListCommandLogs(w http.ResponseWriter, r *http.Request, params 
 }
 
 func (s *Server) ListItemStates(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	if _, err := s.items.GetItem(r.Context(), uuid.UUID(id)); err != nil {
+		if errors.Is(err, itemstore.ErrItemNotFound) {
+			writeError(w, http.StatusNotFound, gen.NOTFOUND, "物品不存在")
+			return
+		}
+		s.log.ErrorContext(r.Context(), "读取物品失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取物品失败")
+		return
+	}
 	states, err := s.commands.ListStates(r.Context(), uuid.UUID(id))
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "读取设备状态失败", "err", err)
