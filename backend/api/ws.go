@@ -38,24 +38,65 @@ type snapshotPayload struct {
 	States []StateView `json:"states"`
 }
 
-// client 包一层写锁：ByteStream 的 WebSocket 不允许并发写，
-// 而广播、快照、错误帧都可能来自不同 goroutine。
+// client 包一层写锁与初始化缓冲：ByteStream 的 WebSocket 不允许并发写，
+// 且连接在读库发送 snapshot 期间收到的增量必须先缓存在 pending 里，
+// 等 snapshot 写出后再按序补发，避免漏消息或误触发 seq 跳号。
 type client struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
+	conn    *websocket.Conn
+	mu      sync.Mutex
+	ready   bool
+	pending []StateEnvelope
 }
 
-func (c *client) write(seq uint64, typ string, payload any) error {
-	data, err := json.Marshal(StateEnvelope{V: 1, Seq: seq, Type: typ, Payload: payload})
+func (c *client) writeLocked(env StateEnvelope) error {
+	data, err := json.Marshal(env)
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	// 单个慢连接不能拖住命令接口：每次写都有自己的截止时间。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return c.conn.Write(ctx, websocket.MessageText, data)
+}
+
+func (c *client) send(env StateEnvelope) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.ready {
+		c.pending = append(c.pending, env)
+		return nil
+	}
+	return c.writeLocked(env)
+}
+
+func (c *client) sendSnapshotAndFlush(seq uint64, views []StateView) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.writeLocked(StateEnvelope{V: 1, Seq: seq, Type: "snapshot", Payload: snapshotPayload{States: views}}); err != nil {
+		return err
+	}
+	for _, env := range c.pending {
+		if env.Seq <= seq {
+			continue
+		}
+		if err := c.writeLocked(env); err != nil {
+			return err
+		}
+	}
+	c.pending = nil
+	c.ready = true
+	return nil
+}
+
+func (c *client) sendError(seq uint64, code, message string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_ = c.writeLocked(StateEnvelope{
+		V:       1,
+		Seq:     seq,
+		Type:    "error",
+		Payload: map[string]string{"code": code, "message": message},
+	})
 }
 
 type Hub struct {
@@ -63,8 +104,8 @@ type Hub struct {
 	conns   sync.Map // *client -> struct{}
 	seq     atomic.Uint64
 
-	// broadcastMu 保证「取号 → 写连接」是一个整体：并发的两次落库如果交错，
-	// 客户端会先收到 seq 更大的那条，把小的当成过期消息。
+	// broadcastMu 保证「取号 → 写连接/入缓冲」与「新连接取 seq 并注册」有序，
+	// 避免并发落库交错乱序，或新连接在读快照期间漏掉广播导致假跳号。
 	broadcastMu sync.Mutex
 }
 
@@ -80,12 +121,17 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	c := &client{conn: conn}
 
-	// 先取 seq 再读快照：读的过程中落了库的变化，seq 一定更大、会在广播里补发；
-	// 已经含进快照的变化再收到一次也无害（同值覆盖）。反过来先读后取号会漏消息。
+	// 在 broadcastMu 下先取 seq 并注册连接（此时 c.ready=false，新广播会进入 c.pending），
+	// 再读库拼快照：这样读库期间产生的 seq > snapshot.seq 增量绝不会丢失。
+	h.broadcastMu.Lock()
 	seq := h.seq.Load()
+	h.conns.Store(c, struct{}{})
+	h.broadcastMu.Unlock()
+	defer h.conns.Delete(c)
+
 	states, err := h.queries.ListAllStates(r.Context())
 	if err != nil {
-		_ = c.write(seq, "error", map[string]string{"code": "INTERNAL", "message": "读取快照失败"})
+		c.sendError(seq, "INTERNAL", "读取快照失败")
 		return
 	}
 	views := make([]StateView, 0, len(states))
@@ -100,12 +146,10 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 			TS:            state.UpdatedAt.Time,
 		})
 	}
-	if err := c.write(seq, "snapshot", snapshotPayload{States: views}); err != nil {
+	if err := c.sendSnapshotAndFlush(seq, views); err != nil {
 		return
 	}
 
-	h.conns.Store(c, struct{}{})
-	defer h.conns.Delete(c)
 	for {
 		// 只读不处理：这条通道是单向广播，读循环负责发现对端已经断开。
 		if _, _, err := conn.Read(r.Context()); err != nil {
@@ -126,9 +170,10 @@ func (h *Hub) Broadcast(message control.StateMessage) {
 	h.broadcastMu.Lock()
 	defer h.broadcastMu.Unlock()
 	seq := h.seq.Add(1)
+	env := StateEnvelope{V: 1, Seq: seq, Type: "state", Payload: view}
 	h.conns.Range(func(key, _ any) bool {
 		c := key.(*client)
-		if err := c.write(seq, "state", view); err != nil {
+		if err := c.send(env); err != nil {
 			h.conns.Delete(c)
 			_ = c.conn.Close(websocket.StatusNormalClosure, "")
 		}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { listItemStates, sendItemCommand, type Item, type ItemType, type Room } from '../api/client.ts'
-import { liveValuesFor } from '../features/control/live.ts'
+import { liveValuesFor, mergeControlValues } from '../features/control/live.ts'
 import { useLiveStore } from '../store/liveState.ts'
 import CapabilityForm, { type CapabilityValues } from './CapabilityForm.tsx'
 
@@ -31,15 +31,19 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [capabilityValues, setCapabilityValues] = useState<CapabilityValues>({})
+  const [draftValues, setDraftValues] = useState<CapabilityValues>({})
   const [controlState, setControlState] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle')
   const liveStates = useLiveStore((store) => store.states)
   const liveConnected = useLiveStore((store) => store.connected)
 
-  // 推送来的值覆盖一次性拉取的结果：命令落库后不用手动刷新，三处显示同一份数据。
-  const liveValues = item ? liveValuesFor(liveStates, item.id, type) : {}
+  // 推送来的值覆盖一次性拉取的结果，用户尚未下发的本地编辑草稿优先级最高。
+  const liveValues = useMemo(
+    () => (item ? liveValuesFor(liveStates, item.id, type) : {}),
+    [liveStates, item, type],
+  )
   const mergedValues = useMemo<CapabilityValues>(
-    () => ({ ...capabilityValues, ...liveValues }),
-    [capabilityValues, liveValues],
+    () => mergeControlValues(capabilityValues, liveValues, draftValues),
+    [capabilityValues, liveValues, draftValues],
   )
 
   useEffect(() => {
@@ -52,6 +56,7 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
     setWallOffset(String(item.wallOffset ?? 0))
     setError(null)
     setControlState('idle')
+    setDraftValues({})
     if (item.kind === 'device') {
       void listItemStates(item.id)
         .then((states) => {
@@ -209,7 +214,7 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
             capabilities={type.capabilities}
             values={mergedValues}
             idPrefix={`control-${item.id}`}
-            onChange={(key, value) => setCapabilityValues((current) => ({ ...current, [key]: value }))}
+            onChange={(key, value) => setDraftValues((current) => ({ ...current, [key]: value }))}
             disabled={controlState === 'sending'}
           />
           {controlState === 'ok' ? (
@@ -232,6 +237,11 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
                       capabilityKey: capability.key,
                       value: mergedValues[capability.key],
                       requestId,
+                    })
+                    setDraftValues((current) => {
+                      const next = { ...current }
+                      delete next[capability.key]
+                      return next
                     })
                     const states = await listItemStates(item.id)
                     setCapabilityValues(Object.fromEntries(states.map((state) => [state.capabilityKey, state.value])))

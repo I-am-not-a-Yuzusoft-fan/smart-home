@@ -47,4 +47,21 @@ describe('实时状态 store', () => {
     expect(lastSeq).toBeNull()
     expect(states).toEqual({})
   })
+
+  it('忽略序号小于等于 lastSeq 的过期或重复增量，不覆盖新状态也不回退序号', () => {
+    useLiveStore.getState().applyEnvelope(snapshot)
+    useLiveStore.getState().applyEnvelope({
+      seq: 8,
+      type: 'state',
+      payload: { itemId: 'item-a', capabilityKey: 'on', value: false, source: 'manual', ts: '2026-11-23T20:01:00+08:00' },
+    })
+    useLiveStore.getState().applyEnvelope({
+      seq: 7,
+      type: 'state',
+      payload: { itemId: 'item-a', capabilityKey: 'on', value: true, source: 'manual', ts: '2026-11-23T20:00:00+08:00' },
+    })
+    const { states, lastSeq } = useLiveStore.getState()
+    expect(lastSeq).toBe(8)
+    expect(states['item-a:on'].value).toBe(false)
+  })
 })

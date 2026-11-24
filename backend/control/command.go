@@ -254,7 +254,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	if h.broadcaster != nil {
 		h.broadcaster.Broadcast(StateMessage{
 			ItemID: command.ItemID, CapabilityKey: command.CapabilityKey,
-			Value: value, Source: "manual", UpdatedAt: now,
+			Value: value, Source: "manual", UpdatedAt: completedAt,
 		})
 	}
 	return CommandResult{RequestID: command.RequestID, Status: "ok", Value: value}, nil

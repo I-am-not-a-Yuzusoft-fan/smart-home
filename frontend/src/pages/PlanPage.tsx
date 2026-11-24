@@ -398,9 +398,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   }, [])
 
   useEffect(() => {
-    return connectLiveState(() => {
-      setError('实时状态序号异常，正在重新获取快照')
-    })
+    return connectLiveState(
+      () => {
+        setError('实时状态序号异常，正在重新获取快照')
+      },
+      () => {
+        setError((current) => (current === '实时状态序号异常，正在重新获取快照' ? null : current))
+      },
+    )
   }, [])
 
   const typeByKey = useMemo(() => new Map(types.map((typ) => [typ.key, typ])), [types])

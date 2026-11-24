@@ -28,22 +28,30 @@ export const useLiveStore = create<LiveStore>((set, get) => ({
   reset: () => set({ states: {}, lastSeq: null }),
   applyEnvelope: (envelope) => {
     const { lastSeq } = get()
+    if (envelope.type === 'snapshot') {
+      const payload = envelope.payload as { states?: LiveState[] }
+      const states = payload.states ?? []
+      set({
+        lastSeq: envelope.seq,
+        states: Object.fromEntries(states.map((s) => [keyOf(s.itemId, s.capabilityKey), s])),
+      })
+      return
+    }
+    if (envelope.type !== 'state') return
     // 跳号：漏了消息，丢弃本地缓存，交给调用方重连拿新快照（§6.3 第 3 条）。
     if (lastSeq !== null && envelope.seq > lastSeq + 1) {
       set({ states: {}, lastSeq: null })
       return
     }
-    set({ lastSeq: envelope.seq })
-    if (envelope.type === 'snapshot') {
-      const payload = envelope.payload as { states?: LiveState[] }
-      const states = payload.states ?? []
-      set({ states: Object.fromEntries(states.map((s) => [keyOf(s.itemId, s.capabilityKey), s])) })
+    // 过期或重复的增量：直接丢弃，绝不回退 lastSeq 也不覆盖更新的值。
+    if (lastSeq !== null && envelope.seq <= lastSeq) {
       return
     }
-    if (envelope.type === 'state') {
-      const state = envelope.payload as LiveState
-      set((store) => ({ states: { ...store.states, [keyOf(state.itemId, state.capabilityKey)]: state } }))
-    }
+    const state = envelope.payload as LiveState
+    set((store) => ({
+      lastSeq: envelope.seq,
+      states: { ...store.states, [keyOf(state.itemId, state.capabilityKey)]: state },
+    }))
   },
 }))
 
@@ -56,7 +64,7 @@ export function useLiveValue(itemId: string | null | undefined, capabilityKey: s
  * 连上 /ws/state：先收全量快照，之后只收增量。
  * 断线 1.5s 后自动重连；重连时 store 清掉 lastSeq，服务端会先发一份新快照。
  */
-export function connectLiveState(onGap: () => void) {
+export function connectLiveState(onGap: () => void, onSynced?: () => void) {
   let socket: WebSocket | null = null
   let timer: number | null = null
   let stopped = false
@@ -68,15 +76,21 @@ export function connectLiveState(onGap: () => void) {
     socket = new WebSocket(`${protocol}//${window.location.host}/ws/state`)
     socket.onopen = () => useLiveStore.setState({ connected: true, lastSeq: null })
     socket.onmessage = (event) => {
-      const envelope = JSON.parse(event.data) as { seq: number; type: string; payload: unknown }
+      let envelope: { seq: number; type: string; payload: unknown }
+      try {
+        envelope = JSON.parse(event.data) as { seq: number; type: string; payload: unknown }
+      } catch {
+        return
+      }
       const { lastSeq } = useLiveStore.getState()
-      if (lastSeq !== null && envelope.seq > lastSeq + 1) {
+      if (envelope.type === 'state' && lastSeq !== null && envelope.seq > lastSeq + 1) {
         useLiveStore.getState().reset()
         onGap()
         socket?.close()
         return
       }
       useLiveStore.getState().applyEnvelope(envelope)
+      if (envelope.type === 'snapshot') onSynced?.()
     }
     socket.onclose = () => {
       useLiveStore.setState({ connected: false })
