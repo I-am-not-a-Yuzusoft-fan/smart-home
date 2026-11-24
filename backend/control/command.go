@@ -39,16 +39,34 @@ type CommandHandler interface {
 	Handle(ctx context.Context, command Command) (CommandResult, error)
 	ListLogs(ctx context.Context, limit int32) ([]storegen.ListCommandLogsRow, error)
 	ListStates(ctx context.Context, itemID uuid.UUID) ([]storegen.CapabilityState, error)
+	ListHistory(ctx context.Context, itemID uuid.UUID, capabilityKey *string, limit int32) ([]storegen.StateHistory, error)
 }
 
 type Handler struct {
-	pool    *pgxpool.Pool
-	adapter device.Adapter
-	timeout time.Duration
+	pool        *pgxpool.Pool
+	adapter     device.Adapter
+	timeout     time.Duration
+	broadcaster Broadcaster
+}
+
+type Broadcaster interface {
+	Broadcast(StateMessage)
+}
+
+type StateMessage struct {
+	ItemID        uuid.UUID
+	CapabilityKey string
+	Value         any
+	Source        string
+	UpdatedAt     time.Time
 }
 
 func NewCommandHandler(pool *pgxpool.Pool, adapter device.Adapter, timeout time.Duration) *Handler {
 	return &Handler{pool: pool, adapter: adapter, timeout: timeout}
+}
+
+func (h *Handler) SetBroadcaster(broadcaster Broadcaster) {
+	h.broadcaster = broadcaster
 }
 
 func (h *Handler) ListLogs(ctx context.Context, limit int32) ([]storegen.ListCommandLogsRow, error) {
@@ -57,6 +75,15 @@ func (h *Handler) ListLogs(ctx context.Context, limit int32) ([]storegen.ListCom
 
 func (h *Handler) ListStates(ctx context.Context, itemID uuid.UUID) ([]storegen.CapabilityState, error) {
 	return storegen.New(h.pool).ListStatesByItem(ctx, pgUUID(itemID))
+}
+
+func (h *Handler) ListHistory(ctx context.Context, itemID uuid.UUID, capabilityKey *string, limit int32) ([]storegen.StateHistory, error) {
+	key := pgTextPtr(capabilityKey)
+	return storegen.New(h.pool).ListStateHistory(ctx, storegen.ListStateHistoryParams{
+		ItemID:        pgUUID(itemID),
+		CapabilityKey: key,
+		Limit:         limit,
+	})
 }
 
 func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, error) {
@@ -234,6 +261,12 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	if err := tx.Commit(ctx); err != nil {
 		return CommandResult{}, err
 	}
+	if h.broadcaster != nil {
+		h.broadcaster.Broadcast(StateMessage{
+			ItemID: command.ItemID, CapabilityKey: command.CapabilityKey,
+			Value: value, Source: "manual", UpdatedAt: completedAt,
+		})
+	}
 	return CommandResult{RequestID: command.RequestID, Status: "ok", Value: value}, nil
 }
 
@@ -268,8 +301,14 @@ func text(v pgtype.Text) string {
 	}
 	return ""
 }
-func pgUUID(id uuid.UUID) pgtype.UUID       { return pgtype.UUID{Bytes: id, Valid: true} }
-func pgText(v string) pgtype.Text           { return pgtype.Text{String: v, Valid: v != ""} }
+func pgUUID(id uuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true} }
+func pgText(v string) pgtype.Text     { return pgtype.Text{String: v, Valid: v != ""} }
+func pgTextPtr(v *string) pgtype.Text {
+	if v == nil {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: *v, Valid: true}
+}
 func pgTime(v time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: v, Valid: true} }
 func pgInt32(v int32) pgtype.Int4           { return pgtype.Int4{Int32: v, Valid: true} }
 

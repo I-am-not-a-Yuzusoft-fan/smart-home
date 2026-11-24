@@ -19,6 +19,7 @@ type CommandHandler interface {
 	Handle(context.Context, control.Command) (control.CommandResult, error)
 	ListLogs(context.Context, int32) ([]storegen.ListCommandLogsRow, error)
 	ListStates(context.Context, uuid.UUID) ([]storegen.CapabilityState, error)
+	ListHistory(context.Context, uuid.UUID, *string, int32) ([]storegen.StateHistory, error)
 }
 
 func (s *Server) SendItemCommand(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
@@ -120,6 +121,49 @@ func (s *Server) ListCommandLogs(w http.ResponseWriter, r *http.Request, params 
 			row.DurationMs = &durationMs
 		}
 		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) ListItemHistory(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, params gen.ListItemHistoryParams) {
+	if _, err := s.items.GetItem(r.Context(), uuid.UUID(id)); err != nil {
+		if errors.Is(err, itemstore.ErrItemNotFound) {
+			writeError(w, http.StatusNotFound, gen.NOTFOUND, "物品不存在")
+			return
+		}
+		s.log.ErrorContext(r.Context(), "读取物品失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取物品失败")
+		return
+	}
+	limit := int32(100)
+	if params.Limit != nil {
+		if *params.Limit < 1 || *params.Limit > 500 {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "limit 必须在 1–500")
+			return
+		}
+		limit = int32(*params.Limit)
+	}
+	history, err := s.commands.ListHistory(r.Context(), uuid.UUID(id), params.Key, limit)
+	if err != nil {
+		s.log.ErrorContext(r.Context(), "读取状态历史失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取状态历史失败")
+		return
+	}
+	out := make([]gen.StateHistory, 0, len(history))
+	for _, row := range history {
+		var value any
+		if err := json.Unmarshal(row.Value, &value); err != nil {
+			writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取状态历史失败")
+			return
+		}
+		out = append(out, gen.StateHistory{
+			Id:            int64(row.ID),
+			ItemId:        openapi_types.UUID(row.ItemID.Bytes),
+			CapabilityKey: row.CapabilityKey,
+			Value:         value,
+			Source:        gen.StateHistorySource(row.Source),
+			RecordedAt:    row.RecordedAt.Time,
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

@@ -14,6 +14,8 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/api': { target: `http://127.0.0.1:${apiPort}`, changeOrigin: false },
+      // /ws 要单独代理并开启 ws：只代理 /api 的话浏览器握手会被 Vite 自己吞掉。
+      '/ws': { target: `http://127.0.0.1:${apiPort}`, ws: true, changeOrigin: false },
     },
   },
 })

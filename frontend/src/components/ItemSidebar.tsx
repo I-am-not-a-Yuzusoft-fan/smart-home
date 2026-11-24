@@ -1,5 +1,7 @@
 import { useMemo } from 'react'
 import type { Item, ItemKind, ItemType, Room } from '../api/client.ts'
+import { useLiveStore } from '../store/liveState.ts'
+import { liveValuesFor, stateSummary } from '../features/control/live.ts'
 
 export type ItemFilters = {
   room: string
@@ -31,6 +33,12 @@ export default function ItemSidebar({
   onSelectItem,
 }: Props) {
   const namedRooms = useMemo(() => rooms.filter((room) => room.name), [rooms])
+  const liveStates = useLiveStore((store) => store.states)
+  const typeByKey = useMemo(() => new Map(types.map((typ) => [typ.key, typ])), [types])
+  const summaryOf = (item: Item) => {
+    const type = typeByKey.get(item.typeKey)
+    return item.kind === 'device' ? stateSummary(type, liveValuesFor(liveStates, item.id, type)) : ''
+  }
   const visibleItems = useMemo(() => {
     const q = filters.q.trim().toLowerCase()
     return items.filter((item) => {
@@ -136,9 +144,12 @@ export default function ItemSidebar({
               }}
             >
               <span className="block text-sm">{item.name}</span>
-              <span style={{ color: 'var(--color-muted)' }}>
+              <span className="flex items-center gap-1" style={{ color: 'var(--color-muted)' }}>
                 {item.kind === 'device' ? '设备' : '家具'}
                 {item.roomName ? ` · ${item.roomName}` : ' · 未分配房间'}
+                {summaryOf(item) ? (
+                  <span style={{ color: 'var(--color-accent, #4f6bed)' }}>· {summaryOf(item)}</span>
+                ) : null}
               </span>
             </button>
           ))}

@@ -9,6 +9,11 @@ FROM capability_state
 WHERE item_id = $1
 ORDER BY capability_key;
 
+-- name: ListAllStates :many
+SELECT item_id, capability_key, value, source, updated_at
+FROM capability_state
+ORDER BY item_id, capability_key;
+
 
 -- name: UpsertState :exec
 INSERT INTO capability_state (item_id, capability_key, value, source, updated_at)
@@ -21,6 +26,14 @@ SET value = EXCLUDED.value,
 -- name: InsertHistory :exec
 INSERT INTO state_history (item_id, capability_key, value, source, recorded_at)
 VALUES ($1, $2, $3, $4, $5);
+
+-- name: ListStateHistory :many
+SELECT id, item_id, capability_key, value, source, recorded_at
+FROM state_history
+WHERE item_id = $1
+  AND (sqlc.narg('capability_key')::text IS NULL OR capability_key = sqlc.narg('capability_key'))
+ORDER BY recorded_at DESC, id DESC
+LIMIT $2;
 
 -- name: InsertCommand :one
 INSERT INTO command_log (request_id, item_id, capability_key, target, status, source, created_by)

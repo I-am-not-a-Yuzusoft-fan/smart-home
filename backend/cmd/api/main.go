@@ -18,7 +18,7 @@ import (
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/device"
 	itemstore "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store"
-	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
+	storegen "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
 
 const (
@@ -53,8 +53,11 @@ func main() {
 		device.NewSimulatorAdapter(cfg.simulatorDelay, cfg.simulatorFailureRate),
 		cfg.commandTimeout,
 	)
+	hub := api.NewHub(storegen.New(pool))
+	commandHandler.SetBroadcaster(hub)
+
 	srv := api.New(
-		api.NewPGAccounts(store.New(pool)),
+		api.NewPGAccounts(storegen.New(pool)),
 		api.NewPGPlan(pool),
 		api.NewPGItemTypes(pool),
 		itemstore.NewItems(pool),
@@ -64,6 +67,23 @@ func main() {
 		version,
 		log,
 	)
+	srv.SetHub(hub)
+
+	sensorReporter := control.NewSensorReporter(pool, hub)
+	srv.SetSensorReporter(sensorReporter)
+	go func() {
+		_ = sensorReporter.Report(ctx)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = sensorReporter.Report(ctx)
+			}
+		}
+	}()
 
 	httpServer := &http.Server{
 		Addr:              cfg.addr,

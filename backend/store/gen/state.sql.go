@@ -433,6 +433,38 @@ func (q *Queries) InsertWallWithID(ctx context.Context, arg InsertWallWithIDPara
 	return err
 }
 
+const listAllStates = `-- name: ListAllStates :many
+SELECT item_id, capability_key, value, source, updated_at
+FROM capability_state
+ORDER BY item_id, capability_key
+`
+
+func (q *Queries) ListAllStates(ctx context.Context) ([]CapabilityState, error) {
+	rows, err := q.db.Query(ctx, listAllStates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CapabilityState
+	for rows.Next() {
+		var i CapabilityState
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.CapabilityKey,
+			&i.Value,
+			&i.Source,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCommandLogs = `-- name: ListCommandLogs :many
 SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
        created_at, completed_at, duration_ms
@@ -657,6 +689,48 @@ func (q *Queries) ListRoomNames(ctx context.Context) ([]ListRoomNamesRow, error)
 	for rows.Next() {
 		var i ListRoomNamesRow
 		if err := rows.Scan(&i.PolygonHash, &i.Name, &i.Kind); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStateHistory = `-- name: ListStateHistory :many
+SELECT id, item_id, capability_key, value, source, recorded_at
+FROM state_history
+WHERE item_id = $1
+  AND ($3::text IS NULL OR capability_key = $3)
+ORDER BY recorded_at DESC, id DESC
+LIMIT $2
+`
+
+type ListStateHistoryParams struct {
+	ItemID        pgtype.UUID `json:"item_id"`
+	Limit         int32       `json:"limit"`
+	CapabilityKey pgtype.Text `json:"capability_key"`
+}
+
+func (q *Queries) ListStateHistory(ctx context.Context, arg ListStateHistoryParams) ([]StateHistory, error) {
+	rows, err := q.db.Query(ctx, listStateHistory, arg.ItemID, arg.Limit, arg.CapabilityKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StateHistory
+	for rows.Next() {
+		var i StateHistory
+		if err := rows.Scan(
+			&i.ID,
+			&i.ItemID,
+			&i.CapabilityKey,
+			&i.Value,
+			&i.Source,
+			&i.RecordedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
