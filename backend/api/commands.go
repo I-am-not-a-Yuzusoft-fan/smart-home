@@ -137,6 +137,10 @@ func (s *Server) ListItemHistory(w http.ResponseWriter, r *http.Request, id open
 	}
 	limit := int32(100)
 	if params.Limit != nil {
+		if *params.Limit < 1 || *params.Limit > 500 {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "limit 必须在 1–500")
+			return
+		}
 		limit = int32(*params.Limit)
 	}
 	history, err := s.commands.ListHistory(r.Context(), uuid.UUID(id), params.Key, limit)

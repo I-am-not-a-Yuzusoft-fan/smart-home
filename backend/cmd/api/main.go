@@ -72,6 +72,7 @@ func main() {
 	sensorReporter := control.NewSensorReporter(pool, hub)
 	srv.SetSensorReporter(sensorReporter)
 	go func() {
+		_ = sensorReporter.Report(ctx)
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
