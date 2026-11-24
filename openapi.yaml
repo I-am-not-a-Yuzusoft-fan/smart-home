@@ -618,6 +618,161 @@ paths:
           description: 已删除
         "401":
           $ref: "#/components/responses/Unauthenticated"
+  /api/items/{id}/commands:
+    post:
+      operationId: sendItemCommand
+      summary: 给设备下发一条能力命令
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommandInput"
+      responses:
+        "202":
+          description: 模拟设备已成功执行
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandResult"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: 设备不可用或超时
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/items/{id}/states:
+    get:
+      operationId: listItemStates
+      summary: 读取物品当前能力状态
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 当前能力状态
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CapabilityState"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/items/{id}/history:
+    get:
+      operationId: listItemHistory
+      summary: 按时间倒序读取物品状态变化历史
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: key
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 64
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: 状态变化历史
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StateHistory"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/sim/tick:
+    post:
+      operationId: advanceSimulation
+      summary: 推进模拟器指定分钟数
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [minutes]
+              additionalProperties: false
+              properties:
+                minutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 1440
+      responses:
+        "200":
+          description: 环境已演化
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [minutes, simulatedAt]
+                properties:
+                  minutes:
+                    type: integer
+                  simulatedAt:
+                    type: string
+                    format: date-time
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/command-logs:
+    get:
+      operationId: listCommandLogs
+      summary: 按时间倒序列出最近操作记录
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: 操作记录列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CommandLog"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -662,6 +817,101 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    StateHistory:
+      type: object
+      required: [id, itemId, capabilityKey, value, source, recordedAt]
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          format: int64
+        itemId:
+          type: string
+          format: uuid
+        capabilityKey:
+          type: string
+        value: {}
+        source:
+          type: string
+          enum: [manual, automation, device, timeout]
+        recordedAt:
+          type: string
+          format: date-time
+    CapabilityState:
+      type: object
+      required: [itemId, capabilityKey, value, source, updatedAt]
+      additionalProperties: false
+      properties:
+        itemId:
+          type: string
+          format: uuid
+        capabilityKey:
+          type: string
+        value: {}
+        source:
+          type: string
+          enum: [manual, automation, device, timeout]
+        updatedAt:
+          type: string
+          format: date-time
+    CommandInput:
+      type: object
+      required: [capabilityKey, value, requestId]
+      additionalProperties: false
+      properties:
+        capabilityKey:
+          type: string
+          minLength: 1
+          maxLength: 64
+        value: {}
+        requestId:
+          type: string
+          format: uuid
+    CommandResult:
+      type: object
+      required: [requestId, status, value]
+      additionalProperties: false
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [ok]
+        value: {}
+    CommandLog:
+      type: object
+      required: [id, requestId, status, source, createdAt]
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          format: int64
+        requestId:
+          type: string
+          format: uuid
+        itemId:
+          type: string
+          format: uuid
+        capabilityKey:
+          type: string
+        target: {}
+        status:
+          type: string
+          enum: [ok, failed, timeout, rejected]
+        error:
+          type: string
+        source:
+          type: string
+          enum: [manual, automation, device, timeout]
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
     LoginRequest:
       type: object
       required: [username, password]
@@ -1420,7 +1670,7 @@ components:
               description: |
                 机器可读的错误码。本版只用到前三个，其余是后续票的预留：
                 UNAUTHENTICATED、VALIDATION_FAILED、INTERNAL、
-                FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、CONFIRMATION_REQUIRED、
+                FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、
                 CONFLICT、ROOM_NOT_CLOSED、DEVICE_UNAVAILABLE、DEVICE_TIMEOUT、
                 IMPORT_VALIDATION_FAILED
               enum:
@@ -1430,7 +1680,6 @@ components:
                 - FORBIDDEN
                 - NOT_FOUND
                 - RANGE_OUT_OF_BOUNDS
-                - CONFIRMATION_REQUIRED
                 - CONFLICT
                 - ROOM_NOT_CLOSED
                 - DEVICE_UNAVAILABLE

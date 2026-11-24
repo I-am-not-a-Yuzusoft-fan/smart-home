@@ -9,6 +9,12 @@ FROM capability_state
 WHERE item_id = $1
 ORDER BY capability_key;
 
+-- name: ListAllStates :many
+SELECT item_id, capability_key, value, source, updated_at
+FROM capability_state
+ORDER BY item_id, capability_key;
+
+
 -- name: UpsertState :exec
 INSERT INTO capability_state (item_id, capability_key, value, source, updated_at)
 VALUES ($1, $2, $3, $4, $5)
@@ -21,6 +27,14 @@ SET value = EXCLUDED.value,
 INSERT INTO state_history (item_id, capability_key, value, source, recorded_at)
 VALUES ($1, $2, $3, $4, $5);
 
+-- name: ListStateHistory :many
+SELECT id, item_id, capability_key, value, source, recorded_at
+FROM state_history
+WHERE item_id = $1
+  AND (sqlc.narg('capability_key')::text IS NULL OR capability_key = sqlc.narg('capability_key'))
+ORDER BY recorded_at DESC, id DESC
+LIMIT $2;
+
 -- name: InsertCommand :one
 INSERT INTO command_log (request_id, item_id, capability_key, target, status, source, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -28,8 +42,21 @@ RETURNING id;
 
 -- name: CompleteCommand :exec
 UPDATE command_log
-SET status = $2, error = $3, completed_at = $4, duration_ms = $5
+SET status = $2, error = $3, error_code = $4, completed_at = $5, duration_ms = $6
 WHERE request_id = $1;
+
+-- name: GetCommandByRequestID :one
+SELECT id, request_id, item_id, capability_key, target, status, error, error_code, source, created_by,
+       created_at, completed_at, duration_ms
+FROM command_log
+WHERE request_id = $1;
+
+-- name: ListCommandLogs :many
+SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
+       created_at, completed_at, duration_ms
+FROM command_log
+ORDER BY created_at DESC, id DESC
+LIMIT $1;
 
 -- name: ListCorners :many
 SELECT id, x, y

@@ -26,7 +26,7 @@ func (q *Queries) BumpPlanVersion(ctx context.Context) (int64, error) {
 
 const completeCommand = `-- name: CompleteCommand :exec
 UPDATE command_log
-SET status = $2, error = $3, completed_at = $4, duration_ms = $5
+SET status = $2, error = $3, error_code = $4, completed_at = $5, duration_ms = $6
 WHERE request_id = $1
 `
 
@@ -34,6 +34,7 @@ type CompleteCommandParams struct {
 	RequestID   pgtype.UUID        `json:"request_id"`
 	Status      string             `json:"status"`
 	Error       pgtype.Text        `json:"error"`
+	ErrorCode   pgtype.Text        `json:"error_code"`
 	CompletedAt pgtype.Timestamptz `json:"completed_at"`
 	DurationMs  pgtype.Int4        `json:"duration_ms"`
 }
@@ -43,6 +44,7 @@ func (q *Queries) CompleteCommand(ctx context.Context, arg CompleteCommandParams
 		arg.RequestID,
 		arg.Status,
 		arg.Error,
+		arg.ErrorCode,
 		arg.CompletedAt,
 		arg.DurationMs,
 	)
@@ -102,6 +104,50 @@ DELETE FROM wall WHERE id = $1
 func (q *Queries) DeleteWallByID(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteWallByID, id)
 	return err
+}
+
+const getCommandByRequestID = `-- name: GetCommandByRequestID :one
+SELECT id, request_id, item_id, capability_key, target, status, error, error_code, source, created_by,
+       created_at, completed_at, duration_ms
+FROM command_log
+WHERE request_id = $1
+`
+
+type GetCommandByRequestIDRow struct {
+	ID            int64              `json:"id"`
+	RequestID     pgtype.UUID        `json:"request_id"`
+	ItemID        pgtype.UUID        `json:"item_id"`
+	CapabilityKey pgtype.Text        `json:"capability_key"`
+	Target        json.RawMessage    `json:"target"`
+	Status        string             `json:"status"`
+	Error         pgtype.Text        `json:"error"`
+	ErrorCode     pgtype.Text        `json:"error_code"`
+	Source        string             `json:"source"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	DurationMs    pgtype.Int4        `json:"duration_ms"`
+}
+
+func (q *Queries) GetCommandByRequestID(ctx context.Context, requestID pgtype.UUID) (GetCommandByRequestIDRow, error) {
+	row := q.db.QueryRow(ctx, getCommandByRequestID, requestID)
+	var i GetCommandByRequestIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.ItemID,
+		&i.CapabilityKey,
+		&i.Target,
+		&i.Status,
+		&i.Error,
+		&i.ErrorCode,
+		&i.Source,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.CompletedAt,
+		&i.DurationMs,
+	)
+	return i, err
 }
 
 const getOpening = `-- name: GetOpening :one
@@ -387,6 +433,94 @@ func (q *Queries) InsertWallWithID(ctx context.Context, arg InsertWallWithIDPara
 	return err
 }
 
+const listAllStates = `-- name: ListAllStates :many
+SELECT item_id, capability_key, value, source, updated_at
+FROM capability_state
+ORDER BY item_id, capability_key
+`
+
+func (q *Queries) ListAllStates(ctx context.Context) ([]CapabilityState, error) {
+	rows, err := q.db.Query(ctx, listAllStates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CapabilityState
+	for rows.Next() {
+		var i CapabilityState
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.CapabilityKey,
+			&i.Value,
+			&i.Source,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCommandLogs = `-- name: ListCommandLogs :many
+SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
+       created_at, completed_at, duration_ms
+FROM command_log
+ORDER BY created_at DESC, id DESC
+LIMIT $1
+`
+
+type ListCommandLogsRow struct {
+	ID            int64              `json:"id"`
+	RequestID     pgtype.UUID        `json:"request_id"`
+	ItemID        pgtype.UUID        `json:"item_id"`
+	CapabilityKey pgtype.Text        `json:"capability_key"`
+	Target        json.RawMessage    `json:"target"`
+	Status        string             `json:"status"`
+	Error         pgtype.Text        `json:"error"`
+	Source        string             `json:"source"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	DurationMs    pgtype.Int4        `json:"duration_ms"`
+}
+
+func (q *Queries) ListCommandLogs(ctx context.Context, limit int32) ([]ListCommandLogsRow, error) {
+	rows, err := q.db.Query(ctx, listCommandLogs, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCommandLogsRow
+	for rows.Next() {
+		var i ListCommandLogsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RequestID,
+			&i.ItemID,
+			&i.CapabilityKey,
+			&i.Target,
+			&i.Status,
+			&i.Error,
+			&i.Source,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.CompletedAt,
+			&i.DurationMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCorners = `-- name: ListCorners :many
 SELECT id, x, y
 FROM corner
@@ -555,6 +689,48 @@ func (q *Queries) ListRoomNames(ctx context.Context) ([]ListRoomNamesRow, error)
 	for rows.Next() {
 		var i ListRoomNamesRow
 		if err := rows.Scan(&i.PolygonHash, &i.Name, &i.Kind); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStateHistory = `-- name: ListStateHistory :many
+SELECT id, item_id, capability_key, value, source, recorded_at
+FROM state_history
+WHERE item_id = $1
+  AND ($3::text IS NULL OR capability_key = $3)
+ORDER BY recorded_at DESC, id DESC
+LIMIT $2
+`
+
+type ListStateHistoryParams struct {
+	ItemID        pgtype.UUID `json:"item_id"`
+	Limit         int32       `json:"limit"`
+	CapabilityKey pgtype.Text `json:"capability_key"`
+}
+
+func (q *Queries) ListStateHistory(ctx context.Context, arg ListStateHistoryParams) ([]StateHistory, error) {
+	rows, err := q.db.Query(ctx, listStateHistory, arg.ItemID, arg.Limit, arg.CapabilityKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StateHistory
+	for rows.Next() {
+		var i StateHistory
+		if err := rows.Scan(
+			&i.ID,
+			&i.ItemID,
+			&i.CapabilityKey,
+			&i.Value,
+			&i.Source,
+			&i.RecordedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

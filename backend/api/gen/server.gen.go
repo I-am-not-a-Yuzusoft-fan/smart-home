@@ -38,9 +38,95 @@ func (e CapabilityType) Valid() bool {
 	}
 }
 
+// Defines values for CapabilityStateSource.
+const (
+	CapabilityStateSourceAutomation CapabilityStateSource = "automation"
+	CapabilityStateSourceDevice     CapabilityStateSource = "device"
+	CapabilityStateSourceManual     CapabilityStateSource = "manual"
+	CapabilityStateSourceTimeout    CapabilityStateSource = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the CapabilityStateSource enum.
+func (e CapabilityStateSource) Valid() bool {
+	switch e {
+	case CapabilityStateSourceAutomation:
+		return true
+	case CapabilityStateSourceDevice:
+		return true
+	case CapabilityStateSourceManual:
+		return true
+	case CapabilityStateSourceTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CommandLogSource.
+const (
+	CommandLogSourceAutomation CommandLogSource = "automation"
+	CommandLogSourceDevice     CommandLogSource = "device"
+	CommandLogSourceManual     CommandLogSource = "manual"
+	CommandLogSourceTimeout    CommandLogSource = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the CommandLogSource enum.
+func (e CommandLogSource) Valid() bool {
+	switch e {
+	case CommandLogSourceAutomation:
+		return true
+	case CommandLogSourceDevice:
+		return true
+	case CommandLogSourceManual:
+		return true
+	case CommandLogSourceTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CommandLogStatus.
+const (
+	CommandLogStatusFailed   CommandLogStatus = "failed"
+	CommandLogStatusOk       CommandLogStatus = "ok"
+	CommandLogStatusRejected CommandLogStatus = "rejected"
+	CommandLogStatusTimeout  CommandLogStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the CommandLogStatus enum.
+func (e CommandLogStatus) Valid() bool {
+	switch e {
+	case CommandLogStatusFailed:
+		return true
+	case CommandLogStatusOk:
+		return true
+	case CommandLogStatusRejected:
+		return true
+	case CommandLogStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CommandResultStatus.
+const (
+	CommandResultStatusOk CommandResultStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the CommandResultStatus enum.
+func (e CommandResultStatus) Valid() bool {
+	switch e {
+	case CommandResultStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorErrorCode.
 const (
-	CONFIRMATIONREQUIRED   ErrorErrorCode = "CONFIRMATION_REQUIRED"
 	CONFLICT               ErrorErrorCode = "CONFLICT"
 	DEVICETIMEOUT          ErrorErrorCode = "DEVICE_TIMEOUT"
 	DEVICEUNAVAILABLE      ErrorErrorCode = "DEVICE_UNAVAILABLE"
@@ -57,8 +143,6 @@ const (
 // Valid indicates whether the value is a known member of the ErrorErrorCode enum.
 func (e ErrorErrorCode) Valid() bool {
 	switch e {
-	case CONFIRMATIONREQUIRED:
-		return true
 	case CONFLICT:
 		return true
 	case DEVICETIMEOUT:
@@ -419,6 +503,30 @@ func (e StaleRoomKind) Valid() bool {
 	}
 }
 
+// Defines values for StateHistorySource.
+const (
+	StateHistorySourceAutomation StateHistorySource = "automation"
+	StateHistorySourceDevice     StateHistorySource = "device"
+	StateHistorySourceManual     StateHistorySource = "manual"
+	StateHistorySourceTimeout    StateHistorySource = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the StateHistorySource enum.
+func (e StateHistorySource) Valid() bool {
+	switch e {
+	case StateHistorySourceAutomation:
+		return true
+	case StateHistorySourceDevice:
+		return true
+	case StateHistorySourceManual:
+		return true
+	case StateHistorySourceTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UnderlayContentType.
 const (
 	Imagejpeg UnderlayContentType = "image/jpeg"
@@ -490,13 +598,13 @@ func (e UnderlayPatchRotationDeg) Valid() bool {
 
 // Defines values for Healthz200JSONResponseBodyStatus.
 const (
-	Ok Healthz200JSONResponseBodyStatus = "ok"
+	Healthz200JSONResponseBodyStatusOk Healthz200JSONResponseBodyStatus = "ok"
 )
 
 // Valid indicates whether the value is a known member of the Healthz200JSONResponseBodyStatus enum.
 func (e Healthz200JSONResponseBodyStatus) Valid() bool {
 	switch e {
-	case Ok:
+	case Healthz200JSONResponseBodyStatusOk:
 		return true
 	default:
 		return false
@@ -561,6 +669,56 @@ type CapabilityOption struct {
 	Value string `json:"value"`
 }
 
+// CapabilityState defines model for CapabilityState.
+type CapabilityState struct {
+	CapabilityKey string                `json:"capabilityKey"`
+	ItemId        openapi_types.UUID    `json:"itemId"`
+	Source        CapabilityStateSource `json:"source"`
+	UpdatedAt     time.Time             `json:"updatedAt"`
+	Value         interface{}           `json:"value"`
+}
+
+// CapabilityStateSource defines model for CapabilityState.Source.
+type CapabilityStateSource string
+
+// CommandInput defines model for CommandInput.
+type CommandInput struct {
+	CapabilityKey string             `json:"capabilityKey"`
+	RequestId     openapi_types.UUID `json:"requestId"`
+	Value         interface{}        `json:"value"`
+}
+
+// CommandLog defines model for CommandLog.
+type CommandLog struct {
+	CapabilityKey *string             `json:"capabilityKey,omitempty"`
+	CompletedAt   *time.Time          `json:"completedAt,omitempty"`
+	CreatedAt     time.Time           `json:"createdAt"`
+	DurationMs    *int                `json:"durationMs,omitempty"`
+	Error         *string             `json:"error,omitempty"`
+	Id            int64               `json:"id"`
+	ItemId        *openapi_types.UUID `json:"itemId,omitempty"`
+	RequestId     openapi_types.UUID  `json:"requestId"`
+	Source        CommandLogSource    `json:"source"`
+	Status        CommandLogStatus    `json:"status"`
+	Target        interface{}         `json:"target,omitempty"`
+}
+
+// CommandLogSource defines model for CommandLog.Source.
+type CommandLogSource string
+
+// CommandLogStatus defines model for CommandLog.Status.
+type CommandLogStatus string
+
+// CommandResult defines model for CommandResult.
+type CommandResult struct {
+	RequestId openapi_types.UUID  `json:"requestId"`
+	Status    CommandResultStatus `json:"status"`
+	Value     interface{}         `json:"value"`
+}
+
+// CommandResultStatus defines model for CommandResult.Status.
+type CommandResultStatus string
+
 // Corner defines model for Corner.
 type Corner struct {
 	Id openapi_types.UUID `json:"id"`
@@ -573,7 +731,7 @@ type Error struct {
 	Error struct {
 		// Code 机器可读的错误码。本版只用到前三个，其余是后续票的预留：
 		// UNAUTHENTICATED、VALIDATION_FAILED、INTERNAL、
-		// FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、CONFIRMATION_REQUIRED、
+		// FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、
 		// CONFLICT、ROOM_NOT_CLOSED、DEVICE_UNAVAILABLE、DEVICE_TIMEOUT、
 		// IMPORT_VALIDATION_FAILED
 		Code    ErrorErrorCode `json:"code"`
@@ -583,7 +741,7 @@ type Error struct {
 
 // ErrorErrorCode 机器可读的错误码。本版只用到前三个，其余是后续票的预留：
 // UNAUTHENTICATED、VALIDATION_FAILED、INTERNAL、
-// FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、CONFIRMATION_REQUIRED、
+// FORBIDDEN、NOT_FOUND、RANGE_OUT_OF_BOUNDS、
 // CONFLICT、ROOM_NOT_CLOSED、DEVICE_UNAVAILABLE、DEVICE_TIMEOUT、
 // IMPORT_VALIDATION_FAILED
 type ErrorErrorCode string
@@ -898,6 +1056,19 @@ type StaleRoom struct {
 // StaleRoomKind defines model for StaleRoom.Kind.
 type StaleRoomKind string
 
+// StateHistory defines model for StateHistory.
+type StateHistory struct {
+	CapabilityKey string             `json:"capabilityKey"`
+	Id            int64              `json:"id"`
+	ItemId        openapi_types.UUID `json:"itemId"`
+	RecordedAt    time.Time          `json:"recordedAt"`
+	Source        StateHistorySource `json:"source"`
+	Value         interface{}        `json:"value"`
+}
+
+// StateHistorySource defines model for StateHistory.Source.
+type StateHistorySource string
+
 // Underlay 底图的元数据。`cmPerPx` 与 `offsetXCm/offsetYCm` 一起定义「图片像素 → 世界厘米」的映射：
 // 图片左上角落在 `(offsetXCm, offsetYCm)`，每像素宽 `cmPerPx` 厘米，旋转绕图片中心。
 type Underlay struct {
@@ -999,6 +1170,11 @@ type NotFound = Error
 // Unauthenticated defines model for Unauthenticated.
 type Unauthenticated = Error
 
+// ListCommandLogsParams defines parameters for ListCommandLogs.
+type ListCommandLogsParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // Healthz200JSONResponseBodyStatus defines parameters for Healthz.
 type Healthz200JSONResponseBodyStatus string
 
@@ -1015,6 +1191,17 @@ type ListItemsParams struct {
 // ListItemsParamsKind defines parameters for ListItems.
 type ListItemsParamsKind string
 
+// ListItemHistoryParams defines parameters for ListItemHistory.
+type ListItemHistoryParams struct {
+	Key   *string `form:"key,omitempty" json:"key,omitempty"`
+	Limit *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// AdvanceSimulationJSONBody defines parameters for AdvanceSimulation.
+type AdvanceSimulationJSONBody struct {
+	Minutes int `json:"minutes"`
+}
+
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
@@ -1030,6 +1217,9 @@ type CreateItemJSONRequestBody = ItemInput
 // UpdateItemJSONRequestBody defines body for UpdateItem for application/json ContentType.
 type UpdateItemJSONRequestBody = ItemUpdate
 
+// SendItemCommandJSONRequestBody defines body for SendItemCommand for application/json ContentType.
+type SendItemCommandJSONRequestBody = CommandInput
+
 // CreateOpeningJSONRequestBody defines body for CreateOpening for application/json ContentType.
 type CreateOpeningJSONRequestBody = OpeningInput
 
@@ -1044,6 +1234,9 @@ type UpdateUnderlayJSONRequestBody = UnderlayPatch
 
 // UpdateRoomNameJSONRequestBody defines body for UpdateRoomName for application/json ContentType.
 type UpdateRoomNameJSONRequestBody = RoomNameInput
+
+// AdvanceSimulationJSONRequestBody defines body for AdvanceSimulation for application/json ContentType.
+type AdvanceSimulationJSONRequestBody AdvanceSimulationJSONBody
 
 // CreateWallJSONRequestBody defines body for CreateWall for application/json ContentType.
 type CreateWallJSONRequestBody = WallInput
@@ -1062,6 +1255,9 @@ type ServerInterface interface {
 	// Me 取当前会话的用户
 	// (GET /api/auth/me)
 	Me(w http.ResponseWriter, r *http.Request)
+	// ListCommandLogs 按时间倒序列出最近操作记录
+	// (GET /api/command-logs)
+	ListCommandLogs(w http.ResponseWriter, r *http.Request, params ListCommandLogsParams)
 	// Healthz 健康检查
 	// (GET /api/healthz)
 	Healthz(w http.ResponseWriter, r *http.Request)
@@ -1089,6 +1285,15 @@ type ServerInterface interface {
 	// UpdateItem 修改物品名称、房间、坐标、旋转或装饰属性
 	// (PATCH /api/items/{id})
 	UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// SendItemCommand 给设备下发一条能力命令
+	// (POST /api/items/{id}/commands)
+	SendItemCommand(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// ListItemHistory 按时间倒序读取物品状态变化历史
+	// (GET /api/items/{id}/history)
+	ListItemHistory(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, params ListItemHistoryParams)
+	// ListItemStates 读取物品当前能力状态
+	// (GET /api/items/{id}/states)
+	ListItemStates(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// CreateOpening 在墙上开一个门或窗
 	// (POST /api/openings)
 	CreateOpening(w http.ResponseWriter, r *http.Request)
@@ -1119,6 +1324,9 @@ type ServerInterface interface {
 	// UpdateRoomName 给房间起名或改用途
 	// (PATCH /api/rooms/{hash})
 	UpdateRoomName(w http.ResponseWriter, r *http.Request, hash string)
+	// AdvanceSimulation 推进模拟器指定分钟数
+	// (POST /api/sim/tick)
+	AdvanceSimulation(w http.ResponseWriter, r *http.Request)
 	// CreateWall 画一面墙
 	// (POST /api/walls)
 	CreateWall(w http.ResponseWriter, r *http.Request)
@@ -1149,6 +1357,12 @@ func (_ Unimplemented) Logout(w http.ResponseWriter, r *http.Request) {
 // Me 取当前会话的用户
 // (GET /api/auth/me)
 func (_ Unimplemented) Me(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ListCommandLogs 按时间倒序列出最近操作记录
+// (GET /api/command-logs)
+func (_ Unimplemented) ListCommandLogs(w http.ResponseWriter, r *http.Request, params ListCommandLogsParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1203,6 +1417,24 @@ func (_ Unimplemented) DeleteItem(w http.ResponseWriter, r *http.Request, id ope
 // UpdateItem 修改物品名称、房间、坐标、旋转或装饰属性
 // (PATCH /api/items/{id})
 func (_ Unimplemented) UpdateItem(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// SendItemCommand 给设备下发一条能力命令
+// (POST /api/items/{id}/commands)
+func (_ Unimplemented) SendItemCommand(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ListItemHistory 按时间倒序读取物品状态变化历史
+// (GET /api/items/{id}/history)
+func (_ Unimplemented) ListItemHistory(w http.ResponseWriter, r *http.Request, id openapi_types.UUID, params ListItemHistoryParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ListItemStates 读取物品当前能力状态
+// (GET /api/items/{id}/states)
+func (_ Unimplemented) ListItemStates(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1266,6 +1498,12 @@ func (_ Unimplemented) UpdateRoomName(w http.ResponseWriter, r *http.Request, ha
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// AdvanceSimulation 推进模拟器指定分钟数
+// (POST /api/sim/tick)
+func (_ Unimplemented) AdvanceSimulation(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // CreateWall 画一面墙
 // (POST /api/walls)
 func (_ Unimplemented) CreateWall(w http.ResponseWriter, r *http.Request) {
@@ -1326,6 +1564,39 @@ func (siw *ServerInterfaceWrapper) Me(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Me(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListCommandLogs operation middleware
+func (siw *ServerInterfaceWrapper) ListCommandLogs(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListCommandLogsParams
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListCommandLogs(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1554,6 +1825,113 @@ func (siw *ServerInterfaceWrapper) UpdateItem(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// SendItemCommand operation middleware
+func (siw *ServerInterfaceWrapper) SendItemCommand(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SendItemCommand(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListItemHistory operation middleware
+func (siw *ServerInterfaceWrapper) ListItemHistory(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListItemHistoryParams
+
+	// ------------- Optional query parameter "key" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "key", r.URL.Query(), &params.Key, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "key"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "key", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListItemHistory(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListItemStates operation middleware
+func (siw *ServerInterfaceWrapper) ListItemStates(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListItemStates(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // CreateOpening operation middleware
 func (siw *ServerInterfaceWrapper) CreateOpening(w http.ResponseWriter, r *http.Request) {
 
@@ -1733,6 +2111,20 @@ func (siw *ServerInterfaceWrapper) UpdateRoomName(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateRoomName(w, r, hash)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AdvanceSimulation operation middleware
+func (siw *ServerInterfaceWrapper) AdvanceSimulation(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AdvanceSimulation(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1995,6 +2387,21 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Patch(options.BaseURL+"/api/items/{id}", wrapper.UpdateItem)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/items/{id}/commands", wrapper.SendItemCommand)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/items/{id}/states", wrapper.ListItemStates)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/items/{id}/history", wrapper.ListItemHistory)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/sim/tick", wrapper.AdvanceSimulation)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/command-logs", wrapper.ListCommandLogs)
 	})
 
 	return r

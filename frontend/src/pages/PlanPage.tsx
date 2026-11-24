@@ -3,6 +3,7 @@ import { Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage, Tex
 import type Konva from 'konva'
 import {
   ApiError,
+  advanceSimulation,
   createItem,
   createOpening,
   clearRoomName,
@@ -69,6 +70,8 @@ import {
 } from '../features/plan/underlay.ts'
 import { replacePlan, type WallSnapshot } from '../api/client.ts'
 import { sampleAsFile, syntheticCalibrations, type UnderlaySample } from '../features/plan/samples.ts'
+import { connectLiveState, useLiveStore } from '../store/liveState.ts'
+import { liveValuesFor, stateSummary } from '../features/control/live.ts'
 
 type Props = {
   user: SessionUser
@@ -395,7 +398,25 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     }
   }, [])
 
+  useEffect(() => {
+    return connectLiveState(
+      () => {
+        setError('实时状态序号异常，正在重新获取快照')
+      },
+      () => {
+        setError((current) => (current === '实时状态序号异常，正在重新获取快照' ? null : current))
+      },
+    )
+  }, [])
+
   const typeByKey = useMemo(() => new Map(types.map((typ) => [typ.key, typ])), [types])
+  const liveStates = useLiveStore((store) => store.states)
+  const liveConnected = useLiveStore((store) => store.connected)
+  const summaryOf = (item: Item) => {
+    if (item.kind !== 'device') return ''
+    const type = typeByKey.get(item.typeKey)
+    return stateSummary(type, liveValuesFor(liveStates, item.id, type))
+  }
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? null
   const selectedItemType = selectedItem ? typeByKey.get(selectedItem.typeKey) : undefined
   const selectedRoom = plan.rooms.find((room) => room.hash === selectedRoomHash) ?? null
@@ -1826,6 +1847,26 @@ export default function PlanPage({ user, onSignedOut }: Props) {
               类型管理
             </button>
           ) : null}
+          {user.role === 'admin' ? (
+            <button
+              onClick={async () => {
+                try {
+                  await advanceSimulation(60)
+                  setError(null)
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : '推进模拟时间失败')
+                }
+              }}
+              className="whitespace-nowrap px-2 py-1 text-xs"
+              style={{
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-sm)',
+                background: 'var(--color-bg)',
+              }}
+            >
+              推进60分钟
+            </button>
+          ) : null}
           <span className="whitespace-nowrap">
             {user.displayName}
             <span className="ml-2 text-xs" style={{ color: 'var(--color-muted)' }}>
@@ -1871,6 +1912,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           </button>
         </div>
       )}
+
+      {!liveConnected ? (
+        <div className="px-4 py-1 text-xs" role="status" style={{ background: 'rgba(220,38,38,0.12)', color: '#991b1b' }}>
+          实时连接已断开，正在重连…（重连后会自动重取一次全量快照）
+        </div>
+      ) : null}
 
       <div className="flex min-h-0 flex-1">
         <ItemSidebar
@@ -2288,6 +2335,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 type={typeByKey.get(item.typeKey)}
                 selected={item.id === selectedItemId}
                 scale={viewport.scale}
+                summary={summaryOf(item)}
                 onSelect={() => {
                   setSelectedItemId(item.id)
                   setSelectedId(null)
@@ -3055,6 +3103,7 @@ function ItemShape({
   type,
   selected,
   scale,
+  summary,
   onSelect,
   onDragEnd,
 }: {
@@ -3062,6 +3111,7 @@ function ItemShape({
   type?: ItemType
   selected: boolean
   scale: number
+  summary: string
   onSelect: () => void
   onDragEnd: (e: Konva.KonvaEventObject<Event>) => void
 }) {
@@ -3116,14 +3166,14 @@ function ItemShape({
           cornerRadius={2 / scale}
         />
       </Group>
-      {selected || hovered ? (
+      {selected || hovered || (summary && scale >= 0.35) ? (
         <Text
           ref={labelRef}
           x={item.x - width / 2}
           y={item.y - 7 / scale}
           width={width}
           align="center"
-          text={item.name}
+          text={summary ? `${item.name} · ${summary}` : item.name}
           fontSize={11 / scale}
           fill="#3a3a4d"
           wrap="none"

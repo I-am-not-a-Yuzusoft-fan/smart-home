@@ -8,14 +8,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/device"
 	itemstore "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store"
-	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
+	storegen "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
 
 const (
@@ -45,16 +48,42 @@ func main() {
 		os.Exit(1)
 	}
 
+	commandHandler := control.NewCommandHandler(
+		pool,
+		device.NewSimulatorAdapter(cfg.simulatorDelay, cfg.simulatorFailureRate),
+		cfg.commandTimeout,
+	)
+	hub := api.NewHub(storegen.New(pool))
+	commandHandler.SetBroadcaster(hub)
+
 	srv := api.New(
-		api.NewPGAccounts(store.New(pool)),
+		api.NewPGAccounts(storegen.New(pool)),
 		api.NewPGPlan(pool),
 		api.NewPGItemTypes(pool),
 		itemstore.NewItems(pool),
+		commandHandler,
 		api.NewSessionCodec(cfg.sessionSecret, cfg.sessionTTL),
 		cfg.cookieSecure,
 		version,
 		log,
 	)
+	srv.SetHub(hub)
+
+	sensorReporter := control.NewSensorReporter(pool, hub)
+	srv.SetSensorReporter(sensorReporter)
+	go func() {
+		_ = sensorReporter.Report(ctx)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = sensorReporter.Report(ctx)
+			}
+		}
+	}()
 
 	httpServer := &http.Server{
 		Addr:              cfg.addr,
@@ -83,20 +112,26 @@ func main() {
 }
 
 type config struct {
-	addr          string
-	databaseURL   string
-	sessionSecret string
-	sessionTTL    time.Duration
-	cookieSecure  bool
+	addr                 string
+	databaseURL          string
+	sessionSecret        string
+	sessionTTL           time.Duration
+	cookieSecure         bool
+	simulatorDelay       time.Duration
+	simulatorFailureRate float64
+	commandTimeout       time.Duration
 }
 
 func loadConfig() config {
 	return config{
-		addr:          env("ADDR", ":8081"),
-		databaseURL:   env("DATABASE_URL", "postgres://postgres:spike@127.0.0.1:5433/smarthome?sslmode=disable"),
-		sessionSecret: env("SESSION_SECRET", defaultSessionSecret),
-		sessionTTL:    12 * time.Hour,
-		cookieSecure:  os.Getenv("COOKIE_SECURE") == "true",
+		addr:                 env("ADDR", ":8081"),
+		databaseURL:          env("DATABASE_URL", "postgres://postgres:spike@127.0.0.1:5433/smarthome?sslmode=disable"),
+		sessionSecret:        env("SESSION_SECRET", defaultSessionSecret),
+		sessionTTL:           12 * time.Hour,
+		cookieSecure:         os.Getenv("COOKIE_SECURE") == "true",
+		simulatorDelay:       envDuration("SIMULATOR_DELAY", 100*time.Millisecond),
+		simulatorFailureRate: envFloat("SIMULATOR_FAILURE_RATE", 0),
+		commandTimeout:       envDuration("COMMAND_TIMEOUT", 3*time.Second),
 	}
 }
 
@@ -105,4 +140,28 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func envFloat(key string, fallback float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed < 0 || parsed > 1 {
+		return fallback
+	}
+	return parsed
 }

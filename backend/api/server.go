@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api/gen"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
 )
 
 // SessionCookieName 是会话 Cookie 的名字，与契约里的 securityScheme 一致。
@@ -46,6 +47,9 @@ type Server struct {
 	plan      PlanStore
 	itemTypes ItemTypeStore
 	items     ItemStore
+	commands  CommandHandler
+	ws        *Hub
+	sensors   *control.SensorReporter
 	session   *SessionCodec
 	secure    bool
 	log       *slog.Logger
@@ -53,8 +57,16 @@ type Server struct {
 }
 
 // New 构造接口层。secure 为 true 时 Cookie 带 Secure（生产用）。
-func New(accounts AccountStore, plan PlanStore, itemTypes ItemTypeStore, items ItemStore, session *SessionCodec, secure bool, version string, log *slog.Logger) *Server {
-	return &Server{accounts: accounts, plan: plan, itemTypes: itemTypes, items: items, session: session, secure: secure, version: version, log: log}
+func New(accounts AccountStore, plan PlanStore, itemTypes ItemTypeStore, items ItemStore, commands CommandHandler, session *SessionCodec, secure bool, version string, log *slog.Logger) *Server {
+	return &Server{accounts: accounts, plan: plan, itemTypes: itemTypes, items: items, commands: commands, session: session, secure: secure, version: version, log: log}
+}
+
+func (s *Server) SetHub(hub *Hub) {
+	s.ws = hub
+}
+
+func (s *Server) SetSensorReporter(reporter *control.SensorReporter) {
+	s.sensors = reporter
 }
 
 // dummyHash 是固定口令 "dummy-password" 的 bcrypt 结果，只用来抹平时间差。
