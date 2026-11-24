@@ -277,6 +277,12 @@ func TestSendLightCommandAndRangeReject(t *testing.T) {
 		t.Fatalf("越界错误码应为 RANGE_OUT_OF_BOUNDS，实际 %q", code)
 	}
 
+	// 操作记录列表也要带上错误码，前端才能显示「为什么失败」。
+	logs := do(t, h, http.MethodGet, "/api/command-logs?limit=20", "", cookie)
+	if logs.Code != http.StatusOK || !strings.Contains(logs.Body.String(), `"errorCode":"RANGE_OUT_OF_BOUNDS"`) {
+		t.Fatalf("操作记录应带 errorCode，实际 %d %s", logs.Code, logs.Body.String())
+	}
+
 	row := commandLogOf(t, rejectID)
 	if row.Status != "rejected" || row.ErrorCode == nil || *row.ErrorCode != "RANGE_OUT_OF_BOUNDS" {
 		t.Fatalf("越界应写 rejected + RANGE_OUT_OF_BOUNDS，实际 %+v", row)

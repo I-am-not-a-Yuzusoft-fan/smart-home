@@ -110,6 +110,10 @@ func (s *Server) ListCommandLogs(w http.ResponseWriter, r *http.Request, params 
 		if len(log.Target) > 0 {
 			row.Target = log.Target
 		}
+		if log.ErrorCode.Valid {
+			code := log.ErrorCode.String
+			row.ErrorCode = &code
+		}
 		if log.Error.Valid {
 			row.Error = &log.Error.String
 		}

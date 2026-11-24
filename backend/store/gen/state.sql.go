@@ -466,7 +466,7 @@ func (q *Queries) ListAllStates(ctx context.Context) ([]CapabilityState, error) 
 }
 
 const listCommandLogs = `-- name: ListCommandLogs :many
-SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
+SELECT id, request_id, item_id, capability_key, target, status, error, error_code, source, created_by,
        created_at, completed_at, duration_ms
 FROM command_log
 ORDER BY created_at DESC, id DESC
@@ -481,6 +481,7 @@ type ListCommandLogsRow struct {
 	Target        json.RawMessage    `json:"target"`
 	Status        string             `json:"status"`
 	Error         pgtype.Text        `json:"error"`
+	ErrorCode     pgtype.Text        `json:"error_code"`
 	Source        string             `json:"source"`
 	CreatedBy     pgtype.UUID        `json:"created_by"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
@@ -505,6 +506,7 @@ func (q *Queries) ListCommandLogs(ctx context.Context, limit int32) ([]ListComma
 			&i.Target,
 			&i.Status,
 			&i.Error,
+			&i.ErrorCode,
 			&i.Source,
 			&i.CreatedBy,
 			&i.CreatedAt,

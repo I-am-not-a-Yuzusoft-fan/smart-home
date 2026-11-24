@@ -899,6 +899,9 @@ components:
         status:
           type: string
           enum: [ok, failed, timeout, rejected]
+        errorCode:
+          type: string
+          description: 失败原因码（与命令响应里的 code 一致），成功时缺省
         error:
           type: string
         source:
