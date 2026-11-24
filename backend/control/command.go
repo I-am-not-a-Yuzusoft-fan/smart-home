@@ -169,7 +169,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	txq := q.WithTx(tx)
-	now := time.Now()
+	startedAt := time.Now()
 	if _, err := txq.InsertCommand(ctx, storegen.InsertCommandParams{
 		RequestID:     requestID,
 		ItemID:        pgUUID(command.ItemID),
@@ -198,10 +198,13 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 			code = "DEVICE_TIMEOUT"
 			message = "设备没有响应，请稍后重试"
 		}
-		_ = txq.CompleteCommand(ctx, storegen.CompleteCommandParams{
+		completedAt := time.Now()
+		if err := txq.CompleteCommand(ctx, storegen.CompleteCommandParams{
 			RequestID: requestID, Status: status, Error: pgText(message), ErrorCode: pgText(code),
-			CompletedAt: pgTime(now), DurationMs: pgInt32(int32(time.Since(now).Milliseconds())),
-		})
+			CompletedAt: pgTime(completedAt), DurationMs: pgInt32(int32(completedAt.Sub(startedAt).Milliseconds())),
+		}); err != nil {
+			return CommandResult{}, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return CommandResult{}, err
 		}
@@ -209,22 +212,22 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	}
 
 	valueJSON, _ := json.Marshal(value)
-	now = time.Now()
+	completedAt := time.Now()
 	if err := txq.UpsertState(ctx, storegen.UpsertStateParams{
 		ItemID: pgUUID(command.ItemID), CapabilityKey: command.CapabilityKey,
-		Value: valueJSON, Source: "manual", UpdatedAt: pgTime(now),
+		Value: valueJSON, Source: "manual", UpdatedAt: pgTime(completedAt),
 	}); err != nil {
 		return CommandResult{}, err
 	}
 	if err := txq.InsertHistory(ctx, storegen.InsertHistoryParams{
 		ItemID: pgUUID(command.ItemID), CapabilityKey: command.CapabilityKey,
-		Value: valueJSON, Source: "manual", RecordedAt: pgTime(now),
+		Value: valueJSON, Source: "manual", RecordedAt: pgTime(completedAt),
 	}); err != nil {
 		return CommandResult{}, err
 	}
 	if err := txq.CompleteCommand(ctx, storegen.CompleteCommandParams{
 		RequestID: requestID, Status: "ok", Error: pgtype.Text{}, ErrorCode: pgtype.Text{},
-		CompletedAt: pgTime(now), DurationMs: pgInt32(int32(time.Since(now).Milliseconds())),
+		CompletedAt: pgTime(completedAt), DurationMs: pgInt32(int32(completedAt.Sub(startedAt).Milliseconds())),
 	}); err != nil {
 		return CommandResult{}, err
 	}

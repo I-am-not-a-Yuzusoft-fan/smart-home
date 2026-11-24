@@ -49,10 +49,6 @@ func (s *Server) SendItemCommand(w http.ResponseWriter, r *http.Request, id open
 			s.log.InfoContext(r.Context(), "命令校验错误", "code", commandErr.Code, "message", commandErr.Message)
 			status := http.StatusBadRequest
 			code := gen.VALIDATIONFAILED
-			if commandErr.Code == "RANGE_OUT_OF_BOUNDS" {
-				writeError(w, http.StatusBadRequest, gen.RANGEOUTOFBOUNDS, commandErr.Message)
-				return
-			}
 			switch commandErr.Code {
 			case "NOT_FOUND":
 				status, code = http.StatusNotFound, gen.NOTFOUND
@@ -82,6 +78,10 @@ func (s *Server) SendItemCommand(w http.ResponseWriter, r *http.Request, id open
 func (s *Server) ListCommandLogs(w http.ResponseWriter, r *http.Request, params gen.ListCommandLogsParams) {
 	limit := int32(50)
 	if params.Limit != nil {
+		if *params.Limit < 1 || *params.Limit > 200 {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "limit 必须在 1–200")
+			return
+		}
 		limit = int32(*params.Limit)
 	}
 	logs, err := s.commands.ListLogs(r.Context(), limit)
@@ -106,7 +106,7 @@ func (s *Server) ListCommandLogs(w http.ResponseWriter, r *http.Request, params 
 		if log.CapabilityKey.Valid {
 			row.CapabilityKey = &log.CapabilityKey.String
 		}
-		if log.Target != nil {
+		if len(log.Target) > 0 {
 			row.Target = log.Target
 		}
 		if log.Error.Valid {

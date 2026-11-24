@@ -291,8 +291,8 @@ func TestSendAirConditionerCommand(t *testing.T) {
 	itemID := "00000000-0000-4000-8000-000000000302"
 
 	for i, body := range []string{
-		`{"capabilityKey":"mode","value":"cool","requestId":"20000000-0000-4000-8000-000000000001"}`,
-		`{"capabilityKey":"target_temp","value":28,"requestId":"20000000-0000-4000-8000-000000000002"}`,
+		`{"capabilityKey":"mode","value":"cool","requestId":"` + uuid.NewString() + `"}`,
+		`{"capabilityKey":"target_temp","value":28,"requestId":"` + uuid.NewString() + `"}`,
 	} {
 		w := do(t, h, http.MethodPost, "/api/items/"+itemID+"/commands", body, cookie)
 		if w.Code != http.StatusAccepted {
@@ -301,7 +301,7 @@ func TestSendAirConditionerCommand(t *testing.T) {
 	}
 
 	rangeReject := do(t, h, http.MethodPost, "/api/items/"+itemID+"/commands",
-		`{"capabilityKey":"target_temp","value":31,"requestId":"20000000-0000-4000-8000-000000000003"}`, cookie)
+		`{"capabilityKey":"target_temp","value":31,"requestId":"`+uuid.NewString()+`"}`, cookie)
 	if rangeReject.Code != http.StatusBadRequest {
 		t.Fatalf("空调温度越界应 400，实际 %d", rangeReject.Code)
 	}
