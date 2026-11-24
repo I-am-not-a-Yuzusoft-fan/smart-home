@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { listItemStates, sendItemCommand, type Item, type ItemType, type Room } from '../api/client.ts'
-import { liveValuesFor, mergeControlValues } from '../features/control/live.ts'
+import { isCapabilityStale, liveValuesFor, mergeControlValues } from '../features/control/live.ts'
 import { useLiveStore } from '../store/liveState.ts'
 import CapabilityForm, { type CapabilityValues } from './CapabilityForm.tsx'
 
@@ -33,18 +33,31 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
   const [capabilityValues, setCapabilityValues] = useState<CapabilityValues>({})
   const [draftValues, setDraftValues] = useState<CapabilityValues>({})
   const [controlState, setControlState] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle')
+  const [stateUpdatedAt, setStateUpdatedAt] = useState<Record<string, string>>({})
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const liveStates = useLiveStore((store) => store.states)
   const liveConnected = useLiveStore((store) => store.connected)
 
+  // 只读传感器每 5 秒刷新一次当前时间，避免停报超过 60 秒后页面不重渲染而一直显示旧值。
+  const hasReadOnly = Boolean(type?.capabilities.some((capability) => !capability.writable))
+  useEffect(() => {
+    if (!hasReadOnly) return
+    setNowMs(Date.now())
+    const timer = window.setInterval(() => setNowMs(Date.now()), 5000)
+    return () => window.clearInterval(timer)
+  }, [hasReadOnly, item?.id])
+
   // 推送来的值覆盖一次性拉取的结果，用户尚未下发的本地编辑草稿优先级最高。
   const liveValues = useMemo(
-    () => (item ? liveValuesFor(liveStates, item.id, type) : {}),
-    [liveStates, item, type],
+    () => (item ? liveValuesFor(liveStates, item.id, type, nowMs) : {}),
+    [liveStates, item, type, nowMs],
   )
   const mergedValues = useMemo<CapabilityValues>(
     () => mergeControlValues(capabilityValues, liveValues, draftValues),
     [capabilityValues, liveValues, draftValues],
   )
+  // 陈旧判定优先用推送带来的时间，没收到推送时退回一次性拉取的时间。
+  const updatedAtOf = (key: string) => liveStates[`${item?.id}:${key}`]?.ts ?? stateUpdatedAt[key]
 
   useEffect(() => {
     if (!item) return
@@ -61,6 +74,7 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
       void listItemStates(item.id)
         .then((states) => {
           setCapabilityValues(Object.fromEntries(states.map((state) => [state.capabilityKey, state.value])))
+          setStateUpdatedAt(Object.fromEntries(states.map((state) => [state.capabilityKey, state.updatedAt])))
         })
         .catch((e) => setError(e instanceof Error ? e.message : '读取设备状态失败'))
     } else {
@@ -210,9 +224,17 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
               {liveConnected ? '实时' : '重连中'}
             </span>
           </div>
+          {type.capabilities.some((capability) => isCapabilityStale(capability, updatedAtOf(capability.key), nowMs)) ? (
+            <p className="text-xs" style={{ color: 'var(--color-danger)' }} role="status">传感器读数不可用：超过更新时间窗口</p>
+          ) : null}
           <CapabilityForm
             capabilities={type.capabilities}
-            values={mergedValues}
+            values={Object.fromEntries(
+              type.capabilities.map((capability) => {
+                const stale = isCapabilityStale(capability, updatedAtOf(capability.key), nowMs)
+                return [capability.key, stale ? undefined : mergedValues[capability.key]]
+              }),
+            )}
             idPrefix={`control-${item.id}`}
             onChange={(key, value) => setDraftValues((current) => ({ ...current, [key]: value }))}
             disabled={controlState === 'sending'}
@@ -245,7 +267,8 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
                     })
                     const states = await listItemStates(item.id)
                     setCapabilityValues(Object.fromEntries(states.map((state) => [state.capabilityKey, state.value])))
-                            setControlState('ok')
+                    setStateUpdatedAt(Object.fromEntries(states.map((state) => [state.capabilityKey, state.updatedAt])))
+                    setControlState('ok')
                   } catch (e) {
                     setError(e instanceof Error ? e.message : '设备命令执行失败')
                     setControlState('error')

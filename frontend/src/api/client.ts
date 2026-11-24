@@ -454,6 +454,14 @@ export type CapabilityState = {
 export const listItemStates = (itemId: string) =>
   request<CapabilityState[]>(`/api/items/${encodeURIComponent(itemId)}/states`)
 
+export type SimTickResult = { minutes: number; simulatedAt: string }
+
+export const advanceSimulation = (minutes: number) =>
+  request<SimTickResult>('/api/sim/tick', {
+    method: 'POST',
+    body: JSON.stringify({ minutes }),
+  })
+
 /** 新建类型（仅管理员）。 */
 export const createItemType = (input: ItemTypeInput) =>
   request<ItemType>('/api/item-types', { method: 'POST', body: JSON.stringify(input) })

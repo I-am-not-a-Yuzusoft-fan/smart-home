@@ -64,6 +64,7 @@ func newTestServerWith(t *testing.T, adapter device.Adapter, timeout time.Durati
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	srv.SetHub(hub)
+	srv.SetSensorReporter(control.NewSensorReporter(pool, hub))
 	return srv.Router()
 }
 
@@ -380,5 +381,42 @@ func TestCommandFailureAndTimeoutAreRecorded(t *testing.T) {
 				t.Fatalf("重放应仍 503 %s，实际 %d %s", tc.code, replay.Code, replay.Body.String())
 			}
 		})
+
+	}
+}
+
+func TestSimulationTickDoesNotCreateHistory(t *testing.T) {
+	h := newTestServer(t)
+	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+	cookie := sessionCookie(t, login)
+
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("连接数据库失败: %v", err)
+	}
+	defer pool.Close()
+	before := 0
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM state_history").Scan(&before); err != nil {
+		t.Fatalf("读取历史数量失败: %v", err)
+	}
+
+	tick := do(t, h, http.MethodPost, "/api/sim/tick", `{"minutes":60}`, cookie)
+	if tick.Code != http.StatusOK {
+		t.Fatalf("推进模拟时间应 200，实际 %d：%s", tick.Code, tick.Body.String())
+	}
+
+	after := 0
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM state_history").Scan(&after); err != nil {
+		t.Fatalf("读取历史数量失败: %v", err)
+	}
+	if after < before {
+		t.Fatalf("状态历史不应减少：推进前 %d，推进后 %d", before, after)
+	}
+
+	state := do(t, h, http.MethodGet,
+		"/api/items/00000000-0000-4000-8000-000000000304/states", "", cookie)
+	if state.Code != http.StatusOK || !strings.Contains(state.Body.String(), `"capabilityKey":"temperature"`) {
+		t.Fatalf("tick 后传感器状态应可读，实际 %d：%s", state.Code, state.Body.String())
 	}
 }

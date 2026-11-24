@@ -674,6 +674,79 @@ paths:
                   $ref: "#/components/schemas/CapabilityState"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/items/{id}/history:
+    get:
+      operationId: listItemHistory
+      summary: 按时间倒序读取物品状态变化历史
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: key
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 64
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: 状态变化历史
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StateHistory"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/sim/tick:
+    post:
+      operationId: advanceSimulation
+      summary: 推进模拟器指定分钟数
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [minutes]
+              additionalProperties: false
+              properties:
+                minutes:
+                  type: integer
+                  minimum: 1
+                  maximum: 1440
+      responses:
+        "200":
+          description: 环境已演化
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [minutes, simulatedAt]
+                properties:
+                  minutes:
+                    type: integer
+                  simulatedAt:
+                    type: string
+                    format: date-time
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /api/command-logs:
     get:
       operationId: listCommandLogs
@@ -744,6 +817,26 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    StateHistory:
+      type: object
+      required: [id, itemId, capabilityKey, value, source, recordedAt]
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          format: int64
+        itemId:
+          type: string
+          format: uuid
+        capabilityKey:
+          type: string
+        value: {}
+        source:
+          type: string
+          enum: [manual, automation, device, timeout]
+        recordedAt:
+          type: string
+          format: date-time
     CapabilityState:
       type: object
       required: [itemId, capabilityKey, value, source, updatedAt]
