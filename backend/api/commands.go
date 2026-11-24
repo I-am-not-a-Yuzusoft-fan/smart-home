@@ -17,7 +17,7 @@ import (
 
 type CommandHandler interface {
 	Handle(context.Context, control.Command) (control.CommandResult, error)
-	ListLogs(context.Context, int32) ([]storegen.CommandLog, error)
+	ListLogs(context.Context, int32) ([]storegen.ListCommandLogsRow, error)
 	ListStates(context.Context, uuid.UUID) ([]storegen.CapabilityState, error)
 }
 

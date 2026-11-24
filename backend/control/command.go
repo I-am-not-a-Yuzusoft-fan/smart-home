@@ -37,7 +37,7 @@ type CommandResult struct {
 
 type CommandHandler interface {
 	Handle(ctx context.Context, command Command) (CommandResult, error)
-	ListLogs(ctx context.Context, limit int32) ([]storegen.CommandLog, error)
+	ListLogs(ctx context.Context, limit int32) ([]storegen.ListCommandLogsRow, error)
 	ListStates(ctx context.Context, itemID uuid.UUID) ([]storegen.CapabilityState, error)
 }
 
@@ -51,7 +51,7 @@ func NewCommandHandler(pool *pgxpool.Pool, adapter device.Adapter, timeout time.
 	return &Handler{pool: pool, adapter: adapter, timeout: timeout}
 }
 
-func (h *Handler) ListLogs(ctx context.Context, limit int32) ([]storegen.CommandLog, error) {
+func (h *Handler) ListLogs(ctx context.Context, limit int32) ([]storegen.ListCommandLogsRow, error) {
 	return storegen.New(h.pool).ListCommandLogs(ctx, limit)
 }
 
@@ -68,7 +68,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 			_ = json.Unmarshal(existing.Target, &value)
 			return CommandResult{RequestID: command.RequestID, Status: "ok", Value: value}, nil
 		}
-		return CommandResult{}, &CommandError{Code: statusErrorCode(existing.Status), Message: text(existing.Error)}
+		return CommandResult{}, &CommandError{Code: replayErrorCode(existing), Message: text(existing.Error)}
 	}
 
 	item, err := q.GetItem(ctx, pgUUID(command.ItemID))
@@ -150,6 +150,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 			RequestID:   pgUUID(command.RequestID),
 			Status:      "rejected",
 			Error:       pgText(msg),
+			ErrorCode:   pgText(code),
 			CompletedAt: pgTime(now),
 			DurationMs:  pgInt32(0),
 		}); err != nil {
@@ -198,7 +199,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 			message = "设备没有响应，请稍后重试"
 		}
 		_ = txq.CompleteCommand(ctx, storegen.CompleteCommandParams{
-			RequestID: requestID, Status: status, Error: pgText(message),
+			RequestID: requestID, Status: status, Error: pgText(message), ErrorCode: pgText(code),
 			CompletedAt: pgTime(now), DurationMs: pgInt32(int32(time.Since(now).Milliseconds())),
 		})
 		if err := tx.Commit(ctx); err != nil {
@@ -222,7 +223,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 		return CommandResult{}, err
 	}
 	if err := txq.CompleteCommand(ctx, storegen.CompleteCommandParams{
-		RequestID: requestID, Status: "ok", Error: pgtype.Text{},
+		RequestID: requestID, Status: "ok", Error: pgtype.Text{}, ErrorCode: pgtype.Text{},
 		CompletedAt: pgTime(now), DurationMs: pgInt32(int32(time.Since(now).Milliseconds())),
 	}); err != nil {
 		return CommandResult{}, err
@@ -239,6 +240,16 @@ type CommandError struct {
 }
 
 func (e *CommandError) Error() string { return e.Message }
+
+// replayErrorCode 返回首次执行时的错误码。
+// 老数据没有 error_code 列，退回按 status 推一个最接近的码。
+func replayErrorCode(existing storegen.GetCommandByRequestIDRow) string {
+	if existing.ErrorCode.Valid && existing.ErrorCode.String != "" {
+		return existing.ErrorCode.String
+	}
+	return statusErrorCode(existing.Status)
+}
+
 func statusErrorCode(status string) string {
 	if status == "rejected" {
 		return "RANGE_OUT_OF_BOUNDS"

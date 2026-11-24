@@ -29,11 +29,11 @@ RETURNING id;
 
 -- name: CompleteCommand :exec
 UPDATE command_log
-SET status = $2, error = $3, completed_at = $4, duration_ms = $5
+SET status = $2, error = $3, error_code = $4, completed_at = $5, duration_ms = $6
 WHERE request_id = $1;
 
 -- name: GetCommandByRequestID :one
-SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
+SELECT id, request_id, item_id, capability_key, target, status, error, error_code, source, created_by,
        created_at, completed_at, duration_ms
 FROM command_log
 WHERE request_id = $1;

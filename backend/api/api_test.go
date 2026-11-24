@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api"
@@ -27,6 +28,12 @@ import (
 // 这是 spec 里约定的 api 接缝：httptest 端到端，不打桩数据库——
 // 登录要校验的正是 seed 里的 bcrypt 哈希，打桩就等于没验。
 func newTestServer(t *testing.T) http.Handler {
+	t.Helper()
+	return newTestServerWith(t, device.NewSimulatorAdapter(10*time.Millisecond, 0), time.Second)
+}
+
+// newTestServerWith 允许替换设备适配器与命令超时，用来覆盖失败/超时路径。
+func newTestServerWith(t *testing.T, adapter device.Adapter, timeout time.Duration) http.Handler {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -46,13 +53,39 @@ func newTestServer(t *testing.T) http.Handler {
 		api.NewPGPlan(pool),
 		api.NewPGItemTypes(pool),
 		itemstore.NewItems(pool),
-		control.NewCommandHandler(pool, device.NewSimulatorAdapter(10*time.Millisecond, 0), time.Second),
+		control.NewCommandHandler(pool, adapter, timeout),
 		api.NewSessionCodec("test-secret", time.Hour),
 		false,
 		"test",
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	return srv.Router()
+}
+
+// commandRow 直接按 requestId 查 command_log：断言不依赖「最近 N 条」，
+// 也不会因为重放到旧记录而误判（每个用例用新生成的 requestId）。
+type commandRow struct {
+	Status    string
+	Error     *string
+	ErrorCode *string
+}
+
+func commandLogOf(t *testing.T, requestID string) commandRow {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("连接数据库失败: %v", err)
+	}
+	defer pool.Close()
+	var row commandRow
+	err = pool.QueryRow(context.Background(),
+		`SELECT status, error, error_code FROM command_log WHERE request_id = $1`, requestID).
+		Scan(&row.Status, &row.Error, &row.ErrorCode)
+	if err != nil {
+		t.Fatalf("查询命令 %s 失败: %v", requestID, err)
+	}
+	return row
 }
 
 func do(t *testing.T, h http.Handler, method, path string, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
@@ -212,8 +245,9 @@ func TestSendLightCommandAndRangeReject(t *testing.T) {
 	cookie := sessionCookie(t, login)
 	itemID := "00000000-0000-4000-8000-000000000301"
 
+	onID := uuid.NewString()
 	on := do(t, h, http.MethodPost, "/api/items/"+itemID+"/commands",
-		`{"capabilityKey":"on","value":true,"requestId":"10000000-0000-4000-8000-000000000001"}`, cookie)
+		`{"capabilityKey":"on","value":true,"requestId":"`+onID+`"}`, cookie)
 	if on.Code != http.StatusAccepted {
 		t.Fatalf("灯开关命令应 202，实际 %d：%s", on.Code, on.Body.String())
 	}
@@ -227,8 +261,9 @@ func TestSendLightCommandAndRangeReject(t *testing.T) {
 		t.Fatalf("灯状态未落库：%s", states.Body.String())
 	}
 
+	rejectID := uuid.NewString()
 	rejected := do(t, h, http.MethodPost, "/api/items/"+itemID+"/commands",
-		`{"capabilityKey":"brightness","value":101,"requestId":"10000000-0000-4000-8000-000000000002"}`, cookie)
+		`{"capabilityKey":"brightness","value":101,"requestId":"`+rejectID+`"}`, cookie)
 	if rejected.Code != http.StatusBadRequest {
 		t.Fatalf("亮度越界应 400，实际 %d：%s", rejected.Code, rejected.Body.String())
 	}
@@ -236,13 +271,16 @@ func TestSendLightCommandAndRangeReject(t *testing.T) {
 		t.Fatalf("越界错误码应为 RANGE_OUT_OF_BOUNDS，实际 %q", code)
 	}
 
-	logs := do(t, h, http.MethodGet, "/api/command-logs?limit=10", "", cookie)
-	if logs.Code != http.StatusOK {
-		t.Fatalf("读取操作记录应 200，实际 %d", logs.Code)
+	row := commandLogOf(t, rejectID)
+	if row.Status != "rejected" || row.ErrorCode == nil || *row.ErrorCode != "RANGE_OUT_OF_BOUNDS" {
+		t.Fatalf("越界应写 rejected + RANGE_OUT_OF_BOUNDS，实际 %+v", row)
 	}
-	if !strings.Contains(logs.Body.String(), `10000000-0000-4000-8000-000000000002`) ||
-		!strings.Contains(logs.Body.String(), `"status":"rejected"`) {
-		t.Fatalf("越界应写 rejected 操作记录：%s", logs.Body.String())
+
+	// 重放同一条被拒命令必须返回与首次一致的结果（幂等），而不是重新跑一遍。
+	replay := do(t, h, http.MethodPost, "/api/items/"+itemID+"/commands",
+		`{"capabilityKey":"brightness","value":101,"requestId":"`+rejectID+`"}`, cookie)
+	if replay.Code != http.StatusBadRequest || errorCode(t, replay) != "RANGE_OUT_OF_BOUNDS" {
+		t.Fatalf("重放越界命令应仍 400 RANGE_OUT_OF_BOUNDS，实际 %d %s", replay.Code, replay.Body.String())
 	}
 }
 
@@ -284,13 +322,57 @@ func TestWrongCapabilityTypeIsValidationFailed(t *testing.T) {
 	h := newTestServer(t)
 	login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
 	cookie := sessionCookie(t, login)
+	requestID := uuid.NewString()
 	w := do(t, h, http.MethodPost,
 		"/api/items/00000000-0000-4000-8000-000000000301/commands",
-		`{"capabilityKey":"brightness","value":"hot","requestId":"30000000-0000-4000-8000-000000000001"}`, cookie)
+		`{"capabilityKey":"brightness","value":"hot","requestId":"`+requestID+`"}`, cookie)
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("不存在能力应 400，实际 %d：%s", w.Code, w.Body.String())
+		t.Fatalf("类型错误应 400，实际 %d：%s", w.Code, w.Body.String())
 	}
 	if code := errorCode(t, w); code != "VALIDATION_FAILED" {
 		t.Fatalf("类型错误应 VALIDATION_FAILED，实际 %q", code)
+	}
+	// 重放时必须返回同一个码（曾经因为 status 只记 rejected 而变成 RANGE_OUT_OF_BOUNDS）。
+	replay := do(t, h, http.MethodPost,
+		"/api/items/00000000-0000-4000-8000-000000000301/commands",
+		`{"capabilityKey":"brightness","value":"hot","requestId":"`+requestID+`"}`, cookie)
+	if code := errorCode(t, replay); code != "VALIDATION_FAILED" {
+		t.Fatalf("重放类型错误应仍为 VALIDATION_FAILED，实际 %q（%s）", code, replay.Body.String())
+	}
+}
+
+// TestCommandFailureAndTimeoutAreRecorded 覆盖两条以前「只在发布配置下不可达」的路径：
+// 设备不可用、设备超时都要落 command_log，并且重放时返回同一个错误码。
+func TestCommandFailureAndTimeoutAreRecorded(t *testing.T) {
+	cases := []struct {
+		name    string
+		adapter device.Adapter
+		timeout time.Duration
+		code    string
+		status  string
+	}{
+		{"unavailable", device.NewSimulatorAdapter(0, 1), time.Second, "DEVICE_UNAVAILABLE", "failed"},
+		{"timeout", device.NewSimulatorAdapter(200*time.Millisecond, 0), 20 * time.Millisecond, "DEVICE_TIMEOUT", "timeout"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestServerWith(t, tc.adapter, tc.timeout)
+			login := do(t, h, http.MethodPost, "/api/auth/login", `{"username":"zhang","password":"demo1234"}`, nil)
+			cookie := sessionCookie(t, login)
+			requestID := uuid.NewString()
+			body := `{"capabilityKey":"on","value":true,"requestId":"` + requestID + `"}`
+			w := do(t, h, http.MethodPost, "/api/items/00000000-0000-4000-8000-000000000301/commands", body, cookie)
+			if w.Code != http.StatusServiceUnavailable || errorCode(t, w) != tc.code {
+				t.Fatalf("应 503 %s，实际 %d %s", tc.code, w.Code, w.Body.String())
+			}
+			row := commandLogOf(t, requestID)
+			if row.Status != tc.status || row.ErrorCode == nil || *row.ErrorCode != tc.code {
+				t.Fatalf("命令日志应为 %s/%s，实际 %+v", tc.status, tc.code, row)
+			}
+			replay := do(t, h, http.MethodPost, "/api/items/00000000-0000-4000-8000-000000000301/commands", body, cookie)
+			if replay.Code != http.StatusServiceUnavailable || errorCode(t, replay) != tc.code {
+				t.Fatalf("重放应仍 503 %s，实际 %d %s", tc.code, replay.Code, replay.Body.String())
+			}
+		})
 	}
 }

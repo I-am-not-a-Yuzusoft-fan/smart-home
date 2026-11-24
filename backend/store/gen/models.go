@@ -44,6 +44,7 @@ type CommandLog struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
 	DurationMs    pgtype.Int4        `json:"duration_ms"`
+	ErrorCode     pgtype.Text        `json:"error_code"`
 }
 
 // 墙端点；多面墙共享同一端点，保证闭合判定为精确相等而非浮点近似

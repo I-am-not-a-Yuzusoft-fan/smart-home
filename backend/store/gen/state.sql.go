@@ -26,7 +26,7 @@ func (q *Queries) BumpPlanVersion(ctx context.Context) (int64, error) {
 
 const completeCommand = `-- name: CompleteCommand :exec
 UPDATE command_log
-SET status = $2, error = $3, completed_at = $4, duration_ms = $5
+SET status = $2, error = $3, error_code = $4, completed_at = $5, duration_ms = $6
 WHERE request_id = $1
 `
 
@@ -34,6 +34,7 @@ type CompleteCommandParams struct {
 	RequestID   pgtype.UUID        `json:"request_id"`
 	Status      string             `json:"status"`
 	Error       pgtype.Text        `json:"error"`
+	ErrorCode   pgtype.Text        `json:"error_code"`
 	CompletedAt pgtype.Timestamptz `json:"completed_at"`
 	DurationMs  pgtype.Int4        `json:"duration_ms"`
 }
@@ -43,6 +44,7 @@ func (q *Queries) CompleteCommand(ctx context.Context, arg CompleteCommandParams
 		arg.RequestID,
 		arg.Status,
 		arg.Error,
+		arg.ErrorCode,
 		arg.CompletedAt,
 		arg.DurationMs,
 	)
@@ -105,15 +107,31 @@ func (q *Queries) DeleteWallByID(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getCommandByRequestID = `-- name: GetCommandByRequestID :one
-SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
+SELECT id, request_id, item_id, capability_key, target, status, error, error_code, source, created_by,
        created_at, completed_at, duration_ms
 FROM command_log
 WHERE request_id = $1
 `
 
-func (q *Queries) GetCommandByRequestID(ctx context.Context, requestID pgtype.UUID) (CommandLog, error) {
+type GetCommandByRequestIDRow struct {
+	ID            int64              `json:"id"`
+	RequestID     pgtype.UUID        `json:"request_id"`
+	ItemID        pgtype.UUID        `json:"item_id"`
+	CapabilityKey pgtype.Text        `json:"capability_key"`
+	Target        json.RawMessage    `json:"target"`
+	Status        string             `json:"status"`
+	Error         pgtype.Text        `json:"error"`
+	ErrorCode     pgtype.Text        `json:"error_code"`
+	Source        string             `json:"source"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	DurationMs    pgtype.Int4        `json:"duration_ms"`
+}
+
+func (q *Queries) GetCommandByRequestID(ctx context.Context, requestID pgtype.UUID) (GetCommandByRequestIDRow, error) {
 	row := q.db.QueryRow(ctx, getCommandByRequestID, requestID)
-	var i CommandLog
+	var i GetCommandByRequestIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.RequestID,
@@ -122,6 +140,7 @@ func (q *Queries) GetCommandByRequestID(ctx context.Context, requestID pgtype.UU
 		&i.Target,
 		&i.Status,
 		&i.Error,
+		&i.ErrorCode,
 		&i.Source,
 		&i.CreatedBy,
 		&i.CreatedAt,
@@ -422,15 +441,30 @@ ORDER BY created_at DESC, id DESC
 LIMIT $1
 `
 
-func (q *Queries) ListCommandLogs(ctx context.Context, limit int32) ([]CommandLog, error) {
+type ListCommandLogsRow struct {
+	ID            int64              `json:"id"`
+	RequestID     pgtype.UUID        `json:"request_id"`
+	ItemID        pgtype.UUID        `json:"item_id"`
+	CapabilityKey pgtype.Text        `json:"capability_key"`
+	Target        json.RawMessage    `json:"target"`
+	Status        string             `json:"status"`
+	Error         pgtype.Text        `json:"error"`
+	Source        string             `json:"source"`
+	CreatedBy     pgtype.UUID        `json:"created_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	DurationMs    pgtype.Int4        `json:"duration_ms"`
+}
+
+func (q *Queries) ListCommandLogs(ctx context.Context, limit int32) ([]ListCommandLogsRow, error) {
 	rows, err := q.db.Query(ctx, listCommandLogs, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []CommandLog
+	var items []ListCommandLogsRow
 	for rows.Next() {
-		var i CommandLog
+		var i ListCommandLogsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.RequestID,
