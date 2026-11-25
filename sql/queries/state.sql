@@ -52,7 +52,7 @@ FROM command_log
 WHERE request_id = $1;
 
 -- name: ListCommandLogs :many
-SELECT id, request_id, item_id, capability_key, target, status, error, source, created_by,
+SELECT id, request_id, item_id, capability_key, target, status, error, error_code, source, created_by,
        created_at, completed_at, duration_ms
 FROM command_log
 ORDER BY created_at DESC, id DESC

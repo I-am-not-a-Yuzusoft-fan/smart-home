@@ -690,17 +690,20 @@ type CommandInput struct {
 
 // CommandLog defines model for CommandLog.
 type CommandLog struct {
-	CapabilityKey *string             `json:"capabilityKey,omitempty"`
-	CompletedAt   *time.Time          `json:"completedAt,omitempty"`
-	CreatedAt     time.Time           `json:"createdAt"`
-	DurationMs    *int                `json:"durationMs,omitempty"`
-	Error         *string             `json:"error,omitempty"`
-	Id            int64               `json:"id"`
-	ItemId        *openapi_types.UUID `json:"itemId,omitempty"`
-	RequestId     openapi_types.UUID  `json:"requestId"`
-	Source        CommandLogSource    `json:"source"`
-	Status        CommandLogStatus    `json:"status"`
-	Target        interface{}         `json:"target,omitempty"`
+	CapabilityKey *string    `json:"capabilityKey,omitempty"`
+	CompletedAt   *time.Time `json:"completedAt,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	DurationMs    *int       `json:"durationMs,omitempty"`
+	Error         *string    `json:"error,omitempty"`
+
+	// ErrorCode 失败原因码（与命令响应里的 code 一致），成功时缺省
+	ErrorCode *string             `json:"errorCode,omitempty"`
+	Id        int64               `json:"id"`
+	ItemId    *openapi_types.UUID `json:"itemId,omitempty"`
+	RequestId openapi_types.UUID  `json:"requestId"`
+	Source    CommandLogSource    `json:"source"`
+	Status    CommandLogStatus    `json:"status"`
+	Target    interface{}         `json:"target,omitempty"`
 }
 
 // CommandLogSource defines model for CommandLog.Source.

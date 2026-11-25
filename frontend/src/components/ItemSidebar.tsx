@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import type { Item, ItemKind, ItemType, Room } from '../api/client.ts'
 import { useLiveStore } from '../store/liveState.ts'
 import { liveValuesFor, stateSummary } from '../features/control/live.ts'
+import { useNow } from '../features/control/useNow.ts'
 
 export type ItemFilters = {
   room: string
@@ -34,10 +35,12 @@ export default function ItemSidebar({
 }: Props) {
   const namedRooms = useMemo(() => rooms.filter((room) => room.name), [rooms])
   const liveStates = useLiveStore((store) => store.states)
+  // 定时重渲染：传感器停止上报 60 秒后列表也要变「不可用」，而不是停在最后一个读数。
+  const nowMs = useNow()
   const typeByKey = useMemo(() => new Map(types.map((typ) => [typ.key, typ])), [types])
   const summaryOf = (item: Item) => {
     const type = typeByKey.get(item.typeKey)
-    return item.kind === 'device' ? stateSummary(type, liveValuesFor(liveStates, item.id, type)) : ''
+    return item.kind === 'device' ? stateSummary(type, liveValuesFor(liveStates, item.id, type, nowMs)) : ''
   }
   const visibleItems = useMemo(() => {
     const q = filters.q.trim().toLowerCase()

@@ -71,6 +71,7 @@ import {
 import { replacePlan, type WallSnapshot } from '../api/client.ts'
 import { sampleAsFile, syntheticCalibrations, type UnderlaySample } from '../features/plan/samples.ts'
 import { connectLiveState, useLiveStore } from '../store/liveState.ts'
+import { useNow } from '../features/control/useNow.ts'
 import { liveValuesFor, stateSummary } from '../features/control/live.ts'
 
 type Props = {
@@ -411,11 +412,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
   const typeByKey = useMemo(() => new Map(types.map((typ) => [typ.key, typ])), [types])
   const liveStates = useLiveStore((store) => store.states)
+  const nowMs = useNow()
   const liveConnected = useLiveStore((store) => store.connected)
   const summaryOf = (item: Item) => {
     if (item.kind !== 'device') return ''
     const type = typeByKey.get(item.typeKey)
-    return stateSummary(type, liveValuesFor(liveStates, item.id, type))
+    return stateSummary(type, liveValuesFor(liveStates, item.id, type, nowMs))
   }
   const selectedItem = items.find((item) => item.id === selectedItemId) ?? null
   const selectedItemType = selectedItem ? typeByKey.get(selectedItem.typeKey) : undefined
