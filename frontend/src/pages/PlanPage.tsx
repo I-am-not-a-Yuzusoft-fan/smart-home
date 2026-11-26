@@ -38,6 +38,7 @@ import ItemInspector from '../components/ItemInspector.tsx'
 import ItemSidebar, { type ItemFilters } from '../components/ItemSidebar.tsx'
 import { UnderlayPanel } from '../components/UnderlayPanel.tsx'
 import TypeManager from '../components/TypeManager.tsx'
+import ModesPanel from '../features/modes/ModesPanel.tsx'
 import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from '../features/plan/edit.ts'
 import {
   arcCircle,
@@ -337,6 +338,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [selectedRoomHash, setSelectedRoomHash] = useState<string | null>(null)
   const [filters, setFilters] = useState<ItemFilters>({ room: '', kind: '', q: '' })
   const [showTypes, setShowTypes] = useState(false)
+  const [showModes, setShowModes] = useState(false)
   const [showDims, setShowDims] = useState(true)
   // 正在拖的端点：整段坐标都存下来，渲染预览时直接用，不必回头找 wall。
   const [editing, setEditing] = useState<Edit | null>(null)
@@ -1836,6 +1838,17 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           >
             底图
           </button>
+          <button
+            onClick={() => setShowModes(true)}
+            className="whitespace-nowrap px-2 py-1 text-xs"
+            style={{
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--color-bg)',
+            }}
+          >
+            场景
+          </button>
           {user.role === 'admin' ? (
             <button
               onClick={() => setShowTypes(true)}
@@ -2425,6 +2438,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       </div>
 
       {showTypes ? <TypeManager onClose={() => setShowTypes(false)} /> : null}
+      {showModes ? <ModesPanel onClose={() => setShowModes(false)} /> : null}
     </div>
   )
 }

@@ -521,3 +521,95 @@ export const updateUnderlay = (patch: UnderlayPatch) =>
 
 /** 删掉底图（仅管理员）；幂等。 */
 export const clearUnderlay = () => request<void>('/api/plan/underlay', { method: 'DELETE' })
+
+/** 场景条件与步骤树类型，与 openapi.yaml 对齐。 */
+export type ModeCondition = {
+  itemId: string
+  capability: string
+  op: '==' | '!=' | '>' | '>=' | '<' | '<='
+  value: unknown
+}
+
+export type ModeGuard = {
+  all?: ModeCondition[]
+  any?: ModeCondition[]
+}
+
+export type ModeNode = {
+  nodeId: string
+  type: 'action' | 'delay' | 'choose'
+  alias?: string
+  enabled?: boolean
+  continueOnError?: boolean
+  itemId?: string
+  capability?: string
+  value?: unknown
+  valueFrom?: 'comfort'
+  ms?: number
+  when?: ModeGuard
+  then?: ModeNode[]
+  else?: ModeNode[]
+}
+
+export type ModeDefinition = {
+  version: number
+  guard?: ModeGuard
+  defaults?: { continueOnError?: boolean }
+  steps: ModeNode[]
+}
+
+export type Mode = {
+  id: string
+  name: string
+  definition: ModeDefinition
+  runMode: 'single' | 'restart' | 'queued' | 'parallel'
+  enabled: boolean
+  createdBy?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type RunStepStatus = 'pending' | 'running' | 'ok' | 'failed' | 'skipped'
+
+export type RunStep = {
+  runId: string
+  nodeId: string
+  path: string
+  alias?: string
+  status: RunStepStatus
+  error?: string
+  startedAt?: string
+  finishedAt?: string
+}
+
+export type RunStatus = 'running' | 'ok' | 'failed' | 'cancelled'
+
+export type Run = {
+  id: string
+  modeId?: string
+  status: RunStatus
+  source: 'manual' | 'automation' | 'device' | 'timeout'
+  startedAt: string
+  finishedAt?: string
+  steps: RunStep[]
+}
+
+/** 列出所有场景模式。 */
+export const listModes = () => request<Mode[]>('/api/modes')
+
+/** 获取单个场景模式详情。 */
+export const getMode = (id: string) => request<Mode>(`/api/modes/${encodeURIComponent(id)}`)
+
+/** 触发执行场景模式，返回 202 与初始 Run。 */
+export const runMode = (id: string, requestId?: string) =>
+  request<Run>(`/api/modes/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+    body: JSON.stringify(requestId ? { requestId } : {}),
+  })
+
+/** 查询一次执行的最新状态与步骤时间线（用于刷新/重连恢复）。 */
+export const getRun = (id: string) => request<Run>(`/api/runs/${encodeURIComponent(id)}`)
+
+/** 取消正在运行的场景执行。 */
+export const cancelRun = (id: string) =>
+  request<Run>(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })

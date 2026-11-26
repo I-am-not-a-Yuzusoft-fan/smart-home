@@ -68,6 +68,7 @@ func main() {
 		log,
 	)
 	srv.SetHub(hub)
+	srv.SetModeRunner(control.NewModeRunner(pool, commandHandler, hub))
 
 	sensorReporter := control.NewSensorReporter(pool, hub)
 	srv.SetSensorReporter(sensorReporter)

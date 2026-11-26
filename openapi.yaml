@@ -775,6 +775,119 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/modes:
+    get:
+      operationId: listModes
+      summary: 列出所有场景模式
+      responses:
+        "200":
+          description: 场景列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Mode"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+  /api/modes/{id}:
+    get:
+      operationId: getMode
+      summary: 获取单个场景模式详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 场景详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mode"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/modes/{id}/run:
+    post:
+      operationId: runMode
+      summary: 触发执行指定场景模式
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunModeRequest"
+      responses:
+        "202":
+          description: 场景执行已启动
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/runs/{id}:
+    get:
+      operationId: getRun
+      summary: 获取一次场景执行记录及全部步骤状态
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 执行详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/runs/{id}/cancel:
+    post:
+      operationId: cancelRun
+      summary: 取消正在运行的场景执行
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 已取消的执行记录
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
 components:
   securitySchemes:
@@ -1660,6 +1773,168 @@ components:
           format: double
           minimum: 0
           description: 与 wallId 一起给出；脱离墙面时忽略
+    ModeCondition:
+      type: object
+      required: [itemId, capability, op, value]
+      properties:
+        itemId:
+          type: string
+          format: uuid
+        capability:
+          type: string
+        op:
+          type: string
+          enum: ["==", "!=", ">", ">=", "<", "<="]
+        value: {}
+    ModeGuard:
+      type: object
+      properties:
+        all:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModeCondition"
+        any:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModeCondition"
+    ModeNode:
+      type: object
+      required: [nodeId, type]
+      properties:
+        nodeId:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          enum: [action, delay, choose]
+        alias:
+          type: string
+        enabled:
+          type: boolean
+        continueOnError:
+          type: boolean
+        itemId:
+          type: string
+          format: uuid
+        capability:
+          type: string
+        value: {}
+        valueFrom:
+          type: string
+          enum: [comfort]
+        ms:
+          type: integer
+          minimum: 0
+        when:
+          $ref: "#/components/schemas/ModeGuard"
+        then:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModeNode"
+        else:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModeNode"
+    ModeDefinition:
+      type: object
+      required: [version, steps]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+        guard:
+          $ref: "#/components/schemas/ModeGuard"
+        defaults:
+          type: object
+          properties:
+            continueOnError:
+              type: boolean
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/ModeNode"
+    Mode:
+      type: object
+      required: [id, name, definition, runMode, enabled, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        definition:
+          $ref: "#/components/schemas/ModeDefinition"
+        runMode:
+          type: string
+          enum: [single, restart, queued, parallel]
+        enabled:
+          type: boolean
+        createdBy:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    RunModeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        requestId:
+          type: string
+          format: uuid
+    RunStep:
+      type: object
+      required: [runId, nodeId, path, status]
+      properties:
+        runId:
+          type: string
+          format: uuid
+        nodeId:
+          type: string
+        path:
+          type: string
+        alias:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, ok, failed, skipped]
+        error:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+    Run:
+      type: object
+      required: [id, status, source, startedAt, steps]
+      properties:
+        id:
+          type: string
+          format: uuid
+        modeId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [running, ok, failed, cancelled]
+        source:
+          type: string
+          enum: [manual, automation, device, timeout]
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunStep"
     Error:
       type: object
       required: [error]
