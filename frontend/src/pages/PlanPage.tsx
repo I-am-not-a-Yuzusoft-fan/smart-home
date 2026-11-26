@@ -2438,7 +2438,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       </div>
 
       {showTypes ? <TypeManager onClose={() => setShowTypes(false)} /> : null}
-      {showModes ? <ModesPanel onClose={() => setShowModes(false)} /> : null}
+      {showModes ? <ModesPanel userRole={user.role} onClose={() => setShowModes(false)} /> : null}
     </div>
   )
 }

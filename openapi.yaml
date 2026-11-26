@@ -747,6 +747,41 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /api/sim/env:
+    get:
+      operationId: getSimEnv
+      summary: 获取当前仿真季节与室外环境设定
+      responses:
+        "200":
+          description: 当前仿真环境配置
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimEnv"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+    put:
+      operationId: updateSimEnv
+      summary: 更新仿真季节与室外温湿度（仅管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimEnvInput"
+      responses:
+        "200":
+          description: 已更新的仿真环境配置
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimEnv"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /api/command-logs:
     get:
       operationId: listCommandLogs
@@ -1903,6 +1938,9 @@ components:
           enum: [pending, running, ok, failed, skipped]
         error:
           type: string
+        note:
+          type: string
+          description: 步骤执行的可读说明或策略调节依据文案
         startedAt:
           type: string
           format: date-time
@@ -1938,6 +1976,40 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RunStep"
+    SimEnvInput:
+      type: object
+      required: [season]
+      additionalProperties: false
+      properties:
+        season:
+          type: string
+          enum: [auto, spring, summer, autumn, winter]
+        outdoorTemp:
+          type: number
+          format: double
+          minimum: -40
+          maximum: 60
+        outdoorHumidity:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+    SimEnv:
+      type: object
+      required: [season, effectiveSeason]
+      properties:
+        season:
+          type: string
+          enum: [auto, spring, summer, autumn, winter]
+        effectiveSeason:
+          type: string
+          enum: [spring, summer, autumn, winter]
+        outdoorTemp:
+          type: number
+          format: double
+        outdoorHumidity:
+          type: number
+          format: double
     Error:
       type: object
       required: [error]

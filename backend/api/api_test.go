@@ -63,8 +63,12 @@ func newTestServerWith(t *testing.T, adapter device.Adapter, timeout time.Durati
 		"test",
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
+	simEnv := control.NewSimEnvStore()
+	modeRunner := control.NewModeRunner(pool, commandHandler, hub)
+	modeRunner.SetSimEnv(simEnv)
 	srv.SetHub(hub)
-	srv.SetModeRunner(control.NewModeRunner(pool, commandHandler, hub))
+	srv.SetSimEnv(simEnv)
+	srv.SetModeRunner(modeRunner)
 	srv.SetSensorReporter(control.NewSensorReporter(pool, hub))
 	return srv.Router()
 }

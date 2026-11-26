@@ -10,6 +10,7 @@ sql:
       - "sql/0006_wall_pair_arc.sql"
       - "sql/0007_room_kind_balcony.sql"
       - "sql/0008_command_error_code.sql"
+      - "sql/0009_run_step_note.sql"
     queries: "sql/queries"
     engine: "postgresql"
     gen:

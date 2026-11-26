@@ -635,6 +635,84 @@ func (e SessionUserRole) Valid() bool {
 	}
 }
 
+// Defines values for SimEnvEffectiveSeason.
+const (
+	SimEnvEffectiveSeasonAutumn SimEnvEffectiveSeason = "autumn"
+	SimEnvEffectiveSeasonSpring SimEnvEffectiveSeason = "spring"
+	SimEnvEffectiveSeasonSummer SimEnvEffectiveSeason = "summer"
+	SimEnvEffectiveSeasonWinter SimEnvEffectiveSeason = "winter"
+)
+
+// Valid indicates whether the value is a known member of the SimEnvEffectiveSeason enum.
+func (e SimEnvEffectiveSeason) Valid() bool {
+	switch e {
+	case SimEnvEffectiveSeasonAutumn:
+		return true
+	case SimEnvEffectiveSeasonSpring:
+		return true
+	case SimEnvEffectiveSeasonSummer:
+		return true
+	case SimEnvEffectiveSeasonWinter:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SimEnvSeason.
+const (
+	SimEnvSeasonAuto   SimEnvSeason = "auto"
+	SimEnvSeasonAutumn SimEnvSeason = "autumn"
+	SimEnvSeasonSpring SimEnvSeason = "spring"
+	SimEnvSeasonSummer SimEnvSeason = "summer"
+	SimEnvSeasonWinter SimEnvSeason = "winter"
+)
+
+// Valid indicates whether the value is a known member of the SimEnvSeason enum.
+func (e SimEnvSeason) Valid() bool {
+	switch e {
+	case SimEnvSeasonAuto:
+		return true
+	case SimEnvSeasonAutumn:
+		return true
+	case SimEnvSeasonSpring:
+		return true
+	case SimEnvSeasonSummer:
+		return true
+	case SimEnvSeasonWinter:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SimEnvInputSeason.
+const (
+	SimEnvInputSeasonAuto   SimEnvInputSeason = "auto"
+	SimEnvInputSeasonAutumn SimEnvInputSeason = "autumn"
+	SimEnvInputSeasonSpring SimEnvInputSeason = "spring"
+	SimEnvInputSeasonSummer SimEnvInputSeason = "summer"
+	SimEnvInputSeasonWinter SimEnvInputSeason = "winter"
+)
+
+// Valid indicates whether the value is a known member of the SimEnvInputSeason enum.
+func (e SimEnvInputSeason) Valid() bool {
+	switch e {
+	case SimEnvInputSeasonAuto:
+		return true
+	case SimEnvInputSeasonAutumn:
+		return true
+	case SimEnvInputSeasonSpring:
+		return true
+	case SimEnvInputSeasonSummer:
+		return true
+	case SimEnvInputSeasonWinter:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for StaleRoomKind.
 const (
 	StaleRoomKindBalcony  StaleRoomKind = "balcony"
@@ -1295,14 +1373,17 @@ type RunModeRequest struct {
 
 // RunStep defines model for RunStep.
 type RunStep struct {
-	Alias      *string            `json:"alias,omitempty"`
-	Error      *string            `json:"error,omitempty"`
-	FinishedAt *time.Time         `json:"finishedAt,omitempty"`
-	NodeId     string             `json:"nodeId"`
-	Path       string             `json:"path"`
-	RunId      openapi_types.UUID `json:"runId"`
-	StartedAt  *time.Time         `json:"startedAt,omitempty"`
-	Status     RunStepStatus      `json:"status"`
+	Alias      *string    `json:"alias,omitempty"`
+	Error      *string    `json:"error,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	NodeId     string     `json:"nodeId"`
+
+	// Note 步骤执行的可读说明或策略调节依据文案
+	Note      *string            `json:"note,omitempty"`
+	Path      string             `json:"path"`
+	RunId     openapi_types.UUID `json:"runId"`
+	StartedAt *time.Time         `json:"startedAt,omitempty"`
+	Status    RunStepStatus      `json:"status"`
 }
 
 // RunStepStatus defines model for RunStep.Status.
@@ -1318,6 +1399,30 @@ type SessionUser struct {
 
 // SessionUserRole defines model for SessionUser.Role.
 type SessionUserRole string
+
+// SimEnv defines model for SimEnv.
+type SimEnv struct {
+	EffectiveSeason SimEnvEffectiveSeason `json:"effectiveSeason"`
+	OutdoorHumidity *float64              `json:"outdoorHumidity,omitempty"`
+	OutdoorTemp     *float64              `json:"outdoorTemp,omitempty"`
+	Season          SimEnvSeason          `json:"season"`
+}
+
+// SimEnvEffectiveSeason defines model for SimEnv.EffectiveSeason.
+type SimEnvEffectiveSeason string
+
+// SimEnvSeason defines model for SimEnv.Season.
+type SimEnvSeason string
+
+// SimEnvInput defines model for SimEnvInput.
+type SimEnvInput struct {
+	OutdoorHumidity *float64          `json:"outdoorHumidity,omitempty"`
+	OutdoorTemp     *float64          `json:"outdoorTemp,omitempty"`
+	Season          SimEnvInputSeason `json:"season"`
+}
+
+// SimEnvInputSeason defines model for SimEnvInput.Season.
+type SimEnvInputSeason string
 
 // StaleRoom 失配的房间名——哈希已经不属于任何现存房间。
 type StaleRoom struct {
@@ -1511,6 +1616,9 @@ type UpdateUnderlayJSONRequestBody = UnderlayPatch
 // UpdateRoomNameJSONRequestBody defines body for UpdateRoomName for application/json ContentType.
 type UpdateRoomNameJSONRequestBody = RoomNameInput
 
+// UpdateSimEnvJSONRequestBody defines body for UpdateSimEnv for application/json ContentType.
+type UpdateSimEnvJSONRequestBody = SimEnvInput
+
 // AdvanceSimulationJSONRequestBody defines body for AdvanceSimulation for application/json ContentType.
 type AdvanceSimulationJSONRequestBody AdvanceSimulationJSONBody
 
@@ -1615,6 +1723,12 @@ type ServerInterface interface {
 	// CancelRun 取消正在运行的场景执行
 	// (POST /api/runs/{id}/cancel)
 	CancelRun(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// GetSimEnv 获取当前仿真季节与室外环境设定
+	// (GET /api/sim/env)
+	GetSimEnv(w http.ResponseWriter, r *http.Request)
+	// UpdateSimEnv 更新仿真季节与室外温湿度（仅管理员）
+	// (PUT /api/sim/env)
+	UpdateSimEnv(w http.ResponseWriter, r *http.Request)
 	// AdvanceSimulation 推进模拟器指定分钟数
 	// (POST /api/sim/tick)
 	AdvanceSimulation(w http.ResponseWriter, r *http.Request)
@@ -1816,6 +1930,18 @@ func (_ Unimplemented) GetRun(w http.ResponseWriter, r *http.Request, id openapi
 // CancelRun 取消正在运行的场景执行
 // (POST /api/runs/{id}/cancel)
 func (_ Unimplemented) CancelRun(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetSimEnv 获取当前仿真季节与室外环境设定
+// (GET /api/sim/env)
+func (_ Unimplemented) GetSimEnv(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateSimEnv 更新仿真季节与室外温湿度（仅管理员）
+// (PUT /api/sim/env)
+func (_ Unimplemented) UpdateSimEnv(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -2559,6 +2685,34 @@ func (siw *ServerInterfaceWrapper) CancelRun(w http.ResponseWriter, r *http.Requ
 	handler.ServeHTTP(w, r)
 }
 
+// GetSimEnv operation middleware
+func (siw *ServerInterfaceWrapper) GetSimEnv(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSimEnv(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateSimEnv operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSimEnv(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateSimEnv(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // AdvanceSimulation operation middleware
 func (siw *ServerInterfaceWrapper) AdvanceSimulation(w http.ResponseWriter, r *http.Request) {
 
@@ -2838,6 +2992,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/api/sim/tick", wrapper.AdvanceSimulation)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/sim/env", wrapper.GetSimEnv)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/api/sim/env", wrapper.UpdateSimEnv)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/command-logs", wrapper.ListCommandLogs)

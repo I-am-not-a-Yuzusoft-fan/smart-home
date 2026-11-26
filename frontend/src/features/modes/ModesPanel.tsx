@@ -2,14 +2,34 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   cancelRun,
   getRun,
+  getSimEnv,
   listModes,
   runMode,
+  updateSimEnv,
+  type EffectiveSeason,
   type Mode,
   type Run,
   type RunStatus,
   type RunStep,
   type RunStepStatus,
+  type SimEnv,
+  type SimSeason,
 } from '../../api/client.ts'
+
+const SEASON_LABEL: Record<SimSeason, string> = {
+  auto: '自动（按月份）',
+  spring: '春季',
+  summer: '夏季',
+  autumn: '秋季',
+  winter: '冬季',
+}
+
+const EFFECTIVE_SEASON_LABEL: Record<EffectiveSeason, string> = {
+  spring: '春季',
+  summer: '夏季',
+  autumn: '秋季',
+  winter: '冬季',
+}
 import { useLiveStore } from '../../store/liveState.ts'
 
 const LAST_RUN_KEY = 'smarthome:lastRunId'
@@ -45,10 +65,11 @@ function formatDuration(startedAt?: string, finishedAt?: string): string {
 }
 
 type Props = {
+  userRole: 'admin' | 'member'
   onClose: () => void
 }
 
-export default function ModesPanel({ onClose }: Props) {
+export default function ModesPanel({ userRole, onClose }: Props) {
   const [modes, setModes] = useState<Mode[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -56,6 +77,10 @@ export default function ModesPanel({ onClose }: Props) {
   const [activeRun, setActiveRun] = useState<Run | null>(null)
   const [busyModeId, setBusyModeId] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  const [simEnv, setSimEnv] = useState<SimEnv | null>(null)
+  const [seasonDraft, setSeasonDraft] = useState<SimSeason>('auto')
+  const [outdoorTempDraft, setOutdoorTempDraft] = useState<string>('')
+  const [savingEnv, setSavingEnv] = useState(false)
 
   const liveRunSteps = useLiveStore((s) => (activeRun ? s.runSteps[activeRun.id] : undefined))
   const liveRunStatus = useLiveStore((s) => (activeRun ? s.runStatuses[activeRun.id] : undefined))
@@ -80,6 +105,15 @@ export default function ModesPanel({ onClose }: Props) {
         if (!cancelled) setLoading(false)
       })
 
+    getSimEnv()
+      .then((env) => {
+        if (cancelled) return
+        setSimEnv(env)
+        setSeasonDraft(env.season)
+        setOutdoorTempDraft(env.outdoorTemp !== undefined ? String(env.outdoorTemp) : '')
+      })
+      .catch(() => {})
+
     const savedRunId = sessionStorage.getItem(LAST_RUN_KEY) ?? useLiveStore.getState().latestRunId
     if (savedRunId) {
       getRun(savedRunId)
@@ -92,7 +126,7 @@ export default function ModesPanel({ onClose }: Props) {
           sessionStorage.removeItem(LAST_RUN_KEY)
         })
     }
-    return () => {
+  return () => {
       cancelled = true
     }
   }, [seedRun])
@@ -110,7 +144,7 @@ export default function ModesPanel({ onClose }: Props) {
         seedRun(run)
       })
       .catch(() => {})
-    return () => {
+  return () => {
       cancelled = true
     }
   }, [wsConnected, activeRun?.id, seedRun])
@@ -126,7 +160,7 @@ export default function ModesPanel({ onClose }: Props) {
         sessionStorage.setItem(LAST_RUN_KEY, run.id)
       })
       .catch(() => {})
-    return () => {
+  return () => {
       cancelled = true
     }
   }, [latestRunId, activeRun])
@@ -152,6 +186,7 @@ export default function ModesPanel({ onClose }: Props) {
           alias: live.alias ?? prev?.alias,
           status: live.status,
           error: live.error ?? prev?.error,
+          note: live.note ?? prev?.note,
           startedAt: live.startedAt ?? prev?.startedAt,
           finishedAt: live.finishedAt ?? prev?.finishedAt,
         })
@@ -215,6 +250,25 @@ export default function ModesPanel({ onClose }: Props) {
     }
   }
 
+  const handleSaveEnv = async () => {
+    setSavingEnv(true)
+    setError(null)
+    try {
+      const trimmed = outdoorTempDraft.trim()
+      const outdoorTemp = trimmed === '' ? undefined : Number(trimmed)
+      if (outdoorTemp !== undefined && (Number.isNaN(outdoorTemp) || outdoorTemp < -40 || outdoorTemp > 60)) {
+        setError('室外温度需在 -40 到 60℃ 之间（或留空表示未配置室外传感器）')
+        return
+      }
+      const updated = await updateSimEnv({ season: seasonDraft, outdoorTemp })
+      setSimEnv(updated)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '更新仿真环境失败')
+    } finally {
+      setSavingEnv(false)
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -253,6 +307,77 @@ export default function ModesPanel({ onClose }: Props) {
           </button>
         </header>
 
+        {simEnv ? (
+          <div
+            className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-xs"
+            style={{
+              background: 'var(--color-bg)',
+              borderBottom: '1px solid var(--color-border)',
+            }}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">温控策略仿真环境：</span>
+              <span
+                className="px-2 py-0.5 font-medium"
+                style={{ borderRadius: '999px', background: '#e0e7ff', color: '#3730a3' }}
+              >
+                当前生效：{EFFECTIVE_SEASON_LABEL[simEnv.effectiveSeason]}
+              </span>
+              {simEnv.outdoorTemp !== undefined ? (
+                <span style={{ color: 'var(--color-muted)' }}>室外 {simEnv.outdoorTemp}℃</span>
+              ) : (
+                <span style={{ color: 'var(--color-muted)' }}>未配置室外温度</span>
+              )}
+            </div>
+            {userRole === 'admin' ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  aria-label="仿真季节"
+                  value={seasonDraft}
+                  onChange={(e) => setSeasonDraft(e.target.value as SimSeason)}
+                  className="px-2 py-1 text-xs"
+                  style={{
+                    border: '1px solid var(--color-border)',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--color-surface, #fff)',
+                  }}
+                >
+                  {(Object.keys(SEASON_LABEL) as SimSeason[]).map((k) => (
+                    <option key={k} value={k}>
+                      {SEASON_LABEL[k]}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  step="0.5"
+                  placeholder="室外℃（可选）"
+                  value={outdoorTempDraft}
+                  onChange={(e) => setOutdoorTempDraft(e.target.value)}
+                  className="w-28 px-2 py-1 text-xs"
+                  style={{
+                    border: '1px solid var(--color-border)',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--color-surface, #fff)',
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={savingEnv}
+                  onClick={() => void handleSaveEnv()}
+                  className="px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
+                  style={{
+                    background: 'var(--color-primary, #4f6bed)',
+                    borderRadius: 'var(--radius-sm)',
+                  }}
+                >
+                  {savingEnv ? '应用中…' : '应用季节'}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         {error ? (
           <div
             className="mx-4 mt-3 px-3 py-2 text-xs"
@@ -284,7 +409,7 @@ export default function ModesPanel({ onClose }: Props) {
                 {modes.map((m) => {
                   const selected = m.id === selectedModeId
                   const busy = busyModeId === m.id
-                  return (
+  return (
                     <li
                       key={m.id}
                       onClick={() => setSelectedModeId(m.id)}
@@ -420,7 +545,7 @@ export default function ModesPanel({ onClose }: Props) {
                     const badge = STEP_STATUS_LABEL[st.status]
                     const dur = formatDuration(st.startedAt, st.finishedAt)
                     const depth = Math.max(0, st.path.split('.').length - 1)
-                    return (
+  return (
                       <li
                         key={st.nodeId}
                         className="p-3"
@@ -458,7 +583,19 @@ export default function ModesPanel({ onClose }: Props) {
                           </span>
                         </div>
                       </div>
-                      {st.error ? (
+                      {st.note ? (
+                        <p
+                          className="mt-1.5 px-2 py-1 text-xs"
+                          style={{
+                            background: '#eff6ff',
+                            color: '#1e40af',
+                            borderRadius: '4px',
+                          }}
+                        >
+                          调节依据：{st.note}
+                        </p>
+                      ) : null}
+                      {st.error && st.error !== st.note ? (
                         <p className="mt-1 text-xs" style={{ color: st.status === 'failed' ? '#991b1b' : 'var(--color-muted)' }}>
                           {st.error}
                         </p>

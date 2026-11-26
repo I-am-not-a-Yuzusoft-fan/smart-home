@@ -166,6 +166,8 @@ type RunStep struct {
 	Error      pgtype.Text        `json:"error"`
 	StartedAt  pgtype.Timestamptz `json:"started_at"`
 	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+	// 步骤执行的可读说明/策略调节依据文案（区别于失败错误 error）
+	Note pgtype.Text `json:"note"`
 }
 
 // 只记变化，不记采样；不建 item 外键（历史不随设备删除而消失），保留 30 天后按天清理

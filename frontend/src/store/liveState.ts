@@ -18,6 +18,7 @@ export type LiveRunStep = {
   alias?: string
   status: RunStepStatus
   error?: string
+  note?: string
   runStatus?: RunStatus
   startedAt?: string
   finishedAt?: string

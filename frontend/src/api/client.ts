@@ -578,6 +578,7 @@ export type RunStep = {
   alias?: string
   status: RunStepStatus
   error?: string
+  note?: string
   startedAt?: string
   finishedAt?: string
 }
@@ -614,3 +615,29 @@ export const getRun = (id: string) => request<Run>(`/api/runs/${encodeURICompone
 /** 取消正在运行的场景执行。 */
 export const cancelRun = (id: string) =>
   request<Run>(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+
+export type SimSeason = 'auto' | 'spring' | 'summer' | 'autumn' | 'winter'
+export type EffectiveSeason = 'spring' | 'summer' | 'autumn' | 'winter'
+
+export type SimEnv = {
+  season: SimSeason
+  effectiveSeason: EffectiveSeason
+  outdoorTemp?: number
+  outdoorHumidity?: number
+}
+
+export type SimEnvInput = {
+  season: SimSeason
+  outdoorTemp?: number
+  outdoorHumidity?: number
+}
+
+/** 读取当前仿真季节与室外环境。 */
+export const getSimEnv = () => request<SimEnv>('/api/sim/env')
+
+/** 更新仿真季节与室外环境（仅管理员）。 */
+export const updateSimEnv = (input: SimEnvInput) =>
+  request<SimEnv>('/api/sim/env', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })

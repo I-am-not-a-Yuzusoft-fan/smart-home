@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,4 +263,86 @@ func TestModeRunSingleConflictReturns409(t *testing.T) {
 		t.Fatalf("single 模式运行中再次触发应 409，实际 %d：%s", w2.Code, w2.Body.String())
 	}
 	_ = do(t, h, http.MethodPost, "/api/runs/"+started.ID+"/cancel", "", cookie)
+}
+
+func TestSimEnvPermissionsAndComfortSeasonSwitch(t *testing.T) {
+	h := newTestServer(t)
+	adminCookie := loginAs(t, h, "zhang")
+	memberCookie := loginAs(t, h, "li")
+
+	// 成员可读 /api/sim/env，不可写（403）
+	if w := do(t, h, http.MethodGet, "/api/sim/env", "", memberCookie); w.Code != http.StatusOK {
+		t.Fatalf("member GET /api/sim/env 应 200，实际 %d", w.Code)
+	}
+	if w := do(t, h, http.MethodPut, "/api/sim/env", `{"season":"summer"}`, memberCookie); w.Code != http.StatusForbidden {
+		t.Fatalf("member PUT /api/sim/env 应 403，实际 %d", w.Code)
+	}
+
+	// 确保室内温湿度（304）高温高湿、客厅有人（306=true）、空调（302）初始关闭且已过最小间隔
+	pool, err := pgxpool.New(context.Background(), os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("连接测试库失败: %v", err)
+	}
+	defer pool.Close()
+	_, _ = pool.Exec(context.Background(),
+		`UPDATE capability_state SET value = '32'::jsonb, updated_at = now() - interval '5 minutes' WHERE item_id = '00000000-0000-4000-8000-000000000304' AND capability_key = 'temperature'`)
+	_, _ = pool.Exec(context.Background(),
+		`UPDATE capability_state SET value = '75'::jsonb, updated_at = now() - interval '5 minutes' WHERE item_id = '00000000-0000-4000-8000-000000000304' AND capability_key = 'humidity'`)
+	_, _ = pool.Exec(context.Background(),
+		`UPDATE capability_state SET value = 'true'::jsonb, updated_at = now() WHERE item_id = '00000000-0000-4000-8000-000000000306' AND capability_key = 'occupied'`)
+	_, _ = pool.Exec(context.Background(),
+		`UPDATE capability_state SET value = 'false'::jsonb, updated_at = now() - interval '5 minutes' WHERE item_id = '00000000-0000-4000-8000-000000000302' AND capability_key = 'on'`)
+
+	runHomeAndFindS5 := func() (status, note string) {
+		w := do(t, h, http.MethodPost, "/api/modes/00000000-0000-4000-8000-000000000501/run", "", adminCookie)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("触发回家模式应 202，实际 %d：%s", w.Code, w.Body.String())
+		}
+		var started struct {
+			ID string `json:"id"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &started)
+		deadline := time.Now().Add(6 * time.Second)
+		for time.Now().Before(deadline) {
+			wr := do(t, h, http.MethodGet, "/api/runs/"+started.ID, "", adminCookie)
+			var run struct {
+				Status string `json:"status"`
+				Steps  []struct {
+					NodeID string `json:"nodeId"`
+					Status string `json:"status"`
+					Note   string `json:"note"`
+				} `json:"steps"`
+			}
+			_ = json.Unmarshal(wr.Body.Bytes(), &run)
+			if run.Status != "running" {
+				for _, st := range run.Steps {
+					if st.NodeID == "s5" {
+						return st.Status, st.Note
+					}
+				}
+				t.Fatalf("未找到 s5 步骤：%+v", run)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Fatal("等待回家模式完成超时")
+		return "", ""
+	}
+
+	// 1. 切到夏季 → s5 应 ok 且依据文案包含「夏季」与目标温度
+	if w := do(t, h, http.MethodPut, "/api/sim/env", `{"season":"summer","outdoorTemp":35}`, adminCookie); w.Code != http.StatusOK {
+		t.Fatalf("设置夏季失败: %d %s", w.Code, w.Body.String())
+	}
+	stSummer, noteSummer := runHomeAndFindS5()
+	if stSummer != "ok" || !strings.Contains(noteSummer, "夏季") {
+		t.Fatalf("夏季温控 s5 应 ok 且含「夏季」，实际 status=%q note=%q", stSummer, noteSummer)
+	}
+
+	// 2. 紧接着切到春季（室外 22℃）——无需手工回拨时间戳，切季节后立即生效并返回「自然通风」
+	if w := do(t, h, http.MethodPut, "/api/sim/env", `{"season":"spring","outdoorTemp":22}`, adminCookie); w.Code != http.StatusOK {
+		t.Fatalf("设置春季失败: %d %s", w.Code, w.Body.String())
+	}
+	stSpring, noteSpring := runHomeAndFindS5()
+	if stSpring != "ok" || !strings.Contains(noteSpring, "自然通风") {
+		t.Fatalf("春季温控 s5 应 ok 且含「自然通风」，实际 status=%q note=%q", stSpring, noteSpring)
+	}
 }

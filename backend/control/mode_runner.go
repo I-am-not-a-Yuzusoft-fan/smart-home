@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/policy"
 	storegen "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
 
@@ -49,6 +50,7 @@ type RunStepMessage struct {
 	Alias      string
 	Status     string
 	Error      string
+	Note       string
 	RunStatus  string
 	StartedAt  *time.Time
 	FinishedAt *time.Time
@@ -119,6 +121,7 @@ type ModeRunner struct {
 	pool           *pgxpool.Pool
 	commands       CommandHandler
 	broadcaster    RunStepBroadcaster
+	simEnv         *SimEnvStore
 	maxRunDuration time.Duration
 
 	mu           sync.Mutex
@@ -133,11 +136,18 @@ func NewModeRunner(pool *pgxpool.Pool, commands CommandHandler, broadcaster RunS
 		pool:           pool,
 		commands:       commands,
 		broadcaster:    broadcaster,
+		simEnv:         NewSimEnvStore(),
 		maxRunDuration: DefaultMaxRunDuration,
 		active:         make(map[uuid.UUID]*activeRun),
 		activeByMode:   make(map[uuid.UUID]uuid.UUID),
 		advanceLock:    make(map[uuid.UUID]*sync.Mutex),
 		modeLock:       make(map[uuid.UUID]*sync.Mutex),
+	}
+}
+
+func (r *ModeRunner) SetSimEnv(env *SimEnvStore) {
+	if env != nil {
+		r.simEnv = env
 	}
 }
 
@@ -490,6 +500,7 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 
 		var stepStatus string
 		var stepErr string
+		var stepNote string
 		abort := false
 
 		switch node.Type {
@@ -508,8 +519,16 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 			}
 		case "action":
 			if node.ValueFrom == "comfort" {
-				stepStatus = StepStatusSkipped
-				stepErr = "动态舒适温控待 T13 接入"
+				if node.ItemID == nil {
+					stepStatus = StepStatusFailed
+					stepErr = "舒适温控动作缺少目标空调设备"
+					abort = !shouldContinue(node, defaultContinue)
+				} else {
+					stepStatus, stepErr, stepNote, abort = r.executeComfortAction(ctx, runID, node, triggeredBy, defaultContinue)
+					if ctx.Err() != nil {
+						return r.terminateOnContextErr(ctx.Err(), runID, frame, stack, doneNodes, &startedAt)
+					}
+				}
 			} else if node.ItemID == nil || node.Capability == "" {
 				stepStatus = StepStatusFailed
 				stepErr = "动作节点缺少设备或能力配置"
@@ -595,7 +614,7 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 		}
 		if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
 			RunID: runID, NodeID: node.NodeID, Path: frame.path, Alias: node.Alias,
-			Status: stepStatus, Error: stepErr, RunStatus: runStatus,
+			Status: stepStatus, Error: stepErr, Note: stepNote, RunStatus: runStatus,
 			StartedAt: &startedAt, FinishedAt: &finishedAt,
 		}); err != nil {
 			return err
@@ -806,6 +825,169 @@ func toFloat64(v any) (float64, bool) {
 	}
 }
 
+// executeComfortAction 收集房间温湿度与空调当前状态，调用纯策略层 EvaluateComfort，并按决策下发指令。
+func (r *ModeRunner) executeComfortAction(
+	ctx context.Context,
+	runID uuid.UUID,
+	node ModeNode,
+	triggeredBy uuid.UUID,
+	defaultContinue bool,
+) (status, errMsg, note string, abort bool) {
+	q := storegen.New(r.pool)
+	acItem, err := q.GetItem(ctx, pgUUID(*node.ItemID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return StepStatusSkipped, "引用的设备已被删除，已跳过", "", false
+	}
+	if err != nil {
+		return StepStatusFailed, err.Error(), "", !shouldContinue(node, defaultContinue)
+	}
+
+	indoorTemp, indoorRH := r.readRoomTempHumidity(ctx, acItem.RoomHash)
+	acStates, _ := q.ListStatesByItem(ctx, pgUUID(*node.ItemID))
+	var currentOn bool
+	var currentMode string
+	var currentTarget *float64
+	var lastSwitchAt *time.Time
+	for _, st := range acStates {
+		var v any
+		if err := json.Unmarshal(st.Value, &v); err != nil {
+			continue
+		}
+		switch st.CapabilityKey {
+		case "on":
+			if b, ok := v.(bool); ok {
+				currentOn = b
+			}
+			if st.UpdatedAt.Valid {
+				t := st.UpdatedAt.Time
+				lastSwitchAt = &t
+			}
+		case "mode":
+			if s, ok := v.(string); ok {
+				currentMode = s
+			}
+		case "target_temp":
+			if f, ok := toFloat64(v); ok {
+				currentTarget = &f
+			}
+		}
+	}
+
+	now := time.Now()
+	env := r.simEnv.Get(now)
+	// 若用户刚刚通过 /api/sim/env 切换了季节或室外环境，不受旧季节的 60 秒最小切换间隔阻塞。
+	effectiveLastSwitch := lastSwitchAt
+	if lastSwitchAt != nil && !env.UpdatedAt.IsZero() && env.UpdatedAt.After(*lastSwitchAt) {
+		effectiveLastSwitch = nil
+	}
+	dec := policy.EvaluateComfort(policy.ComfortInput{
+		Season:          env.EffectiveSeason,
+		IndoorTemp:      indoorTemp,
+		IndoorHumidity:  indoorRH,
+		OutdoorTemp:     env.OutdoorTemp,
+		OutdoorHumidity: env.OutdoorHumidity,
+		CurrentOn:       currentOn,
+		CurrentMode:     currentMode,
+		CurrentTarget:   currentTarget,
+		LastSwitchAt:    effectiveLastSwitch,
+		Now:             now,
+	})
+
+	switch dec.Action {
+	case policy.ComfortActionWait:
+		return StepStatusSkipped, dec.Reason, dec.Reason, false
+	case policy.ComfortActionHold:
+		return StepStatusOK, "", dec.Reason, false
+	case policy.ComfortActionNatural:
+		if currentOn {
+			reqID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(runID.String()+":"+node.NodeID+":on"))
+			if _, cmdErr := r.commands.Handle(ctx, Command{
+				RequestID: reqID, ItemID: *node.ItemID, CapabilityKey: "on", Value: false, CreatedBy: triggeredBy,
+			}); cmdErr != nil {
+				return StepStatusFailed, cmdErr.Error(), dec.Reason, !shouldContinue(node, defaultContinue)
+			}
+		}
+		return StepStatusOK, "", dec.Reason, false
+	case policy.ComfortActionCool, policy.ComfortActionHeat:
+		cmds := []struct {
+			suffix string
+			key    string
+			val    any
+		}{
+			{"mode", "mode", dec.ACMode},
+			{"target_temp", "target_temp", *dec.TargetTemp},
+		}
+		// 仅在状态确实需要从关变为开时下发 on=true，避免无意义刷新 on.updated_at 重置 60 秒计时器
+		if !currentOn {
+			cmds = append(cmds, struct {
+				suffix string
+				key    string
+				val    any
+			}{"on", "on", true})
+		}
+		for _, c := range cmds {
+			reqID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(runID.String()+":"+node.NodeID+":"+c.suffix))
+			if _, cmdErr := r.commands.Handle(ctx, Command{
+				RequestID: reqID, ItemID: *node.ItemID, CapabilityKey: c.key, Value: c.val, CreatedBy: triggeredBy,
+			}); cmdErr != nil {
+				return StepStatusFailed, cmdErr.Error(), dec.Reason, !shouldContinue(node, defaultContinue)
+			}
+		}
+		return StepStatusOK, "", dec.Reason, false
+	default:
+		return StepStatusOK, "", dec.Reason, false
+	}
+}
+
+func (r *ModeRunner) readRoomTempHumidity(ctx context.Context, roomHash pgtype.Text) (*float64, *float64) {
+	q := storegen.New(r.pool)
+	items, err := q.ListItems(ctx, storegen.ListItemsParams{})
+	if err != nil {
+		return nil, nil
+	}
+	var fallbackSensor *uuid.UUID
+	var roomSensor *uuid.UUID
+	for _, it := range items {
+		if it.TypeKey != "sensor_th" {
+			continue
+		}
+		id := uuid.UUID(it.ID.Bytes)
+		if fallbackSensor == nil {
+			fallbackSensor = &id
+		}
+		if roomHash.Valid && it.RoomHash.Valid && it.RoomHash.String == roomHash.String {
+			roomSensor = &id
+			break
+		}
+	}
+	target := roomSensor
+	if target == nil {
+		target = fallbackSensor
+	}
+	if target == nil {
+		return nil, nil
+	}
+	states, err := q.ListStatesByItem(ctx, pgUUID(*target))
+	if err != nil {
+		return nil, nil
+	}
+	var temp, rh *float64
+	for _, st := range states {
+		var v any
+		if err := json.Unmarshal(st.Value, &v); err != nil || v == nil || v == "unavailable" {
+			continue
+		}
+		if f, ok := toFloat64(v); ok {
+			if st.CapabilityKey == "temperature" {
+				temp = &f
+			} else if st.CapabilityKey == "humidity" {
+				rh = &f
+			}
+		}
+	}
+	return temp, rh
+}
+
 // saveAndBroadcast 严格遵循 ADR 0002 单一写入点：先落库成功，再由 Broadcaster 广播。
 func (r *ModeRunner) saveAndBroadcast(ctx context.Context, msg RunStepMessage) error {
 	var startPG, finishPG pgtype.Timestamptz
@@ -822,6 +1004,7 @@ func (r *ModeRunner) saveAndBroadcast(ctx context.Context, msg RunStepMessage) e
 		Alias:      pgText(msg.Alias),
 		Status:     msg.Status,
 		Error:      pgText(msg.Error),
+		Note:       pgText(msg.Note),
 		StartedAt:  startPG,
 		FinishedAt: finishPG,
 	}); err != nil {

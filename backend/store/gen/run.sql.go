@@ -92,7 +92,7 @@ func (q *Queries) InsertRun(ctx context.Context, arg InsertRunParams) (Run, erro
 }
 
 const listRunSteps = `-- name: ListRunSteps :many
-SELECT run_id, node_id, path, alias, status, error, started_at, finished_at
+SELECT run_id, node_id, path, alias, status, error, started_at, finished_at, note
 FROM run_step
 WHERE run_id = $1
 ORDER BY path ASC, node_id ASC
@@ -116,6 +116,7 @@ func (q *Queries) ListRunSteps(ctx context.Context, runID pgtype.UUID) ([]RunSte
 			&i.Error,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.Note,
 		); err != nil {
 			return nil, err
 		}
@@ -128,16 +129,17 @@ func (q *Queries) ListRunSteps(ctx context.Context, runID pgtype.UUID) ([]RunSte
 }
 
 const upsertRunStep = `-- name: UpsertRunStep :one
-INSERT INTO run_step (run_id, node_id, path, alias, status, error, started_at, finished_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO run_step (run_id, node_id, path, alias, status, error, started_at, finished_at, note)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (run_id, node_id) DO UPDATE
 SET path = EXCLUDED.path,
     alias = EXCLUDED.alias,
     status = EXCLUDED.status,
     error = EXCLUDED.error,
     started_at = COALESCE(run_step.started_at, EXCLUDED.started_at),
-    finished_at = EXCLUDED.finished_at
-RETURNING run_id, node_id, path, alias, status, error, started_at, finished_at
+    finished_at = EXCLUDED.finished_at,
+    note = EXCLUDED.note
+RETURNING run_id, node_id, path, alias, status, error, started_at, finished_at, note
 `
 
 type UpsertRunStepParams struct {
@@ -149,6 +151,7 @@ type UpsertRunStepParams struct {
 	Error      pgtype.Text        `json:"error"`
 	StartedAt  pgtype.Timestamptz `json:"started_at"`
 	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+	Note       pgtype.Text        `json:"note"`
 }
 
 func (q *Queries) UpsertRunStep(ctx context.Context, arg UpsertRunStepParams) (RunStep, error) {
@@ -161,6 +164,7 @@ func (q *Queries) UpsertRunStep(ctx context.Context, arg UpsertRunStepParams) (R
 		arg.Error,
 		arg.StartedAt,
 		arg.FinishedAt,
+		arg.Note,
 	)
 	var i RunStep
 	err := row.Scan(
@@ -172,6 +176,7 @@ func (q *Queries) UpsertRunStep(ctx context.Context, arg UpsertRunStepParams) (R
 		&i.Error,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.Note,
 	)
 	return i, err
 }
