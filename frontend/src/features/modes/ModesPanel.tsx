@@ -164,6 +164,17 @@ export default function ModesPanel({ onClose }: Props) {
     ? liveRunStatus ?? activeRun.status
     : null
 
+  const effectiveRunReason: string | null = useMemo(() => {
+    if (activeRun?.reason) return activeRun.reason
+    const guardStep = mergedSteps.find((s) => s.nodeId === '__guard__' && s.error)
+    if (guardStep?.error) return guardStep.error
+    if (effectiveRunStatus === 'failed') {
+      const failedStep = mergedSteps.find((s) => s.status === 'failed' && s.error)
+      if (failedStep?.error) return failedStep.error
+    }
+    return null
+  }, [activeRun?.reason, mergedSteps, effectiveRunStatus])
+
   const activeRunModeName = useMemo(() => {
     if (!activeRun?.modeId) return null
     return modes.find((m) => m.id === activeRun.modeId)?.name ?? null
@@ -391,20 +402,35 @@ export default function ModesPanel({ onClose }: Props) {
                 点击左侧任意场景的「执行」按钮，这里会实时显示每一步的执行进度与耗时。
               </div>
             ) : (
-              <ol className="space-y-2">
-                {mergedSteps.map((st, idx) => {
-                  const badge = STEP_STATUS_LABEL[st.status]
-                  const dur = formatDuration(st.startedAt, st.finishedAt)
-                  return (
-                    <li
-                      key={st.nodeId}
-                      className="p-3"
-                      style={{
-                        border: '1px solid var(--color-border)',
-                        borderRadius: 'var(--radius-sm)',
-                        background: 'var(--color-bg)',
-                      }}
-                    >
+              <>
+                {effectiveRunReason ? (
+                  <div
+                    className="mb-3 px-3 py-2 text-xs"
+                    style={{
+                      background: effectiveRunStatus === 'failed' ? '#fee2e2' : '#fef3c7',
+                      color: effectiveRunStatus === 'failed' ? '#991b1b' : '#92400e',
+                      borderRadius: 'var(--radius-sm)',
+                    }}
+                  >
+                    {effectiveRunReason}
+                  </div>
+                ) : null}
+                <ol className="space-y-2">
+                  {mergedSteps.map((st, idx) => {
+                    const badge = STEP_STATUS_LABEL[st.status]
+                    const dur = formatDuration(st.startedAt, st.finishedAt)
+                    const depth = Math.max(0, st.path.split('.').length - 1)
+                    return (
+                      <li
+                        key={st.nodeId}
+                        className="p-3"
+                        style={{
+                          marginLeft: `${depth * 18}px`,
+                          border: '1px solid var(--color-border)',
+                          borderRadius: 'var(--radius-sm)',
+                          background: 'var(--color-bg)',
+                        }}
+                      >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex min-w-0 items-center gap-2">
                           <span className="text-xs font-mono" style={{ color: 'var(--color-muted)' }}>
@@ -440,7 +466,8 @@ export default function ModesPanel({ onClose }: Props) {
                     </li>
                   )
                 })}
-              </ol>
+                </ol>
+              </>
             )}
           </section>
         </div>

@@ -591,6 +591,7 @@ export type Run = {
   source: 'manual' | 'automation' | 'device' | 'timeout'
   startedAt: string
   finishedAt?: string
+  reason?: string
   steps: RunStep[]
 }
 

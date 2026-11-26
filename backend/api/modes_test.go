@@ -1,13 +1,16 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestModesListGetAndPermissions(t *testing.T) {
@@ -163,4 +166,100 @@ func TestModeRunCancelEndpoint(t *testing.T) {
 	if cancelled.Status != "cancelled" {
 		t.Fatalf("取消后状态应为 cancelled，实际 %q", cancelled.Status)
 	}
+}
+
+func TestModeRunGuardRejectedReturnsCancelledAndReason(t *testing.T) {
+	h := newTestServer(t)
+	cookie := loginAs(t, h, "zhang")
+
+	// 显式把客厅光照（305）置为 500 lux，避免受前序仿真时间推进用例影响
+	pool, err := pgxpool.New(context.Background(), os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("连接测试库失败: %v", err)
+	}
+	defer pool.Close()
+	luxID := uuid.MustParse("00000000-0000-4000-8000-000000000305")
+	var oldLux []byte
+	_ = pool.QueryRow(context.Background(),
+		`SELECT value FROM capability_state WHERE item_id = $1 AND capability_key = 'illuminance'`, luxID).Scan(&oldLux)
+	_, err = pool.Exec(context.Background(),
+		`UPDATE capability_state SET value = '500'::jsonb, updated_at = now() WHERE item_id = $1 AND capability_key = 'illuminance'`, luxID)
+	if err != nil {
+		t.Fatalf("设置光照状态失败: %v", err)
+	}
+	t.Cleanup(func() {
+		if len(oldLux) > 0 {
+			_, _ = pool.Exec(context.Background(),
+				`UPDATE capability_state SET value = $2, updated_at = now() WHERE item_id = $1 AND capability_key = 'illuminance'`, luxID, oldLux)
+		}
+	})
+
+	// seed 中「夜起」(0504) 守卫要求照度 < 50；当前 500 lux 应不执行并返回 cancelled + reason
+	w := do(t, h, http.MethodPost, "/api/modes/00000000-0000-4000-8000-000000000504/run", "", cookie)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("守卫拒绝应返回 202 + cancelled Run，实际 %d：%s", w.Code, w.Body.String())
+	}
+	var run struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
+		t.Fatalf("解析 Run 失败: %v", err)
+	}
+	if run.Status != "cancelled" || run.Reason == "" {
+		t.Fatalf("期望 status=cancelled 且带 reason，实际 %+v", run)
+	}
+
+	// 刷新/回查 GET /api/runs/{id} 也能还原 reason
+	w2 := do(t, h, http.MethodGet, "/api/runs/"+run.ID, "", cookie)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("GET /api/runs/{id} 应 200，实际 %d", w2.Code)
+	}
+	var fetched struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	_ = json.Unmarshal(w2.Body.Bytes(), &fetched)
+	if fetched.Status != "cancelled" || fetched.Reason == "" {
+		t.Fatalf("回查 Run 应保留 reason，实际 %+v", fetched)
+	}
+}
+
+func TestModeRunSingleConflictReturns409(t *testing.T) {
+	h := newTestServer(t)
+	cookie := loginAs(t, h, "zhang")
+
+	pool, err := pgxpool.New(context.Background(), os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("连接测试库失败: %v", err)
+	}
+	defer pool.Close()
+
+	modeID := uuid.New()
+	adminID := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	_, err = pool.Exec(context.Background(),
+		`INSERT INTO mode (id, name, definition, run_mode, created_by) VALUES ($1, $2, '{"version":1,"steps":[{"nodeId":"d1","type":"delay","ms":500}]}'::jsonb, 'single', $3)`,
+		modeID, "single-conflict-"+modeID.String()[:8], adminID)
+	if err != nil {
+		t.Fatalf("插入测试模式失败: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM mode WHERE id = $1`, modeID)
+	})
+
+	w1 := do(t, h, http.MethodPost, "/api/modes/"+modeID.String()+"/run", "", cookie)
+	if w1.Code != http.StatusAccepted {
+		t.Fatalf("首次触发应 202，实际 %d：%s", w1.Code, w1.Body.String())
+	}
+	var started struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(w1.Body.Bytes(), &started)
+
+	w2 := do(t, h, http.MethodPost, "/api/modes/"+modeID.String()+"/run", "", cookie)
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("single 模式运行中再次触发应 409，实际 %d：%s", w2.Code, w2.Body.String())
+	}
+	_ = do(t, h, http.MethodPost, "/api/runs/"+started.ID+"/cancel", "", cookie)
 }
