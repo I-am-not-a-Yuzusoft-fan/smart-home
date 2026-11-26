@@ -99,19 +99,70 @@ INSERT INTO capability_state (item_id, capability_key, value, source, updated_at
 ON CONFLICT (item_id, capability_key) DO UPDATE
 SET value = EXCLUDED.value, source = EXCLUDED.source, updated_at = EXCLUDED.updated_at;
 
--- 一个场景：回家（脚本语义——有序步骤、带延时、有守卫）
+-- 五个内置场景模板（脚本语义——顶层守卫 + 有序步骤 + 延时 + 条件分支 + 动态舒适温控）
 INSERT INTO mode (id, name, definition, run_mode, created_by) VALUES
   ('00000000-0000-4000-8000-000000000501', '回家', '{
      "version": 1,
+     "guard": {
+       "all": [
+         {"itemId":"00000000-0000-4000-8000-000000000306","capability":"occupied","op":"==","value":true}
+       ]
+     },
+     "defaults": {"continueOnError": false},
      "steps": [
        {"nodeId":"s1","type":"action","alias":"开客厅灯","itemId":"00000000-0000-4000-8000-000000000301","capability":"on","value":true},
        {"nodeId":"s2","type":"action","alias":"灯调到 70%","itemId":"00000000-0000-4000-8000-000000000301","capability":"brightness","value":70},
        {"nodeId":"s3","type":"delay","alias":"等 2 秒","ms":2000},
        {"nodeId":"s4","type":"action","alias":"关窗帘","itemId":"00000000-0000-4000-8000-000000000303","capability":"position","value":0},
-       {"nodeId":"s5","type":"choose","alias":"如果室温高于 28℃","when":{"all":[{"itemId":"00000000-0000-4000-8000-000000000304","capability":"temperature","op":">","value":28}]},
-        "then":[{"nodeId":"s5a","type":"action","alias":"开空调","itemId":"00000000-0000-4000-8000-000000000302","capability":"on","value":true}],
-        "else":[]}
+       {"nodeId":"s5","type":"action","alias":"空调舒适温控","itemId":"00000000-0000-4000-8000-000000000302","capability":"target_temp","valueFrom":"comfort"}
      ]
-   }'::jsonb, 'restart', '00000000-0000-4000-8000-000000000001');
+   }'::jsonb, 'restart', '00000000-0000-4000-8000-000000000001'),
+  ('00000000-0000-4000-8000-000000000502', '离家', '{
+     "version": 1,
+     "defaults": {"continueOnError": true},
+     "steps": [
+       {"nodeId":"l1","type":"action","alias":"关客厅主灯","itemId":"00000000-0000-4000-8000-000000000301","capability":"on","value":false},
+       {"nodeId":"l2","type":"action","alias":"关客厅空调","itemId":"00000000-0000-4000-8000-000000000302","capability":"on","value":false},
+       {"nodeId":"l3","type":"delay","alias":"等 1 秒","ms":1000},
+       {"nodeId":"l4","type":"action","alias":"关客厅窗帘","itemId":"00000000-0000-4000-8000-000000000303","capability":"position","value":0}
+     ]
+   }'::jsonb, 'restart', '00000000-0000-4000-8000-000000000001'),
+  ('00000000-0000-4000-8000-000000000503', '睡眠', '{
+     "version": 1,
+     "defaults": {"continueOnError": true},
+     "steps": [
+       {"nodeId":"sl1","type":"action","alias":"主灯调暗至 15%","itemId":"00000000-0000-4000-8000-000000000301","capability":"brightness","value":15},
+       {"nodeId":"sl2","type":"action","alias":"关窗帘","itemId":"00000000-0000-4000-8000-000000000303","capability":"position","value":0},
+       {"nodeId":"sl3","type":"action","alias":"空调睡眠舒适温控","itemId":"00000000-0000-4000-8000-000000000302","capability":"target_temp","valueFrom":"comfort"},
+       {"nodeId":"sl4","type":"delay","alias":"等 2 秒关主灯","ms":2000},
+       {"nodeId":"sl5","type":"action","alias":"关客厅主灯","itemId":"00000000-0000-4000-8000-000000000301","capability":"on","value":false}
+     ]
+   }'::jsonb, 'restart', '00000000-0000-4000-8000-000000000001'),
+  ('00000000-0000-4000-8000-000000000504', '夜起', '{
+     "version": 1,
+     "guard": {
+       "all": [
+         {"itemId":"00000000-0000-4000-8000-000000000305","capability":"illuminance","op":"<","value":50}
+       ]
+     },
+     "defaults": {"continueOnError": false},
+     "steps": [
+       {"nodeId":"n1","type":"action","alias":"微亮开灯","itemId":"00000000-0000-4000-8000-000000000301","capability":"on","value":true},
+       {"nodeId":"n2","type":"action","alias":"亮度设为 8%","itemId":"00000000-0000-4000-8000-000000000301","capability":"brightness","value":8},
+       {"nodeId":"n3","type":"action","alias":"暖色温 2700K","itemId":"00000000-0000-4000-8000-000000000301","capability":"color_temp","value":2700}
+     ]
+   }'::jsonb, 'single', '00000000-0000-4000-8000-000000000001'),
+  ('00000000-0000-4000-8000-000000000505', '补眠', '{
+     "version": 1,
+     "defaults": {"continueOnError": true},
+     "steps": [
+       {"nodeId":"np1","type":"action","alias":"拉严窗帘","itemId":"00000000-0000-4000-8000-000000000303","capability":"position","value":0},
+       {"nodeId":"np2","type":"choose","alias":"若照度偏高则确认关灯","when":{"all":[{"itemId":"00000000-0000-4000-8000-000000000305","capability":"illuminance","op":">","value":100}]},
+        "then":[{"nodeId":"np2a","type":"action","alias":"关客厅主灯","itemId":"00000000-0000-4000-8000-000000000301","capability":"on","value":false}],
+        "else":[]},
+       {"nodeId":"np3","type":"action","alias":"空调舒适温控","itemId":"00000000-0000-4000-8000-000000000302","capability":"target_temp","valueFrom":"comfort"}
+     ]
+   }'::jsonb, 'restart', '00000000-0000-4000-8000-000000000001')
+ON CONFLICT (id) DO NOTHING;
 
 COMMIT;

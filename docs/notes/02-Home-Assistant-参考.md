@@ -1,7 +1,7 @@
 # Home Assistant 参考笔记
 
 > 目的：**不重复造劣质轮子**。把 HA 踩过的坑变成我们的设计约束，而不是从头再踩一遍。
-> 核验日期 2026-11-19；版本线 2026.11.2（稳定）/ `2026.12.0.dev0`（main）。
+> 核验日期 2026-11-26；版本线 2026.11.3（稳定）/ `2026.12.0.dev0`（main）。
 
 ## 0. 结论先行
 
@@ -30,7 +30,7 @@ HA 把「让设备变成某个样子」拆成三件不同的事，官方原文�
 | 有没有开关状态 | **没有**（不是 on/off 实体） | 无 | 有（enabled/disabled） |
 | 记得之前吗 | 不记得，要恢复得先 `scene.create` 快照 | 不记得 | 有 `last_triggered` 等属性 |
 
-原文关键句：「A scene sets states. It doesn't run steps, and it doesn't remember what came before.」「A scene sets all its states, without wait times or a set order. If you need wait times or a set order, use a script.」
+原文关键句（`/docs/scene/` 现行表述）：「Scenes capture the states you want certain entities to be.」「A scene stores the states you want for several devices, and sets them again in one step when you activate it.」脚本则「goes through its steps under Sequence」。
 
 **这直接决定我们的数据模型。** 指导书 F5 写的是「每个模式由『条件 + 动作集』构成，动作可带参数与延时」——那是**脚本语义**，不是场景语义。如果我们把「回家模式」做成一组 `{设备: 状态}` 的键值对，就永远做不出「延时」和「顺序」，也就拿不到 F5 的过程反馈分。
 
@@ -130,6 +130,6 @@ run_step_run_id, node_id, path, alias, status, started_at, finished_at, error
 ## 9. 待办与已决
 
 - [x] **已决（m00639）：做通用步骤编辑器**，不收敛成 5 个内置模式。理由：效率上来得及，且通用编排器本身就是答辩区分点。代价是模型从平铺列表升级成嵌套树（见第 8 节），编辑器 UI 要处理 `choose` / `repeat` / `delay` 等块。
-- [ ] 把第 8 节的 JSONB 树模型并进 ADR 0002（数据模型与分层，第 11 周）。
-- [ ] 编辑器的最小可用范围：首版支持 `action` / `delay` / `choose` 三种节点，`repeat` / `parallel` 留到增量。
-- [ ] E1 的「手动接管后让位」与 run mode 的关系：需要一条 `suppressed_until` 字段。
+- [x] 把第 8 节的 JSONB 树模型并进 ADR 0002（已于 2026-11-21 定稿）。
+- [x] 编辑器的最小可用范围：首版支持 `action` / `delay` / `choose` 三种节点（含顶层 `guard`），`repeat` / `parallel` 留到增量。
+- [x] 手动接管后让位与 run mode 的关系（2026-11-26 定案）：不新增表列，以 `command_log.source = 'manual'` + 进程内基线 Map 记录手动时刻读数与 30 分钟窗口，环境突变（±3℃ / ±10%RH / ±200 lux）或场景执行启动时立即清除让位。
