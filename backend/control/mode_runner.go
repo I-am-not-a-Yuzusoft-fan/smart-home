@@ -875,6 +875,11 @@ func (r *ModeRunner) executeComfortAction(
 
 	now := time.Now()
 	env := r.simEnv.Get(now)
+	// 若用户刚刚通过 /api/sim/env 切换了季节或室外环境，不受旧季节的 60 秒最小切换间隔阻塞。
+	effectiveLastSwitch := lastSwitchAt
+	if lastSwitchAt != nil && !env.UpdatedAt.IsZero() && env.UpdatedAt.After(*lastSwitchAt) {
+		effectiveLastSwitch = nil
+	}
 	dec := policy.EvaluateComfort(policy.ComfortInput{
 		Season:          env.EffectiveSeason,
 		IndoorTemp:      indoorTemp,
@@ -884,7 +889,7 @@ func (r *ModeRunner) executeComfortAction(
 		CurrentOn:       currentOn,
 		CurrentMode:     currentMode,
 		CurrentTarget:   currentTarget,
-		LastSwitchAt:    lastSwitchAt,
+		LastSwitchAt:    effectiveLastSwitch,
 		Now:             now,
 	})
 
@@ -911,7 +916,14 @@ func (r *ModeRunner) executeComfortAction(
 		}{
 			{"mode", "mode", dec.ACMode},
 			{"target_temp", "target_temp", *dec.TargetTemp},
-			{"on", "on", true},
+		}
+		// 仅在状态确实需要从关变为开时下发 on=true，避免无意义刷新 on.updated_at 重置 60 秒计时器
+		if !currentOn {
+			cmds = append(cmds, struct {
+				suffix string
+				key    string
+				val    any
+			}{"on", "on", true})
 		}
 		for _, c := range cmds {
 			reqID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(runID.String()+":"+node.NodeID+":"+c.suffix))

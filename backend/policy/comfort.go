@@ -96,8 +96,6 @@ func EvaluateComfort(in ComfortInput) ComfortDecision {
 		decision = evalSummer(temp, rh, in)
 	case SeasonWinter:
 		decision = evalWinter(temp, rh, in)
-	case SeasonSpring, SeasonAutumn:
-		decision = evalTransitional(temp, rh, in)
 	default:
 		decision = evalTransitional(temp, rh, in)
 	}
@@ -118,19 +116,46 @@ func EvaluateComfort(in ComfortInput) ComfortDecision {
 
 func evalSummer(temp, rh float64, in ComfortInput) ComfortDecision {
 	// 夏季设定值约束区间 24–28℃（GB 50736-2012 表 3.0.2 供冷工况区间转用）
+	// 目标温度仅由湿度与室外温度动态推导，避免室温在滞回带内波动时反过来跳变目标值。
 	raw := 26.0
-	if rh >= 70 {
+	if rh >= 85 {
+		raw -= 2.0
+	} else if rh >= 70 {
 		raw -= 1.0
 	} else if rh <= 40 {
-		raw += 0.5
-	}
-	if temp >= 32 {
-		raw -= 0.5
-	} else if temp <= 26 {
 		raw += 1.0
 	}
+	if in.OutdoorTemp != nil {
+		if *in.OutdoorTemp >= 36 {
+			raw -= 1.0
+		} else if *in.OutdoorTemp <= 28 {
+			raw += 1.0
+		}
+	}
 	target := clamp(math.Round(raw), 24, 28)
+	return evalCoolHysteresis(temp, rh, target, in, "夏季温控策略（24–28℃）")
+}
 
+func evalWinter(temp, rh float64, in ComfortInput) ComfortDecision {
+	// 冬季设定值约束区间 18–22℃（GB 50736-2012 表 3.0.2 供热工况区间转用）
+	raw := 20.0
+	if rh >= 70 {
+		raw += 1.0
+	} else if rh <= 35 {
+		raw -= 1.0
+	}
+	if in.OutdoorTemp != nil {
+		if *in.OutdoorTemp <= 0 {
+			raw += 1.0
+		} else if *in.OutdoorTemp >= 12 {
+			raw -= 1.0
+		}
+	}
+	target := clamp(math.Round(raw), 18, 22)
+	return evalHeatHysteresis(temp, rh, target, in, "冬季温控策略（18–22℃）")
+}
+
+func evalCoolHysteresis(temp, rh, target float64, in ComfortInput, policyName string) ComfortDecision {
 	if !in.CurrentOn {
 		if temp > target+DefaultHysteresisC {
 			return ComfortDecision{
@@ -138,22 +163,21 @@ func evalSummer(temp, rh float64, in ComfortInput) ComfortDecision {
 				TargetTemp:   &target,
 				ACMode:       "cool",
 				ShouldTurnOn: true,
-				Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，按照夏季温控策略（24–28℃），开启制冷并设定目标温度 %.0f℃", temp, rh, target),
+				Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，按照%s，开启制冷并设定目标温度 %.0f℃", temp, rh, policyName, target),
 			}
 		}
 		return ComfortDecision{
 			Action:       ComfortActionHold,
 			ShouldTurnOn: false,
-			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，处于夏季目标 %.0f℃ ±1℃ 滞回区间内，维持关闭", temp, rh, target),
+			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，处于目标 %.0f℃ ±1℃ 滞回区间内，维持关闭", temp, rh, target),
 		}
 	}
 
-	// 当前已开机
 	if in.CurrentMode == "cool" && temp <= target-DefaultHysteresisC {
 		return ComfortDecision{
 			Action:       ComfortActionNatural,
 			ShouldTurnOn: false,
-			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，已降至夏季目标 %.0f℃−1℃ 滞回下限，关闭空调压缩机", temp, rh, target),
+			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，已降至目标 %.0f℃−1℃ 滞回下限，关闭空调压缩机", temp, rh, target),
 		}
 	}
 	if in.CurrentMode == "cool" && math.Abs(temp-target) <= DefaultHysteresisC && in.CurrentTarget != nil && *in.CurrentTarget == target {
@@ -162,7 +186,7 @@ func evalSummer(temp, rh float64, in ComfortInput) ComfortDecision {
 			TargetTemp:   &target,
 			ACMode:       "cool",
 			ShouldTurnOn: true,
-			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，处于夏季目标 %.0f℃ ±1℃ 滞回区间内，维持运行", temp, rh, target),
+			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，处于目标 %.0f℃ ±1℃ 滞回区间内，维持运行", temp, rh, target),
 		}
 	}
 	return ComfortDecision{
@@ -170,23 +194,11 @@ func evalSummer(temp, rh float64, in ComfortInput) ComfortDecision {
 		TargetTemp:   &target,
 		ACMode:       "cool",
 		ShouldTurnOn: true,
-		Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，按照夏季温控策略（24–28℃），设定制冷目标温度 %.0f℃", temp, rh, target),
+		Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，按照%s，设定制冷目标温度 %.0f℃", temp, rh, policyName, target),
 	}
 }
 
-func evalWinter(temp, rh float64, in ComfortInput) ComfortDecision {
-	// 冬季设定值约束区间 18–22℃（GB 50736-2012 表 3.0.2 供热工况区间转用）
-	raw := 20.0
-	if temp <= 14 {
-		raw += 1.0
-	} else if temp >= 19 {
-		raw -= 1.0
-	}
-	if rh >= 70 {
-		raw += 1.0
-	}
-	target := clamp(math.Round(raw), 18, 22)
-
+func evalHeatHysteresis(temp, rh, target float64, in ComfortInput, policyName string) ComfortDecision {
 	if !in.CurrentOn {
 		if temp < target-DefaultHysteresisC {
 			return ComfortDecision{
@@ -194,13 +206,13 @@ func evalWinter(temp, rh float64, in ComfortInput) ComfortDecision {
 				TargetTemp:   &target,
 				ACMode:       "heat",
 				ShouldTurnOn: true,
-				Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，按照冬季温控策略（18–22℃），开启制热并设定目标温度 %.0f℃", temp, rh, target),
+				Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，按照%s，开启制热并设定目标温度 %.0f℃", temp, rh, policyName, target),
 			}
 		}
 		return ComfortDecision{
 			Action:       ComfortActionHold,
 			ShouldTurnOn: false,
-			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，处于冬季目标 %.0f℃ ±1℃ 滞回区间内，维持关闭", temp, rh, target),
+			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，处于目标 %.0f℃ ±1℃ 滞回区间内，维持关闭", temp, rh, target),
 		}
 	}
 
@@ -208,7 +220,7 @@ func evalWinter(temp, rh float64, in ComfortInput) ComfortDecision {
 		return ComfortDecision{
 			Action:       ComfortActionNatural,
 			ShouldTurnOn: false,
-			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，已达冬季目标 %.0f℃+1℃ 滞回上限，关闭空调压缩机", temp, rh, target),
+			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，已达目标 %.0f℃+1℃ 滞回上限，关闭空调压缩机", temp, rh, target),
 		}
 	}
 	if in.CurrentMode == "heat" && math.Abs(temp-target) <= DefaultHysteresisC && in.CurrentTarget != nil && *in.CurrentTarget == target {
@@ -217,7 +229,7 @@ func evalWinter(temp, rh float64, in ComfortInput) ComfortDecision {
 			TargetTemp:   &target,
 			ACMode:       "heat",
 			ShouldTurnOn: true,
-			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，处于冬季目标 %.0f℃ ±1℃ 滞回区间内，维持运行", temp, rh, target),
+			Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，处于目标 %.0f℃ ±1℃ 滞回区间内，维持运行", temp, rh, target),
 		}
 	}
 	return ComfortDecision{
@@ -225,7 +237,7 @@ func evalWinter(temp, rh float64, in ComfortInput) ComfortDecision {
 		TargetTemp:   &target,
 		ACMode:       "heat",
 		ShouldTurnOn: true,
-		Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，按照冬季温控策略（18–22℃），设定制热目标温度 %.0f℃", temp, rh, target),
+		Reason:       fmt.Sprintf("当前室温 %.1f℃、湿度 %.0f%%，按照%s，设定制热目标温度 %.0f℃", temp, rh, policyName, target),
 	}
 }
 
@@ -248,33 +260,28 @@ func evalTransitional(temp, rh float64, in ComfortInput) ComfortDecision {
 		}
 	}
 
-	// 室外温度超出 18–26℃ 时的兜底调温（带 1℃ 滞回）
+	// 室外温度超出 18–26℃ 时的兜底调温（同样受 1℃ 滞回保护，避免临界抖动）
 	outdoor := *in.OutdoorTemp
-	if temp > 26+DefaultHysteresisC {
-		target := 25.0
+	if outdoor > 26 {
+		policyName := fmt.Sprintf("%s兜底制冷策略（室外 %.1f℃ 超出自然通风区间）", seasonName, outdoor)
+		if !in.CurrentOn && temp <= 26+DefaultHysteresisC {
+			return ComfortDecision{
+				Action:       ComfortActionHold,
+				ShouldTurnOn: false,
+				Reason:       fmt.Sprintf("当前%s，室温 %.1f℃、湿度 %.0f%%（室外 %.1f℃），未超出 26℃+1℃ 滞回阈值，维持关闭", seasonName, temp, rh, outdoor),
+			}
+		}
+		return evalCoolHysteresis(temp, rh, 25.0, in, policyName)
+	}
+	policyName := fmt.Sprintf("%s兜底制热策略（室外 %.1f℃ 超出自然通风区间）", seasonName, outdoor)
+	if !in.CurrentOn && temp >= 18-DefaultHysteresisC {
 		return ComfortDecision{
-			Action:       ComfortActionCool,
-			TargetTemp:   &target,
-			ACMode:       "cool",
-			ShouldTurnOn: true,
-			Reason:       fmt.Sprintf("当前%s，室温 %.1f℃、湿度 %.0f%%、室外 %.1f℃ 超出自然通风区间，启动兜底制冷并设定目标温度 25℃", seasonName, temp, rh, outdoor),
+			Action:       ComfortActionHold,
+			ShouldTurnOn: false,
+			Reason:       fmt.Sprintf("当前%s，室温 %.1f℃、湿度 %.0f%%（室外 %.1f℃），未低于 18℃−1℃ 滞回阈值，维持关闭", seasonName, temp, rh, outdoor),
 		}
 	}
-	if temp < 18-DefaultHysteresisC {
-		target := 20.0
-		return ComfortDecision{
-			Action:       ComfortActionHeat,
-			TargetTemp:   &target,
-			ACMode:       "heat",
-			ShouldTurnOn: true,
-			Reason:       fmt.Sprintf("当前%s，室温 %.1f℃、湿度 %.0f%%、室外 %.1f℃ 超出自然通风区间，启动兜底制热并设定目标温度 20℃", seasonName, temp, rh, outdoor),
-		}
-	}
-	return ComfortDecision{
-		Action:       ComfortActionNatural,
-		ShouldTurnOn: false,
-		Reason:       fmt.Sprintf("当前%s，室温 %.1f℃、湿度 %.0f%%（室外 %.1f℃），室温处于 18–26℃ 舒适带内，建议自然通风", seasonName, temp, rh, outdoor),
-	}
+	return evalHeatHysteresis(temp, rh, 20.0, in, policyName)
 }
 
 func clamp(v, minV, maxV float64) float64 {

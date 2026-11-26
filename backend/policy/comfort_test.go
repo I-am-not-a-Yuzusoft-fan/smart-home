@@ -126,49 +126,94 @@ func TestEvaluateComfortSeasonsAndRanges(t *testing.T) {
 func TestEvaluateComfortHysteresisPreventsChatter(t *testing.T) {
 	now := time.Date(2026, 7, 15, 14, 0, 0, 0, time.UTC)
 
-	// 夏季：室温在目标温度 26℃ 附近 ±0.8℃ 抖动（26.5 -> 25.4 -> 26.8 -> 25.3），空调保持关闭不应反复启停
-	jitterTemps := []float64{26.5, 25.4, 26.8, 25.3, 26.9, 25.5}
-	on := false
-	switches := 0
-	for i, temp := range jitterTemps {
-		dec := policy.EvaluateComfort(policy.ComfortInput{
-			Season:         policy.SeasonSummer,
-			IndoorTemp:     f64(temp),
-			IndoorHumidity: f64(55.0),
-			CurrentOn:      on,
-			CurrentMode:    "cool",
-			CurrentTarget:  f64(26.0),
-			Now:            now.Add(time.Duration(i*5) * time.Minute),
-		})
-		if dec.ShouldTurnOn != on && (dec.Action == policy.ComfortActionCool || dec.Action == policy.ComfortActionNatural) {
-			on = dec.ShouldTurnOn
-			switches++
-		}
-	}
-	if switches != 0 {
-		t.Fatalf("在 1℃ 滞回带内抖动不应启停，实际切换 %d 次", switches)
+	cases := []struct {
+		name        string
+		season      policy.Season
+		outdoorTemp *float64
+		startOn     bool
+		startMode   string
+		startTarget float64
+		temps       []float64
+	}{
+		{
+			name:        "夏季关机态在目标26℃±0.9℃内抖动不启停",
+			season:      policy.SeasonSummer,
+			startOn:     false,
+			startMode:   "cool",
+			startTarget: 26.0,
+			temps:       []float64{26.5, 25.4, 26.8, 25.3, 26.9, 25.5},
+		},
+		{
+			name:        "夏季运行态在目标26℃±0.9℃内抖动不反复关停",
+			season:      policy.SeasonSummer,
+			startOn:     true,
+			startMode:   "cool",
+			startTarget: 26.0,
+			temps:       []float64{26.2, 25.8, 26.4, 25.2, 26.7, 25.5},
+		},
+		{
+			name:        "冬季关机态在目标20℃±0.9℃内抖动不启停",
+			season:      policy.SeasonWinter,
+			startOn:     false,
+			startMode:   "heat",
+			startTarget: 20.0,
+			temps:       []float64{19.4, 20.5, 19.2, 20.8, 19.5},
+		},
+		{
+			name:        "冬季运行态在目标20℃±0.9℃内抖动不反复关停",
+			season:      policy.SeasonWinter,
+			startOn:     true,
+			startMode:   "heat",
+			startTarget: 20.0,
+			temps:       []float64{19.8, 20.3, 19.5, 20.8, 19.2},
+		},
+		{
+			name:        "春秋室外33℃兜底制冷运行态在25℃±0.9℃内抖动不反复关停",
+			season:      policy.SeasonAutumn,
+			outdoorTemp: f64(33.0),
+			startOn:     true,
+			startMode:   "cool",
+			startTarget: 25.0,
+			temps:       []float64{25.8, 24.5, 25.9, 24.2, 25.6},
+		},
 	}
 
-	// 升到 28.5℃ (> 26+1) 才开启；降到 24.5℃ (<= 26-1) 才关闭
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			on := tc.startOn
+			switches := 0
+			for i, temp := range tc.temps {
+				dec := policy.EvaluateComfort(policy.ComfortInput{
+					Season:         tc.season,
+					IndoorTemp:     f64(temp),
+					IndoorHumidity: f64(55.0),
+					OutdoorTemp:    tc.outdoorTemp,
+					CurrentOn:      on,
+					CurrentMode:    tc.startMode,
+					CurrentTarget:  f64(tc.startTarget),
+					Now:            now.Add(time.Duration(i*5) * time.Minute),
+				})
+				if dec.ShouldTurnOn != on {
+					on = dec.ShouldTurnOn
+					switches++
+				}
+			}
+			if switches != 0 {
+				t.Fatalf("在 1℃ 滞回带内抖动不应启停，实际切换 %d 次", switches)
+			}
+		})
+	}
+
+	// 越过 1℃ 滞回边界才真正开启/关闭
 	openDec := policy.EvaluateComfort(policy.ComfortInput{
-		Season:         policy.SeasonSummer,
-		IndoorTemp:     f64(28.5),
-		IndoorHumidity: f64(55.0),
-		CurrentOn:      false,
-		Now:            now,
+		Season: policy.SeasonSummer, IndoorTemp: f64(28.5), IndoorHumidity: f64(55.0), CurrentOn: false, Now: now,
 	})
 	if openDec.Action != policy.ComfortActionCool || !openDec.ShouldTurnOn {
 		t.Fatalf("高于目标+1℃应开启制冷，实际 %+v", openDec)
 	}
-
 	closeDec := policy.EvaluateComfort(policy.ComfortInput{
-		Season:         policy.SeasonSummer,
-		IndoorTemp:     f64(24.5),
-		IndoorHumidity: f64(55.0),
-		CurrentOn:      true,
-		CurrentMode:    "cool",
-		CurrentTarget:  f64(26.0),
-		Now:            now.Add(5 * time.Minute),
+		Season: policy.SeasonSummer, IndoorTemp: f64(24.5), IndoorHumidity: f64(55.0),
+		CurrentOn: true, CurrentMode: "cool", CurrentTarget: f64(26.0), Now: now.Add(5 * time.Minute),
 	})
 	if closeDec.ShouldTurnOn {
 		t.Fatalf("低于等于目标-1℃应关闭压缩机，实际 %+v", closeDec)
@@ -176,22 +221,27 @@ func TestEvaluateComfortHysteresisPreventsChatter(t *testing.T) {
 }
 
 func TestEvaluateComfortMinSwitchInterval60s(t *testing.T) {
-	now := time.Date(2026, 7, 15, 14, 0, 30, 0, time.UTC)
-	last := now.Add(-30 * time.Second) // 距上次切换仅 30 秒 (< 60s)
+	now := time.Date(2026, 7, 15, 14, 1, 0, 0, time.UTC)
 
-	dec := policy.EvaluateComfort(policy.ComfortInput{
-		Season:         policy.SeasonSummer,
-		IndoorTemp:     f64(31.0),
-		IndoorHumidity: f64(65.0),
-		CurrentOn:      false,
-		LastSwitchAt:   &last,
-		Now:            now,
-	})
-	if dec.Action != policy.ComfortActionHold {
-		t.Fatalf("60 秒最小切换间隔内应 Hold，实际 %q (%q)", dec.Action, dec.Reason)
+	tests := []struct {
+		name       string
+		elapsed    time.Duration
+		wantAction policy.ComfortAction
+	}{
+		{name: "30秒内被最小间隔拦截", elapsed: 30 * time.Second, wantAction: policy.ComfortActionHold},
+		{name: "满60秒放行切换", elapsed: 60 * time.Second, wantAction: policy.ComfortActionCool},
 	}
-	if !strings.Contains(dec.Reason, "60") {
-		t.Fatalf("原因应说明 60 秒间隔保护，实际 %q", dec.Reason)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			last := now.Add(-tc.elapsed)
+			dec := policy.EvaluateComfort(policy.ComfortInput{
+				Season: policy.SeasonSummer, IndoorTemp: f64(31.0), IndoorHumidity: f64(65.0),
+				CurrentOn: false, LastSwitchAt: &last, Now: now,
+			})
+			if dec.Action != tc.wantAction {
+				t.Fatalf("elapsed=%v: Action = %q, want %q (%q)", tc.elapsed, dec.Action, tc.wantAction, dec.Reason)
+			}
+		})
 	}
 }
 

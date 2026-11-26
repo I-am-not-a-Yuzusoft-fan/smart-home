@@ -337,9 +337,7 @@ func TestSimEnvPermissionsAndComfortSeasonSwitch(t *testing.T) {
 		t.Fatalf("夏季温控 s5 应 ok 且含「夏季」，实际 status=%q note=%q", stSummer, noteSummer)
 	}
 
-	// 2. 切到春季（室外 22℃）并重置上次切换时间 → s5 应 ok 且依据文案包含「自然通风」
-	_, _ = pool.Exec(context.Background(),
-		`UPDATE capability_state SET updated_at = now() - interval '5 minutes' WHERE item_id = '00000000-0000-4000-8000-000000000302' AND capability_key = 'on'`)
+	// 2. 紧接着切到春季（室外 22℃）——无需手工回拨时间戳，切季节后立即生效并返回「自然通风」
 	if w := do(t, h, http.MethodPut, "/api/sim/env", `{"season":"spring","outdoorTemp":22}`, adminCookie); w.Code != http.StatusOK {
 		t.Fatalf("设置春季失败: %d %s", w.Code, w.Body.String())
 	}
