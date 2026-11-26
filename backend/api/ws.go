@@ -166,6 +166,7 @@ type RunStepView struct {
 	Alias      string     `json:"alias,omitempty"`
 	Status     string     `json:"status"`
 	Error      string     `json:"error,omitempty"`
+	Note       string     `json:"note,omitempty"`
 	RunStatus  string     `json:"runStatus,omitempty"`
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
@@ -180,6 +181,7 @@ func (h *Hub) BroadcastRunStep(message control.RunStepMessage) {
 		Alias:      message.Alias,
 		Status:     message.Status,
 		Error:      message.Error,
+		Note:       message.Note,
 		RunStatus:  message.RunStatus,
 		StartedAt:  message.StartedAt,
 		FinishedAt: message.FinishedAt,

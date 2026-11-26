@@ -182,6 +182,10 @@ func runDetailToGen(d control.RunDetail) gen.Run {
 			msg := st.Error.String
 			row.Error = &msg
 		}
+		if st.Note.Valid {
+			note := st.Note.String
+			row.Note = &note
+		}
 		if st.StartedAt.Valid {
 			t := st.StartedAt.Time
 			row.StartedAt = &t

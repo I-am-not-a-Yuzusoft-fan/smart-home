@@ -67,8 +67,12 @@ func main() {
 		version,
 		log,
 	)
+	simEnv := control.NewSimEnvStore()
+	modeRunner := control.NewModeRunner(pool, commandHandler, hub)
+	modeRunner.SetSimEnv(simEnv)
 	srv.SetHub(hub)
-	srv.SetModeRunner(control.NewModeRunner(pool, commandHandler, hub))
+	srv.SetSimEnv(simEnv)
+	srv.SetModeRunner(modeRunner)
 
 	sensorReporter := control.NewSensorReporter(pool, hub)
 	srv.SetSensorReporter(sensorReporter)
