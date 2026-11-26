@@ -1273,10 +1273,13 @@ type Run struct {
 	FinishedAt *time.Time          `json:"finishedAt,omitempty"`
 	Id         openapi_types.UUID  `json:"id"`
 	ModeId     *openapi_types.UUID `json:"modeId,omitempty"`
-	Source     RunSource           `json:"source"`
-	StartedAt  time.Time           `json:"startedAt"`
-	Status     RunStatus           `json:"status"`
-	Steps      []RunStep           `json:"steps"`
+
+	// Reason 顶层守卫未满足、超时或中止时的可读原因
+	Reason    *string   `json:"reason,omitempty"`
+	Source    RunSource `json:"source"`
+	StartedAt time.Time `json:"startedAt"`
+	Status    RunStatus `json:"status"`
+	Steps     []RunStep `json:"steps"`
 }
 
 // RunSource defines model for Run.Source.

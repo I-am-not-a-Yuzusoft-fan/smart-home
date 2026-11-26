@@ -1931,6 +1931,9 @@ components:
         finishedAt:
           type: string
           format: date-time
+        reason:
+          type: string
+          description: 顶层守卫未满足、超时或中止时的可读原因
         steps:
           type: array
           items:

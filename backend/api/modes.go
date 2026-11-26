@@ -93,6 +93,14 @@ func (s *Server) RunMode(w http.ResponseWriter, r *http.Request, id openapi_type
 			writeError(w, http.StatusNotFound, gen.NOTFOUND, "场景不存在")
 			return
 		}
+		if errors.Is(err, control.ErrModeAlreadyRunning) {
+			writeError(w, http.StatusConflict, gen.CONFLICT, err.Error())
+			return
+		}
+		if errors.Is(err, control.ErrRunModeUnsupported) {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, err.Error())
+			return
+		}
 		s.log.ErrorContext(r.Context(), "触发场景执行失败", "err", err)
 		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "触发场景执行失败")
 		return
@@ -198,6 +206,10 @@ func runDetailToGen(d control.RunDetail) gen.Run {
 	if d.Run.FinishedAt.Valid {
 		t := d.Run.FinishedAt.Time
 		out.FinishedAt = &t
+	}
+	if d.Reason != "" {
+		reason := d.Reason
+		out.Reason = &reason
 	}
 	return out
 }

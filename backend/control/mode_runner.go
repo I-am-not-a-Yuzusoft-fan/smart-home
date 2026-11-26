@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,11 +18,17 @@ import (
 )
 
 var (
-	ErrModeNotFound = errors.New("场景不存在")
-	ErrRunNotFound  = errors.New("执行记录不存在")
+	ErrModeNotFound       = errors.New("场景不存在")
+	ErrRunNotFound        = errors.New("执行记录不存在")
+	ErrModeAlreadyRunning = errors.New("场景正在执行中，当前配置为忽略重复触发")
+	ErrRunModeUnsupported = errors.New("当前版本暂不支持该并发模式（仅支持 restart 与 single）")
 )
 
 const (
+	DefaultMaxRunDuration = 5 * time.Minute
+
+	GuardNodeID = "__guard__"
+
 	RunStatusRunning   = "running"
 	RunStatusOK        = "ok"
 	RunStatusFailed    = "failed"
@@ -91,33 +98,51 @@ type ModeDefinition struct {
 }
 
 type RunDetail struct {
-	Run   storegen.Run
-	Steps []storegen.RunStep
+	Run    storegen.Run
+	Steps  []storegen.RunStep
+	Reason string
 }
 
 type activeRun struct {
+	modeID uuid.UUID
 	cancel context.CancelFunc
 	done   chan struct{}
 }
 
-// ModeRunner 负责场景执行生命周期：建 run、幂等推进步骤、取消与广播进度。
-type ModeRunner struct {
-	pool        *pgxpool.Pool
-	commands    CommandHandler
-	broadcaster RunStepBroadcaster
+type stackFrame struct {
+	node ModeNode
+	path string
+}
 
-	mu          sync.Mutex
-	active      map[uuid.UUID]*activeRun
-	advanceLock map[uuid.UUID]*sync.Mutex
+// ModeRunner 负责场景执行生命周期：守卫校验、建 run、DFS 显式栈幂等推进、超时与并发控制。
+type ModeRunner struct {
+	pool           *pgxpool.Pool
+	commands       CommandHandler
+	broadcaster    RunStepBroadcaster
+	maxRunDuration time.Duration
+
+	mu           sync.Mutex
+	active       map[uuid.UUID]*activeRun
+	activeByMode map[uuid.UUID]uuid.UUID
+	advanceLock  map[uuid.UUID]*sync.Mutex
 }
 
 func NewModeRunner(pool *pgxpool.Pool, commands CommandHandler, broadcaster RunStepBroadcaster) *ModeRunner {
 	return &ModeRunner{
-		pool:        pool,
-		commands:    commands,
-		broadcaster: broadcaster,
-		active:      make(map[uuid.UUID]*activeRun),
-		advanceLock: make(map[uuid.UUID]*sync.Mutex),
+		pool:           pool,
+		commands:       commands,
+		broadcaster:    broadcaster,
+		maxRunDuration: DefaultMaxRunDuration,
+		active:         make(map[uuid.UUID]*activeRun),
+		activeByMode:   make(map[uuid.UUID]uuid.UUID),
+		advanceLock:    make(map[uuid.UUID]*sync.Mutex),
+	}
+}
+
+// SetMaxRunDuration 允许测试注入短超时，默认 5 分钟。
+func (r *ModeRunner) SetMaxRunDuration(d time.Duration) {
+	if d > 0 {
+		r.maxRunDuration = d
 	}
 }
 
@@ -157,10 +182,26 @@ func (r *ModeRunner) GetRun(ctx context.Context, runID uuid.UUID) (RunDetail, er
 	if err != nil {
 		return RunDetail{}, err
 	}
-	return RunDetail{Run: run, Steps: steps}, nil
+	return RunDetail{Run: run, Steps: steps, Reason: deriveRunReason(run.Status, steps)}, nil
 }
 
-// Start 创建一条 run 及其初始 pending 步骤，并在后台异步推进。
+func deriveRunReason(status string, steps []storegen.RunStep) string {
+	for _, st := range steps {
+		if st.NodeID == GuardNodeID && st.Error.Valid && st.Error.String != "" {
+			return st.Error.String
+		}
+	}
+	if status == RunStatusFailed {
+		for _, st := range steps {
+			if st.Status == StepStatusFailed && st.Error.Valid && st.Error.String != "" {
+				return st.Error.String
+			}
+		}
+	}
+	return ""
+}
+
+// Start 校验并发模式与顶层守卫，创建一条 run 并在后台异步推进。
 func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uuid.UUID, source string) (RunDetail, error) {
 	if source == "" {
 		source = "manual"
@@ -174,9 +215,33 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 		return RunDetail{}, err
 	}
 
+	if mode.RunMode != "restart" && mode.RunMode != "single" {
+		return RunDetail{}, ErrRunModeUnsupported
+	}
+
 	var def ModeDefinition
 	if err := json.Unmarshal(mode.Definition, &def); err != nil {
 		return RunDetail{}, fmt.Errorf("解析场景定义失败: %w", err)
+	}
+
+	// 顶层守卫校验：不满足时不执行任何动作，记录 cancelled 与原因并返回。
+	if def.Guard != nil {
+		ok, reason := r.evaluateGuard(ctx, def.Guard)
+		if !ok {
+			return r.recordGuardRejectedRun(ctx, modeID, mode.Definition, triggeredBy, source, reason)
+		}
+	}
+
+	// 并发控制（restart 取消旧执行，single 拒绝新触发）
+	r.mu.Lock()
+	prevRunID, hasActive := r.activeByMode[modeID]
+	r.mu.Unlock()
+	if hasActive {
+		if mode.RunMode == "single" {
+			return RunDetail{}, ErrModeAlreadyRunning
+		}
+		// restart：取消旧执行并等待其落库收尾
+		_, _ = r.Cancel(ctx, prevRunID)
 	}
 
 	runID := uuid.New()
@@ -210,10 +275,11 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 		steps = append(steps, st)
 	}
 
-	runCtx, cancel := context.WithCancel(context.Background())
-	ar := &activeRun{cancel: cancel, done: make(chan struct{})}
+	runCtx, cancel := context.WithTimeout(context.Background(), r.maxRunDuration)
+	ar := &activeRun{modeID: modeID, cancel: cancel, done: make(chan struct{})}
 	r.mu.Lock()
 	r.active[runID] = ar
+	r.activeByMode[modeID] = runID
 	r.mu.Unlock()
 
 	go func() {
@@ -221,6 +287,9 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 			cancel()
 			r.mu.Lock()
 			delete(r.active, runID)
+			if r.activeByMode[modeID] == runID {
+				delete(r.activeByMode, modeID)
+			}
 			delete(r.advanceLock, runID)
 			r.mu.Unlock()
 			close(ar.done)
@@ -229,6 +298,52 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 	}()
 
 	return RunDetail{Run: run, Steps: steps}, nil
+}
+
+func (r *ModeRunner) recordGuardRejectedRun(
+	ctx context.Context,
+	modeID uuid.UUID,
+	definition json.RawMessage,
+	triggeredBy uuid.UUID,
+	source string,
+	reason string,
+) (RunDetail, error) {
+	q := storegen.New(r.pool)
+	runID := uuid.New()
+	now := time.Now()
+	_, err := q.InsertRun(ctx, storegen.InsertRunParams{
+		ID:                 pgUUID(runID),
+		ModeID:             pgUUID(modeID),
+		Status:             RunStatusRunning,
+		DefinitionSnapshot: definition,
+		TriggeredBy:        pgUUID(triggeredBy),
+		Source:             source,
+		StartedAt:          pgTime(now),
+	})
+	if err != nil {
+		return RunDetail{}, err
+	}
+	if err := q.CompleteRun(ctx, storegen.CompleteRunParams{
+		ID:         pgUUID(runID),
+		Status:     RunStatusCancelled,
+		FinishedAt: pgTime(now),
+	}); err != nil {
+		return RunDetail{}, err
+	}
+	if err := r.saveAndBroadcast(ctx, RunStepMessage{
+		RunID:      runID,
+		NodeID:     GuardNodeID,
+		Path:       "000",
+		Alias:      "守卫条件检查",
+		Status:     StepStatusSkipped,
+		Error:      reason,
+		RunStatus:  RunStatusCancelled,
+		StartedAt:  &now,
+		FinishedAt: &now,
+	}); err != nil {
+		return RunDetail{}, err
+	}
+	return r.GetRun(ctx, runID)
 }
 
 // Cancel 取消正在运行的执行，等待收尾落库后返回最新详情。
@@ -264,11 +379,17 @@ func (r *ModeRunner) Cancel(ctx context.Context, runID uuid.UUID) (RunDetail, er
 	return detail, nil
 }
 
-// Advance 幂等推进一次执行：同一 runID 互斥执行，已处于终态（ok/failed/skipped）的节点不会重复执行。
+// Advance 使用深度优先显式栈幂等推进一次执行：同一 runID 互斥，已完成节点不重复执行。
 func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 	runMu := r.lockForRun(runID)
 	runMu.Lock()
 	defer runMu.Unlock()
+
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.maxRunDuration)
+		defer cancel()
+	}
 
 	q := storegen.New(r.pool)
 	run, err := q.GetRun(ctx, pgUUID(runID))
@@ -304,21 +425,26 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 	}
 	defaultContinue := def.Defaults != nil && def.Defaults.ContinueOnError
 
-	for i, node := range def.Steps {
+	stack := make([]stackFrame, 0, len(def.Steps))
+	stack = pushChildren(stack, def.Steps, "")
+
+	for len(stack) > 0 {
+		frame := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		node := frame.node
+
 		if doneNodes[node.NodeID] {
 			continue
 		}
-		path := fmt.Sprintf("%03d", i)
-		isLast := i == len(def.Steps)-1
 
 		if ctx.Err() != nil {
-			return r.cancelRemaining(runID, def.Steps[i:], i, doneNodes)
+			return r.terminateOnContextErr(ctx.Err(), runID, frame, stack, doneNodes, nil)
 		}
 
 		if node.Enabled != nil && !*node.Enabled {
 			now := time.Now()
 			runStatus := RunStatusRunning
-			if isLast {
+			if len(stack) == 0 {
 				runStatus = RunStatusOK
 				if err := q.CompleteRun(context.Background(), storegen.CompleteRunParams{
 					ID: pgUUID(runID), Status: runStatus, FinishedAt: pgTime(now),
@@ -327,7 +453,7 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 				}
 			}
 			if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
-				RunID: runID, NodeID: node.NodeID, Path: path, Alias: node.Alias,
+				RunID: runID, NodeID: node.NodeID, Path: frame.path, Alias: node.Alias,
 				Status: StepStatusSkipped, Error: "步骤已禁用", RunStatus: runStatus,
 				StartedAt: &now, FinishedAt: &now,
 			}); err != nil {
@@ -339,7 +465,7 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 
 		startedAt := time.Now()
 		if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
-			RunID: runID, NodeID: node.NodeID, Path: path, Alias: node.Alias,
+			RunID: runID, NodeID: node.NodeID, Path: frame.path, Alias: node.Alias,
 			Status: StepStatusRunning, RunStatus: RunStatusRunning, StartedAt: &startedAt,
 		}); err != nil {
 			return err
@@ -358,7 +484,7 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 					stepStatus = StepStatusOK
 				case <-ctx.Done():
 					timer.Stop()
-					return r.cancelRemaining(runID, def.Steps[i:], i, doneNodes)
+					return r.terminateOnContextErr(ctx.Err(), runID, frame, stack, doneNodes, &startedAt)
 				}
 			} else {
 				stepStatus = StepStatusOK
@@ -382,18 +508,52 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 				})
 				if cmdErr != nil {
 					if ctx.Err() != nil {
-						return r.cancelRemaining(runID, def.Steps[i:], i, doneNodes)
+						return r.terminateOnContextErr(ctx.Err(), runID, frame, stack, doneNodes, &startedAt)
 					}
-					stepStatus = StepStatusFailed
-					stepErr = cmdErr.Error()
-					abort = !shouldContinue(node, defaultContinue)
+					var ce *CommandError
+					if errors.As(cmdErr, &ce) && ce.Code == "NOT_FOUND" {
+						// SRS 异常边界：引用的设备已被删除，执行时跳过并提示。
+						stepStatus = StepStatusSkipped
+						stepErr = "引用的设备已被删除，已跳过"
+					} else {
+						stepStatus = StepStatusFailed
+						stepErr = cmdErr.Error()
+						abort = !shouldContinue(node, defaultContinue)
+					}
 				} else {
 					stepStatus = StepStatusOK
 				}
 			}
 		case "choose":
-			stepStatus = StepStatusSkipped
-			stepErr = "条件分支待 T12 接入"
+			ok, reason := r.evaluateGuard(ctx, node.When)
+			var branch []ModeNode
+			if ok {
+				branch = node.Then
+			} else {
+				branch = node.Else
+			}
+			if len(branch) > 0 {
+				// 预先为命中分支写入 pending 步骤并逆序压栈，确保前端时间线立即可见
+				for j, child := range branch {
+					childPath := frame.path + "." + fmt.Sprintf("%03d", j)
+					if _, err := q.UpsertRunStep(context.Background(), storegen.UpsertRunStepParams{
+						RunID:  pgUUID(runID),
+						NodeID: child.NodeID,
+						Path:   childPath,
+						Alias:  pgText(child.Alias),
+						Status: StepStatusPending,
+					}); err != nil {
+						return err
+					}
+				}
+				stack = pushChildren(stack, branch, frame.path)
+				stepStatus = StepStatusOK
+			} else {
+				stepStatus = StepStatusSkipped
+				if !ok && reason != "" {
+					stepErr = reason
+				}
+			}
 		default:
 			stepStatus = StepStatusSkipped
 			stepErr = "不支持的节点类型: " + node.Type
@@ -403,7 +563,7 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 		runStatus := RunStatusRunning
 		if abort {
 			runStatus = RunStatusFailed
-		} else if isLast {
+		} else if len(stack) == 0 {
 			runStatus = RunStatusOK
 		}
 		if runStatus == RunStatusOK || runStatus == RunStatusFailed {
@@ -414,7 +574,7 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 			}
 		}
 		if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
-			RunID: runID, NodeID: node.NodeID, Path: path, Alias: node.Alias,
+			RunID: runID, NodeID: node.NodeID, Path: frame.path, Alias: node.Alias,
 			Status: stepStatus, Error: stepErr, RunStatus: runStatus,
 			StartedAt: &startedAt, FinishedAt: &finishedAt,
 		}); err != nil {
@@ -423,13 +583,24 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 		doneNodes[node.NodeID] = true
 
 		if abort {
-			return r.skipRemaining(runID, def.Steps[i+1:], i+1, doneNodes, "前置步骤失败，已中止", RunStatusFailed)
+			return r.skipStack(runID, stack, doneNodes, "前置步骤失败，已中止", RunStatusFailed)
 		}
 	}
 
 	return q.CompleteRun(context.Background(), storegen.CompleteRunParams{
 		ID: pgUUID(runID), Status: RunStatusOK, FinishedAt: pgTime(time.Now()),
 	})
+}
+
+func pushChildren(stack []stackFrame, nodes []ModeNode, prefix string) []stackFrame {
+	for i := len(nodes) - 1; i >= 0; i-- {
+		p := fmt.Sprintf("%03d", i)
+		if prefix != "" {
+			p = prefix + "." + p
+		}
+		stack = append(stack, stackFrame{node: nodes[i], path: p})
+	}
+	return stack
 }
 
 func shouldContinue(node ModeNode, defaultContinue bool) bool {
@@ -439,32 +610,180 @@ func shouldContinue(node ModeNode, defaultContinue bool) bool {
 	return defaultContinue
 }
 
-func (r *ModeRunner) cancelRemaining(runID uuid.UUID, remaining []ModeNode, startIdx int, doneNodes map[string]bool) error {
+// terminateOnContextErr 区分超时（DeadlineExceeded -> failed/timeout + 剩余 skipped）与主动取消（cancelled + 全部 skipped）。
+func (r *ModeRunner) terminateOnContextErr(
+	ctxErr error,
+	runID uuid.UUID,
+	current stackFrame,
+	remaining []stackFrame,
+	doneNodes map[string]bool,
+	startedAt *time.Time,
+) error {
+	now := time.Now()
+	if errors.Is(ctxErr, context.DeadlineExceeded) {
+		if err := storegen.New(r.pool).CompleteRun(context.Background(), storegen.CompleteRunParams{
+			ID: pgUUID(runID), Status: RunStatusFailed, FinishedAt: pgTime(now),
+		}); err != nil {
+			return err
+		}
+		stStart := startedAt
+		if stStart == nil {
+			stStart = &now
+		}
+		if !doneNodes[current.node.NodeID] {
+			if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
+				RunID: runID, NodeID: current.node.NodeID, Path: current.path, Alias: current.node.Alias,
+				Status: StepStatusFailed, Error: "timeout：执行超过最大时限", RunStatus: RunStatusFailed,
+				StartedAt: stStart, FinishedAt: &now,
+			}); err != nil {
+				return err
+			}
+			doneNodes[current.node.NodeID] = true
+		}
+		return r.skipStack(runID, remaining, doneNodes, "执行超时，已终止", RunStatusFailed)
+	}
+
 	if err := storegen.New(r.pool).CompleteRun(context.Background(), storegen.CompleteRunParams{
-		ID: pgUUID(runID), Status: RunStatusCancelled, FinishedAt: pgTime(time.Now()),
+		ID: pgUUID(runID), Status: RunStatusCancelled, FinishedAt: pgTime(now),
 	}); err != nil {
 		return err
 	}
-	return r.skipRemaining(runID, remaining, startIdx, doneNodes, "已取消", RunStatusCancelled)
+	all := append(remaining, current)
+	return r.skipStack(runID, all, doneNodes, "已取消", RunStatusCancelled)
 }
 
-func (r *ModeRunner) skipRemaining(runID uuid.UUID, remaining []ModeNode, startIdx int, doneNodes map[string]bool, reason string, runStatus string) error {
+// skipStack 按执行顺序（栈顶到栈底）把剩余未执行节点全部标为 skipped 并广播。
+func (r *ModeRunner) skipStack(runID uuid.UUID, stack []stackFrame, doneNodes map[string]bool, reason string, runStatus string) error {
 	now := time.Now()
-	for offset, node := range remaining {
-		if doneNodes[node.NodeID] {
+	for i := len(stack) - 1; i >= 0; i-- {
+		frame := stack[i]
+		if doneNodes[frame.node.NodeID] {
 			continue
 		}
-		path := fmt.Sprintf("%03d", startIdx+offset)
 		if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
-			RunID: runID, NodeID: node.NodeID, Path: path, Alias: node.Alias,
+			RunID: runID, NodeID: frame.node.NodeID, Path: frame.path, Alias: frame.node.Alias,
 			Status: StepStatusSkipped, Error: reason, RunStatus: runStatus,
 			StartedAt: &now, FinishedAt: &now,
 		}); err != nil {
 			return err
 		}
-		doneNodes[node.NodeID] = true
+		doneNodes[frame.node.NodeID] = true
 	}
 	return nil
+}
+
+// evaluateGuard 统一求值顶层 guard 与 choose.when；传感器读数缺失按不成立处理并给出具体原因。
+func (r *ModeRunner) evaluateGuard(ctx context.Context, guard *ModeGuard) (bool, string) {
+	if guard == nil {
+		return true, ""
+	}
+	if len(guard.All) > 0 {
+		for _, cond := range guard.All {
+			ok, reason := r.evaluateCondition(ctx, cond)
+			if !ok {
+				return false, reason
+			}
+		}
+	}
+	if len(guard.Any) > 0 {
+		var reasons []string
+		matched := false
+		for _, cond := range guard.Any {
+			ok, reason := r.evaluateCondition(ctx, cond)
+			if ok {
+				matched = true
+				break
+			}
+			reasons = append(reasons, reason)
+		}
+		if !matched {
+			return false, "任一守卫条件均未满足：" + strings.Join(reasons, "；")
+		}
+	}
+	return true, ""
+}
+
+func (r *ModeRunner) evaluateCondition(ctx context.Context, cond ModeCondition) (bool, string) {
+	q := storegen.New(r.pool)
+	label := cond.ItemID.String()
+	if item, err := q.GetItem(ctx, pgUUID(cond.ItemID)); err == nil && item.Name != "" {
+		label = item.Name
+	}
+	state, err := q.GetState(ctx, storegen.GetStateParams{
+		ItemID:        pgUUID(cond.ItemID),
+		CapabilityKey: cond.Capability,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, fmt.Sprintf("守卫条件不满足：「%s」的 %s 读数缺失", label, cond.Capability)
+	}
+	if err != nil {
+		return false, fmt.Sprintf("守卫条件不满足：读取「%s」的 %s 失败", label, cond.Capability)
+	}
+
+	var actual any
+	if err := json.Unmarshal(state.Value, &actual); err != nil || actual == nil || actual == "unavailable" {
+		return false, fmt.Sprintf("守卫条件不满足：「%s」的 %s 读数缺失或不可用", label, cond.Capability)
+	}
+
+	ok, err := compareValues(actual, cond.Op, cond.Value)
+	if err != nil {
+		return false, fmt.Sprintf("守卫条件不满足：「%s」的 %s 无法比较（%v）", label, cond.Capability, err)
+	}
+	if !ok {
+		return false, fmt.Sprintf("守卫条件不满足：「%s」的 %s 当前为 %v（要求 %s %v）", label, cond.Capability, actual, cond.Op, cond.Value)
+	}
+	return true, ""
+}
+
+func compareValues(actual any, op string, expected any) (bool, error) {
+	aNum, aIsNum := toFloat64(actual)
+	eNum, eIsNum := toFloat64(expected)
+	if aIsNum && eIsNum {
+		switch op {
+		case "==":
+			return aNum == eNum, nil
+		case "!=":
+			return aNum != eNum, nil
+		case ">":
+			return aNum > eNum, nil
+		case ">=":
+			return aNum >= eNum, nil
+		case "<":
+			return aNum < eNum, nil
+		case "<=":
+			return aNum <= eNum, nil
+		default:
+			return false, fmt.Errorf("不支持的运算符 %s", op)
+		}
+	}
+	switch op {
+	case "==":
+		return fmt.Sprintf("%v", actual) == fmt.Sprintf("%v", expected), nil
+	case "!=":
+		return fmt.Sprintf("%v", actual) != fmt.Sprintf("%v", expected), nil
+	default:
+		return false, fmt.Errorf("非数值类型不支持运算符 %s", op)
+	}
+}
+
+func toFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	default:
+		return 0, false
+	}
 }
 
 // saveAndBroadcast 严格遵循 ADR 0002 单一写入点：先落库成功，再由 Broadcaster 广播。
