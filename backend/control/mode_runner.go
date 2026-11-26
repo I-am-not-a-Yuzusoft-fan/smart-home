@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -195,6 +196,105 @@ func (r *ModeRunner) GetMode(ctx context.Context, id uuid.UUID) (storegen.Mode, 
 		return storegen.Mode{}, ErrModeNotFound
 	}
 	return m, err
+}
+
+type ModeWriteInput struct {
+	Name       string
+	Definition json.RawMessage
+	RunMode    string
+	Enabled    bool
+	CreatedBy  uuid.UUID
+}
+
+func normalizeModeWriteInput(in ModeWriteInput) (ModeWriteInput, error) {
+	in.Name = strings.TrimSpace(in.Name)
+	if in.Name == "" || len([]rune(in.Name)) > 64 {
+		return in, fmt.Errorf("%w: 场景名称不能为空且不超过 64 字", ErrModeValidation)
+	}
+	if in.RunMode == "" {
+		in.RunMode = "restart"
+	}
+	switch in.RunMode {
+	case "single", "restart", "queued", "parallel":
+	default:
+		return in, fmt.Errorf("%w: 不支持的 runMode %q", ErrModeValidation, in.RunMode)
+	}
+	return in, nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func (r *ModeRunner) CreateMode(ctx context.Context, in ModeWriteInput) (storegen.Mode, error) {
+	in, err := normalizeModeWriteInput(in)
+	if err != nil {
+		return storegen.Mode{}, err
+	}
+	if err := ValidateModeDefinition(ctx, r.pool, in.Definition); err != nil {
+		return storegen.Mode{}, err
+	}
+	m, err := storegen.New(r.pool).InsertMode(ctx, storegen.InsertModeParams{
+		Name:       in.Name,
+		Definition: in.Definition,
+		RunMode:    in.RunMode,
+		Enabled:    in.Enabled,
+		CreatedBy:  pgUUID(in.CreatedBy),
+		CreatedAt:  pgTime(time.Now()),
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			return storegen.Mode{}, ErrModeNameConflict
+		}
+		return storegen.Mode{}, err
+	}
+	return m, nil
+}
+
+func (r *ModeRunner) UpdateMode(ctx context.Context, id uuid.UUID, in ModeWriteInput) (storegen.Mode, error) {
+	in, err := normalizeModeWriteInput(in)
+	if err != nil {
+		return storegen.Mode{}, err
+	}
+	if err := ValidateModeDefinition(ctx, r.pool, in.Definition); err != nil {
+		return storegen.Mode{}, err
+	}
+	m, err := storegen.New(r.pool).UpdateMode(ctx, storegen.UpdateModeParams{
+		ID:         pgUUID(id),
+		Name:       in.Name,
+		Definition: in.Definition,
+		RunMode:    in.RunMode,
+		Enabled:    in.Enabled,
+		UpdatedAt:  pgTime(time.Now()),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return storegen.Mode{}, ErrModeNotFound
+		}
+		if isUniqueViolation(err) {
+			return storegen.Mode{}, ErrModeNameConflict
+		}
+		return storegen.Mode{}, err
+	}
+	return m, nil
+}
+
+func (r *ModeRunner) DeleteMode(ctx context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	prevRunID, hasActive := r.activeByMode[id]
+	r.mu.Unlock()
+	if hasActive {
+		_, _ = r.Cancel(ctx, prevRunID)
+	}
+	rows, err := storegen.New(r.pool).DeleteMode(ctx, pgUUID(id))
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrModeNotFound
+	}
+	return nil
 }
 
 func (r *ModeRunner) GetRun(ctx context.Context, runID uuid.UUID) (RunDetail, error) {

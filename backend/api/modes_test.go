@@ -346,3 +346,90 @@ func TestSimEnvPermissionsAndComfortSeasonSwitch(t *testing.T) {
 		t.Fatalf("春季温控 s5 应 ok 且含「自然通风」，实际 status=%q note=%q", stSpring, noteSpring)
 	}
 }
+
+func TestModeCRUDValidationAndPermissions(t *testing.T) {
+	h := newTestServer(t)
+	adminCookie := loginAs(t, h, "zhang")
+	memberCookie := loginAs(t, h, "li")
+
+	validBody := `{
+		"name": "测试自定义场景-` + uuid.NewString()[:8] + `",
+		"runMode": "restart",
+		"enabled": true,
+		"definition": {
+			"version": 1,
+			"guard": {
+				"all": [{"itemId":"00000000-0000-4000-8000-000000000306","capability":"occupied","op":"==","value":true}]
+			},
+			"defaults": {"continueOnError": false},
+			"steps": [
+				{"nodeId":"a1","type":"action","alias":"开客厅灯","itemId":"00000000-0000-4000-8000-000000000301","capability":"on","value":true},
+				{"nodeId":"a2","type":"action","alias":"调亮度","itemId":"00000000-0000-4000-8000-000000000301","capability":"brightness","value":60},
+				{"nodeId":"d1","type":"delay","alias":"等 50ms","ms":50},
+				{"nodeId":"c1","type":"choose","alias":"照度判断",
+				 "when":{"all":[{"itemId":"00000000-0000-4000-8000-000000000305","capability":"illuminance","op":">","value":10}]},
+				 "then":[{"nodeId":"a3","type":"action","alias":"关窗帘","itemId":"00000000-0000-4000-8000-000000000303","capability":"position","value":0}],
+				 "else":[]}
+			]
+		}
+	}`
+
+	// 1. 普通成员写操作一律 403
+	if w := do(t, h, http.MethodPost, "/api/modes", validBody, memberCookie); w.Code != http.StatusForbidden {
+		t.Fatalf("member POST /api/modes 应 403，实际 %d", w.Code)
+	}
+	if w := do(t, h, http.MethodPut, "/api/modes/00000000-0000-4000-8000-000000000501", validBody, memberCookie); w.Code != http.StatusForbidden {
+		t.Fatalf("member PUT /api/modes 应 403，实际 %d", w.Code)
+	}
+	if w := do(t, h, http.MethodDelete, "/api/modes/00000000-0000-4000-8000-000000000501", "", memberCookie); w.Code != http.StatusForbidden {
+		t.Fatalf("member DELETE /api/modes 应 403，实际 %d", w.Code)
+	}
+
+	// 2. JSON Schema 与语义校验拒绝非法定义（空 steps、重复 nodeId、不存在设备）
+	invalidCases := []struct {
+		name string
+		body string
+	}{
+		{"空 steps", `{"name":"bad1","definition":{"version":1,"steps":[]}}`},
+		{"重复 nodeId", `{"name":"bad2","definition":{"version":1,"steps":[{"nodeId":"x","type":"delay","ms":10},{"nodeId":"x","type":"delay","ms":10}]}}`},
+		{"不存在设备", `{"name":"bad3","definition":{"version":1,"steps":[{"nodeId":"x","type":"action","itemId":"` + uuid.NewString() + `","capability":"on","value":true}]}}`},
+	}
+	for _, tc := range invalidCases {
+		if w := do(t, h, http.MethodPost, "/api/modes", tc.body, adminCookie); w.Code != http.StatusBadRequest {
+			t.Fatalf("非法用例 %q 应返回 400，实际 %d：%s", tc.name, w.Code, w.Body.String())
+		}
+	}
+
+	// 3. 管理员创建 → 重名 409 → 更新 → 删除
+	wCreate := do(t, h, http.MethodPost, "/api/modes", validBody, adminCookie)
+	if wCreate.Code != http.StatusCreated {
+		t.Fatalf("admin POST /api/modes 应 201，实际 %d：%s", wCreate.Code, wCreate.Body.String())
+	}
+	var created struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(wCreate.Body.Bytes(), &created)
+	if created.ID == "" {
+		t.Fatal("创建返回缺少 id")
+	}
+
+	// 同名冲突 409
+	if wDup := do(t, h, http.MethodPost, "/api/modes", validBody, adminCookie); wDup.Code != http.StatusConflict {
+		t.Fatalf("重名创建应 409，实际 %d", wDup.Code)
+	}
+
+	// 更新 200
+	updatedBody := strings.Replace(validBody, created.Name, created.Name+"-已更新", 1)
+	if wUpd := do(t, h, http.MethodPut, "/api/modes/"+created.ID, updatedBody, adminCookie); wUpd.Code != http.StatusOK {
+		t.Fatalf("PUT /api/modes/{id} 应 200，实际 %d：%s", wUpd.Code, wUpd.Body.String())
+	}
+
+	// 删除 204，再查 404
+	if wDel := do(t, h, http.MethodDelete, "/api/modes/"+created.ID, "", adminCookie); wDel.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /api/modes/{id} 应 204，实际 %d", wDel.Code)
+	}
+	if wGone := do(t, h, http.MethodGet, "/api/modes/"+created.ID, "", adminCookie); wGone.Code != http.StatusNotFound {
+		t.Fatalf("删除后 GET 应 404，实际 %d", wGone.Code)
+	}
+}

@@ -352,22 +352,22 @@ func (e ItemUpdateStatus) Valid() bool {
 
 // Defines values for ModeRunMode.
 const (
-	Parallel ModeRunMode = "parallel"
-	Queued   ModeRunMode = "queued"
-	Restart  ModeRunMode = "restart"
-	Single   ModeRunMode = "single"
+	ModeRunModeParallel ModeRunMode = "parallel"
+	ModeRunModeQueued   ModeRunMode = "queued"
+	ModeRunModeRestart  ModeRunMode = "restart"
+	ModeRunModeSingle   ModeRunMode = "single"
 )
 
 // Valid indicates whether the value is a known member of the ModeRunMode enum.
 func (e ModeRunMode) Valid() bool {
 	switch e {
-	case Parallel:
+	case ModeRunModeParallel:
 		return true
-	case Queued:
+	case ModeRunModeQueued:
 		return true
-	case Restart:
+	case ModeRunModeRestart:
 		return true
-	case Single:
+	case ModeRunModeSingle:
 		return true
 	default:
 		return false
@@ -398,6 +398,30 @@ func (e ModeConditionOp) Valid() bool {
 	case LessThan:
 		return true
 	case LessThanEqual:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModeInputRunMode.
+const (
+	ModeInputRunModeParallel ModeInputRunMode = "parallel"
+	ModeInputRunModeQueued   ModeInputRunMode = "queued"
+	ModeInputRunModeRestart  ModeInputRunMode = "restart"
+	ModeInputRunModeSingle   ModeInputRunMode = "single"
+)
+
+// Valid indicates whether the value is a known member of the ModeInputRunMode enum.
+func (e ModeInputRunMode) Valid() bool {
+	switch e {
+	case ModeInputRunModeParallel:
+		return true
+	case ModeInputRunModeQueued:
+		return true
+	case ModeInputRunModeRestart:
+		return true
+	case ModeInputRunModeSingle:
 		return true
 	default:
 		return false
@@ -1208,6 +1232,17 @@ type ModeGuard struct {
 	Any *[]ModeCondition `json:"any,omitempty"`
 }
 
+// ModeInput defines model for ModeInput.
+type ModeInput struct {
+	Definition ModeDefinition    `json:"definition"`
+	Enabled    *bool             `json:"enabled,omitempty"`
+	Name       string            `json:"name"`
+	RunMode    *ModeInputRunMode `json:"runMode,omitempty"`
+}
+
+// ModeInputRunMode defines model for ModeInput.RunMode.
+type ModeInputRunMode string
+
 // ModeNode defines model for ModeNode.
 type ModeNode struct {
 	Alias           *string             `json:"alias,omitempty"`
@@ -1598,6 +1633,12 @@ type UpdateItemJSONRequestBody = ItemUpdate
 // SendItemCommandJSONRequestBody defines body for SendItemCommand for application/json ContentType.
 type SendItemCommandJSONRequestBody = CommandInput
 
+// CreateModeJSONRequestBody defines body for CreateMode for application/json ContentType.
+type CreateModeJSONRequestBody = ModeInput
+
+// UpdateModeJSONRequestBody defines body for UpdateMode for application/json ContentType.
+type UpdateModeJSONRequestBody = ModeInput
+
 // RunModeJSONRequestBody defines body for RunMode for application/json ContentType.
 type RunModeJSONRequestBody = RunModeRequest
 
@@ -1681,9 +1722,18 @@ type ServerInterface interface {
 	// ListModes 列出所有场景模式
 	// (GET /api/modes)
 	ListModes(w http.ResponseWriter, r *http.Request)
+	// CreateMode 新建场景模式（仅管理员）
+	// (POST /api/modes)
+	CreateMode(w http.ResponseWriter, r *http.Request)
+	// DeleteMode 删除场景模式（仅管理员）
+	// (DELETE /api/modes/{id})
+	DeleteMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// GetMode 获取单个场景模式详情
 	// (GET /api/modes/{id})
 	GetMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// UpdateMode 更新场景模式（仅管理员）
+	// (PUT /api/modes/{id})
+	UpdateMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// RunMode 触发执行指定场景模式
 	// (POST /api/modes/{id}/run)
 	RunMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
@@ -1849,9 +1899,27 @@ func (_ Unimplemented) ListModes(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// CreateMode 新建场景模式（仅管理员）
+// (POST /api/modes)
+func (_ Unimplemented) CreateMode(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// DeleteMode 删除场景模式（仅管理员）
+// (DELETE /api/modes/{id})
+func (_ Unimplemented) DeleteMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // GetMode 获取单个场景模式详情
 // (GET /api/modes/{id})
 func (_ Unimplemented) GetMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// UpdateMode 更新场景模式（仅管理员）
+// (PUT /api/modes/{id})
+func (_ Unimplemented) UpdateMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -2393,6 +2461,46 @@ func (siw *ServerInterfaceWrapper) ListModes(w http.ResponseWriter, r *http.Requ
 	handler.ServeHTTP(w, r)
 }
 
+// CreateMode operation middleware
+func (siw *ServerInterfaceWrapper) CreateMode(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateMode(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteMode operation middleware
+func (siw *ServerInterfaceWrapper) DeleteMode(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteMode(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetMode operation middleware
 func (siw *ServerInterfaceWrapper) GetMode(w http.ResponseWriter, r *http.Request) {
 
@@ -2410,6 +2518,32 @@ func (siw *ServerInterfaceWrapper) GetMode(w http.ResponseWriter, r *http.Reques
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetMode(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateMode operation middleware
+func (siw *ServerInterfaceWrapper) UpdateMode(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateMode(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3006,7 +3140,16 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Get(options.BaseURL+"/api/modes", wrapper.ListModes)
 	})
 	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/modes", wrapper.CreateMode)
+	})
+	r.Group(func(r chi.Router) {
+		r.Delete(options.BaseURL+"/api/modes/{id}", wrapper.DeleteMode)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/modes/{id}", wrapper.GetMode)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/api/modes/{id}", wrapper.UpdateMode)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/api/modes/{id}/run", wrapper.RunMode)

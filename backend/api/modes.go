@@ -62,6 +62,150 @@ func (s *Server) GetMode(w http.ResponseWriter, r *http.Request, id openapi_type
 	writeJSON(w, http.StatusOK, item)
 }
 
+func (s *Server) CreateMode(w http.ResponseWriter, r *http.Request) {
+	if s.modes == nil {
+		writeError(w, http.StatusServiceUnavailable, gen.INTERNAL, "场景执行器未就绪")
+		return
+	}
+	account, ok := AccountFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, gen.UNAUTHENTICATED, "未登录")
+		return
+	}
+	if account.Role != "admin" {
+		writeError(w, http.StatusForbidden, gen.FORBIDDEN, "只有管理员可以新建场景")
+		return
+	}
+	var body gen.ModeInput
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	defRaw, err := json.Marshal(body.Definition)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "场景定义序列化失败")
+		return
+	}
+	runMode := "restart"
+	if body.RunMode != nil {
+		runMode = string(*body.RunMode)
+	}
+	enabled := true
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+	accountID, err := uuid.Parse(account.ID.String())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "会话用户数据无效")
+		return
+	}
+	created, err := s.modes.CreateMode(r.Context(), control.ModeWriteInput{
+		Name:       body.Name,
+		Definition: defRaw,
+		RunMode:    runMode,
+		Enabled:    enabled,
+		CreatedBy:  accountID,
+	})
+	if err != nil {
+		s.writeModeWriteError(w, r, err, "创建场景失败")
+		return
+	}
+	out, err := modeToGen(created)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "解析场景定义失败")
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+func (s *Server) UpdateMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	if s.modes == nil {
+		writeError(w, http.StatusServiceUnavailable, gen.INTERNAL, "场景执行器未就绪")
+		return
+	}
+	account, ok := AccountFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, gen.UNAUTHENTICATED, "未登录")
+		return
+	}
+	if account.Role != "admin" {
+		writeError(w, http.StatusForbidden, gen.FORBIDDEN, "只有管理员可以修改场景")
+		return
+	}
+	var body gen.ModeInput
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	defRaw, err := json.Marshal(body.Definition)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "场景定义序列化失败")
+		return
+	}
+	runMode := "restart"
+	if body.RunMode != nil {
+		runMode = string(*body.RunMode)
+	}
+	enabled := true
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+	updated, err := s.modes.UpdateMode(r.Context(), uuid.UUID(id), control.ModeWriteInput{
+		Name:       body.Name,
+		Definition: defRaw,
+		RunMode:    runMode,
+		Enabled:    enabled,
+	})
+	if err != nil {
+		s.writeModeWriteError(w, r, err, "更新场景失败")
+		return
+	}
+	out, err := modeToGen(updated)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "解析场景定义失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) DeleteMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	if s.modes == nil {
+		writeError(w, http.StatusServiceUnavailable, gen.INTERNAL, "场景执行器未就绪")
+		return
+	}
+	account, ok := AccountFrom(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, gen.UNAUTHENTICATED, "未登录")
+		return
+	}
+	if account.Role != "admin" {
+		writeError(w, http.StatusForbidden, gen.FORBIDDEN, "只有管理员可以删除场景")
+		return
+	}
+	if err := s.modes.DeleteMode(r.Context(), uuid.UUID(id)); err != nil {
+		if errors.Is(err, control.ErrModeNotFound) {
+			writeError(w, http.StatusNotFound, gen.NOTFOUND, "场景不存在")
+			return
+		}
+		s.log.ErrorContext(r.Context(), "删除场景失败", "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "删除场景失败")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) writeModeWriteError(w http.ResponseWriter, r *http.Request, err error, fallback string) {
+	switch {
+	case errors.Is(err, control.ErrModeValidation):
+		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, err.Error())
+	case errors.Is(err, control.ErrModeNameConflict):
+		writeError(w, http.StatusConflict, gen.CONFLICT, err.Error())
+	case errors.Is(err, control.ErrModeNotFound):
+		writeError(w, http.StatusNotFound, gen.NOTFOUND, "场景不存在")
+	default:
+		s.log.ErrorContext(r.Context(), fallback, "err", err)
+		writeError(w, http.StatusInternalServerError, gen.INTERNAL, fallback)
+	}
+}
+
 func (s *Server) RunMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	if s.modes == nil {
 		writeError(w, http.StatusServiceUnavailable, gen.INTERNAL, "场景执行器未就绪")

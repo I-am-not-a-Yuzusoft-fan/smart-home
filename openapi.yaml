@@ -825,6 +825,30 @@ paths:
                   $ref: "#/components/schemas/Mode"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+    post:
+      operationId: createMode
+      summary: 新建场景模式（仅管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModeInput"
+      responses:
+        "201":
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mode"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
   /api/modes/{id}:
     get:
       operationId: getMode
@@ -845,6 +869,58 @@ paths:
                 $ref: "#/components/schemas/Mode"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      operationId: updateMode
+      summary: 更新场景模式（仅管理员）
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModeInput"
+      responses:
+        "200":
+          description: 更新成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Mode"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    delete:
+      operationId: deleteMode
+      summary: 删除场景模式（仅管理员）
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: 删除成功
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
   /api/modes/{id}/run:
@@ -1888,6 +1964,24 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ModeNode"
+    ModeInput:
+      type: object
+      required: [name, definition]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+        definition:
+          $ref: "#/components/schemas/ModeDefinition"
+        runMode:
+          type: string
+          enum: [single, restart, queued, parallel]
+          default: restart
+        enabled:
+          type: boolean
+          default: true
     Mode:
       type: object
       required: [id, name, definition, runMode, enabled, createdAt, updatedAt]

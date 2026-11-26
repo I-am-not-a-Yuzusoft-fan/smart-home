@@ -7,9 +7,23 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const deleteMode = `-- name: DeleteMode :execrows
+DELETE FROM mode
+WHERE id = $1
+`
+
+func (q *Queries) DeleteMode(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMode, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
 
 const getMode = `-- name: GetMode :one
 SELECT id, name, definition, run_mode, enabled, created_by, created_at, updated_at
@@ -19,6 +33,44 @@ WHERE id = $1
 
 func (q *Queries) GetMode(ctx context.Context, id pgtype.UUID) (Mode, error) {
 	row := q.db.QueryRow(ctx, getMode, id)
+	var i Mode
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Definition,
+		&i.RunMode,
+		&i.Enabled,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const insertMode = `-- name: InsertMode :one
+INSERT INTO mode (name, definition, run_mode, enabled, created_by, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $6)
+RETURNING id, name, definition, run_mode, enabled, created_by, created_at, updated_at
+`
+
+type InsertModeParams struct {
+	Name       string             `json:"name"`
+	Definition json.RawMessage    `json:"definition"`
+	RunMode    string             `json:"run_mode"`
+	Enabled    bool               `json:"enabled"`
+	CreatedBy  pgtype.UUID        `json:"created_by"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertMode(ctx context.Context, arg InsertModeParams) (Mode, error) {
+	row := q.db.QueryRow(ctx, insertMode,
+		arg.Name,
+		arg.Definition,
+		arg.RunMode,
+		arg.Enabled,
+		arg.CreatedBy,
+		arg.CreatedAt,
+	)
 	var i Mode
 	err := row.Scan(
 		&i.ID,
@@ -66,4 +118,47 @@ func (q *Queries) ListModes(ctx context.Context) ([]Mode, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateMode = `-- name: UpdateMode :one
+UPDATE mode
+SET name = $2,
+    definition = $3,
+    run_mode = $4,
+    enabled = $5,
+    updated_at = $6
+WHERE id = $1
+RETURNING id, name, definition, run_mode, enabled, created_by, created_at, updated_at
+`
+
+type UpdateModeParams struct {
+	ID         pgtype.UUID        `json:"id"`
+	Name       string             `json:"name"`
+	Definition json.RawMessage    `json:"definition"`
+	RunMode    string             `json:"run_mode"`
+	Enabled    bool               `json:"enabled"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) UpdateMode(ctx context.Context, arg UpdateModeParams) (Mode, error) {
+	row := q.db.QueryRow(ctx, updateMode,
+		arg.ID,
+		arg.Name,
+		arg.Definition,
+		arg.RunMode,
+		arg.Enabled,
+		arg.UpdatedAt,
+	)
+	var i Mode
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Definition,
+		&i.RunMode,
+		&i.Enabled,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
