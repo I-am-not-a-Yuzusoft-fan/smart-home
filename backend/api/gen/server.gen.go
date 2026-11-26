@@ -350,6 +350,96 @@ func (e ItemUpdateStatus) Valid() bool {
 	}
 }
 
+// Defines values for ModeRunMode.
+const (
+	Parallel ModeRunMode = "parallel"
+	Queued   ModeRunMode = "queued"
+	Restart  ModeRunMode = "restart"
+	Single   ModeRunMode = "single"
+)
+
+// Valid indicates whether the value is a known member of the ModeRunMode enum.
+func (e ModeRunMode) Valid() bool {
+	switch e {
+	case Parallel:
+		return true
+	case Queued:
+		return true
+	case Restart:
+		return true
+	case Single:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModeConditionOp.
+const (
+	Empty            ModeConditionOp = "!="
+	EqualEqual       ModeConditionOp = "=="
+	GreaterThan      ModeConditionOp = ">"
+	GreaterThanEqual ModeConditionOp = ">="
+	LessThan         ModeConditionOp = "<"
+	LessThanEqual    ModeConditionOp = "<="
+)
+
+// Valid indicates whether the value is a known member of the ModeConditionOp enum.
+func (e ModeConditionOp) Valid() bool {
+	switch e {
+	case Empty:
+		return true
+	case EqualEqual:
+		return true
+	case GreaterThan:
+		return true
+	case GreaterThanEqual:
+		return true
+	case LessThan:
+		return true
+	case LessThanEqual:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModeNodeType.
+const (
+	Action ModeNodeType = "action"
+	Choose ModeNodeType = "choose"
+	Delay  ModeNodeType = "delay"
+)
+
+// Valid indicates whether the value is a known member of the ModeNodeType enum.
+func (e ModeNodeType) Valid() bool {
+	switch e {
+	case Action:
+		return true
+	case Choose:
+		return true
+	case Delay:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModeNodeValueFrom.
+const (
+	Comfort ModeNodeValueFrom = "comfort"
+)
+
+// Valid indicates whether the value is a known member of the ModeNodeValueFrom enum.
+func (e ModeNodeValueFrom) Valid() bool {
+	switch e {
+	case Comfort:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OpeningKind.
 const (
 	OpeningKindDoor   OpeningKind = "door"
@@ -446,6 +536,81 @@ func (e RoomNameInputKind) Valid() bool {
 	case RoomNameInputKindLiving:
 		return true
 	case RoomNameInputKindStudy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RunSource.
+const (
+	RunSourceAutomation RunSource = "automation"
+	RunSourceDevice     RunSource = "device"
+	RunSourceManual     RunSource = "manual"
+	RunSourceTimeout    RunSource = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the RunSource enum.
+func (e RunSource) Valid() bool {
+	switch e {
+	case RunSourceAutomation:
+		return true
+	case RunSourceDevice:
+		return true
+	case RunSourceManual:
+		return true
+	case RunSourceTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RunStatus.
+const (
+	RunStatusCancelled RunStatus = "cancelled"
+	RunStatusFailed    RunStatus = "failed"
+	RunStatusOk        RunStatus = "ok"
+	RunStatusRunning   RunStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the RunStatus enum.
+func (e RunStatus) Valid() bool {
+	switch e {
+	case RunStatusCancelled:
+		return true
+	case RunStatusFailed:
+		return true
+	case RunStatusOk:
+		return true
+	case RunStatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RunStepStatus.
+const (
+	RunStepStatusFailed  RunStepStatus = "failed"
+	RunStepStatusOk      RunStepStatus = "ok"
+	RunStepStatusPending RunStepStatus = "pending"
+	RunStepStatusRunning RunStepStatus = "running"
+	RunStepStatusSkipped RunStepStatus = "skipped"
+)
+
+// Valid indicates whether the value is a known member of the RunStepStatus enum.
+func (e RunStepStatus) Valid() bool {
+	switch e {
+	case RunStepStatusFailed:
+		return true
+	case RunStepStatusOk:
+		return true
+	case RunStepStatusPending:
+		return true
+	case RunStepStatusRunning:
+		return true
+	case RunStepStatusSkipped:
 		return true
 	default:
 		return false
@@ -923,6 +1088,71 @@ type LoginRequest struct {
 	Username string `json:"username"`
 }
 
+// Mode defines model for Mode.
+type Mode struct {
+	CreatedAt  time.Time           `json:"createdAt"`
+	CreatedBy  *openapi_types.UUID `json:"createdBy,omitempty"`
+	Definition ModeDefinition      `json:"definition"`
+	Enabled    bool                `json:"enabled"`
+	Id         openapi_types.UUID  `json:"id"`
+	Name       string              `json:"name"`
+	RunMode    ModeRunMode         `json:"runMode"`
+	UpdatedAt  time.Time           `json:"updatedAt"`
+}
+
+// ModeRunMode defines model for Mode.RunMode.
+type ModeRunMode string
+
+// ModeCondition defines model for ModeCondition.
+type ModeCondition struct {
+	Capability string             `json:"capability"`
+	ItemId     openapi_types.UUID `json:"itemId"`
+	Op         ModeConditionOp    `json:"op"`
+	Value      interface{}        `json:"value"`
+}
+
+// ModeConditionOp defines model for ModeCondition.Op.
+type ModeConditionOp string
+
+// ModeDefinition defines model for ModeDefinition.
+type ModeDefinition struct {
+	Defaults *struct {
+		ContinueOnError *bool `json:"continueOnError,omitempty"`
+	} `json:"defaults,omitempty"`
+	Guard   *ModeGuard `json:"guard,omitempty"`
+	Steps   []ModeNode `json:"steps"`
+	Version int        `json:"version"`
+}
+
+// ModeGuard defines model for ModeGuard.
+type ModeGuard struct {
+	All *[]ModeCondition `json:"all,omitempty"`
+	Any *[]ModeCondition `json:"any,omitempty"`
+}
+
+// ModeNode defines model for ModeNode.
+type ModeNode struct {
+	Alias           *string             `json:"alias,omitempty"`
+	Capability      *string             `json:"capability,omitempty"`
+	ContinueOnError *bool               `json:"continueOnError,omitempty"`
+	Else            *[]ModeNode         `json:"else,omitempty"`
+	Enabled         *bool               `json:"enabled,omitempty"`
+	ItemId          *openapi_types.UUID `json:"itemId,omitempty"`
+	Ms              *int                `json:"ms,omitempty"`
+	NodeId          string              `json:"nodeId"`
+	Then            *[]ModeNode         `json:"then,omitempty"`
+	Type            ModeNodeType        `json:"type"`
+	Value           interface{}         `json:"value,omitempty"`
+	ValueFrom       *ModeNodeValueFrom  `json:"valueFrom,omitempty"`
+	When            *ModeGuard          `json:"when,omitempty"`
+}
+
+// ModeNodeType defines model for ModeNode.Type.
+type ModeNodeType string
+
+// ModeNodeValueFrom defines model for ModeNode.ValueFrom.
+type ModeNodeValueFrom string
+
 // Opening defines model for Opening.
 type Opening struct {
 	Height float64            `json:"height"`
@@ -1037,6 +1267,43 @@ type RoomNameInput struct {
 
 // RoomNameInputKind defines model for RoomNameInput.Kind.
 type RoomNameInputKind string
+
+// Run defines model for Run.
+type Run struct {
+	FinishedAt *time.Time          `json:"finishedAt,omitempty"`
+	Id         openapi_types.UUID  `json:"id"`
+	ModeId     *openapi_types.UUID `json:"modeId,omitempty"`
+	Source     RunSource           `json:"source"`
+	StartedAt  time.Time           `json:"startedAt"`
+	Status     RunStatus           `json:"status"`
+	Steps      []RunStep           `json:"steps"`
+}
+
+// RunSource defines model for Run.Source.
+type RunSource string
+
+// RunStatus defines model for Run.Status.
+type RunStatus string
+
+// RunModeRequest defines model for RunModeRequest.
+type RunModeRequest struct {
+	RequestId *openapi_types.UUID `json:"requestId,omitempty"`
+}
+
+// RunStep defines model for RunStep.
+type RunStep struct {
+	Alias      *string            `json:"alias,omitempty"`
+	Error      *string            `json:"error,omitempty"`
+	FinishedAt *time.Time         `json:"finishedAt,omitempty"`
+	NodeId     string             `json:"nodeId"`
+	Path       string             `json:"path"`
+	RunId      openapi_types.UUID `json:"runId"`
+	StartedAt  *time.Time         `json:"startedAt,omitempty"`
+	Status     RunStepStatus      `json:"status"`
+}
+
+// RunStepStatus defines model for RunStep.Status.
+type RunStepStatus string
 
 // SessionUser defines model for SessionUser.
 type SessionUser struct {
@@ -1223,6 +1490,9 @@ type UpdateItemJSONRequestBody = ItemUpdate
 // SendItemCommandJSONRequestBody defines body for SendItemCommand for application/json ContentType.
 type SendItemCommandJSONRequestBody = CommandInput
 
+// RunModeJSONRequestBody defines body for RunMode for application/json ContentType.
+type RunModeJSONRequestBody = RunModeRequest
+
 // CreateOpeningJSONRequestBody defines body for CreateOpening for application/json ContentType.
 type CreateOpeningJSONRequestBody = OpeningInput
 
@@ -1297,6 +1567,15 @@ type ServerInterface interface {
 	// ListItemStates 读取物品当前能力状态
 	// (GET /api/items/{id}/states)
 	ListItemStates(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// ListModes 列出所有场景模式
+	// (GET /api/modes)
+	ListModes(w http.ResponseWriter, r *http.Request)
+	// GetMode 获取单个场景模式详情
+	// (GET /api/modes/{id})
+	GetMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// RunMode 触发执行指定场景模式
+	// (POST /api/modes/{id}/run)
+	RunMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// CreateOpening 在墙上开一个门或窗
 	// (POST /api/openings)
 	CreateOpening(w http.ResponseWriter, r *http.Request)
@@ -1327,6 +1606,12 @@ type ServerInterface interface {
 	// UpdateRoomName 给房间起名或改用途
 	// (PATCH /api/rooms/{hash})
 	UpdateRoomName(w http.ResponseWriter, r *http.Request, hash string)
+	// GetRun 获取一次场景执行记录及全部步骤状态
+	// (GET /api/runs/{id})
+	GetRun(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
+	// CancelRun 取消正在运行的场景执行
+	// (POST /api/runs/{id}/cancel)
+	CancelRun(w http.ResponseWriter, r *http.Request, id openapi_types.UUID)
 	// AdvanceSimulation 推进模拟器指定分钟数
 	// (POST /api/sim/tick)
 	AdvanceSimulation(w http.ResponseWriter, r *http.Request)
@@ -1441,6 +1726,24 @@ func (_ Unimplemented) ListItemStates(w http.ResponseWriter, r *http.Request, id
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// ListModes 列出所有场景模式
+// (GET /api/modes)
+func (_ Unimplemented) ListModes(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetMode 获取单个场景模式详情
+// (GET /api/modes/{id})
+func (_ Unimplemented) GetMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// RunMode 触发执行指定场景模式
+// (POST /api/modes/{id}/run)
+func (_ Unimplemented) RunMode(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // CreateOpening 在墙上开一个门或窗
 // (POST /api/openings)
 func (_ Unimplemented) CreateOpening(w http.ResponseWriter, r *http.Request) {
@@ -1498,6 +1801,18 @@ func (_ Unimplemented) ClearRoomName(w http.ResponseWriter, r *http.Request, has
 // UpdateRoomName 给房间起名或改用途
 // (PATCH /api/rooms/{hash})
 func (_ Unimplemented) UpdateRoomName(w http.ResponseWriter, r *http.Request, hash string) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetRun 获取一次场景执行记录及全部步骤状态
+// (GET /api/runs/{id})
+func (_ Unimplemented) GetRun(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// CancelRun 取消正在运行的场景执行
+// (POST /api/runs/{id}/cancel)
+func (_ Unimplemented) CancelRun(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1935,6 +2250,72 @@ func (siw *ServerInterfaceWrapper) ListItemStates(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// ListModes operation middleware
+func (siw *ServerInterfaceWrapper) ListModes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListModes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMode operation middleware
+func (siw *ServerInterfaceWrapper) GetMode(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMode(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RunMode operation middleware
+func (siw *ServerInterfaceWrapper) RunMode(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RunMode(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // CreateOpening operation middleware
 func (siw *ServerInterfaceWrapper) CreateOpening(w http.ResponseWriter, r *http.Request) {
 
@@ -2114,6 +2495,58 @@ func (siw *ServerInterfaceWrapper) UpdateRoomName(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpdateRoomName(w, r, hash)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetRun operation middleware
+func (siw *ServerInterfaceWrapper) GetRun(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetRun(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CancelRun operation middleware
+func (siw *ServerInterfaceWrapper) CancelRun(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", chi.URLParam(r, "id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelRun(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2405,6 +2838,21 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/api/command-logs", wrapper.ListCommandLogs)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/modes", wrapper.ListModes)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/modes/{id}", wrapper.GetMode)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/modes/{id}/run", wrapper.RunMode)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/api/runs/{id}", wrapper.GetRun)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/api/runs/{id}/cancel", wrapper.CancelRun)
 	})
 
 	return r

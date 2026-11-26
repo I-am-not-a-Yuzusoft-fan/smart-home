@@ -64,6 +64,7 @@ func newTestServerWith(t *testing.T, adapter device.Adapter, timeout time.Durati
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	srv.SetHub(hub)
+	srv.SetModeRunner(control.NewModeRunner(pool, commandHandler, hub))
 	srv.SetSensorReporter(control.NewSensorReporter(pool, hub))
 	return srv.Router()
 }

@@ -48,6 +48,7 @@ type Server struct {
 	itemTypes ItemTypeStore
 	items     ItemStore
 	commands  CommandHandler
+	modes     *control.ModeRunner
 	ws        *Hub
 	sensors   *control.SensorReporter
 	session   *SessionCodec
@@ -67,6 +68,10 @@ func (s *Server) SetHub(hub *Hub) {
 
 func (s *Server) SetSensorReporter(reporter *control.SensorReporter) {
 	s.sensors = reporter
+}
+
+func (s *Server) SetModeRunner(runner *control.ModeRunner) {
+	s.modes = runner
 }
 
 // dummyHash 是固定口令 "dummy-password" 的 bcrypt 结果，只用来抹平时间差。

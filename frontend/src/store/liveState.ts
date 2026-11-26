@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { Run, RunStatus, RunStepStatus } from '../api/client.ts'
 
 /** 一条设备状态。字段名与 04-详细设计说明书 §3.2 的封套一致。 */
 export type LiveState = {
@@ -9,11 +10,28 @@ export type LiveState = {
   ts: string
 }
 
+/** WS 推来的单步执行状态更新。 */
+export type LiveRunStep = {
+  runId: string
+  nodeId: string
+  path: string
+  alias?: string
+  status: RunStepStatus
+  error?: string
+  runStatus?: RunStatus
+  startedAt?: string
+  finishedAt?: string
+}
+
 type LiveStore = {
   states: Record<string, LiveState>
+  runSteps: Record<string, Record<string, LiveRunStep>>
+  runStatuses: Record<string, RunStatus>
+  latestRunId: string | null
   connected: boolean
   lastSeq: number | null
   applyEnvelope: (envelope: { seq: number; type: string; payload: unknown }) => void
+  seedRun: (run: Run) => void
   setConnected: (connected: boolean) => void
   reset: () => void
 }
@@ -22,10 +40,28 @@ const keyOf = (itemId: string, capabilityKey: string) => `${itemId}:${capability
 
 export const useLiveStore = create<LiveStore>((set, get) => ({
   states: {},
+  runSteps: {},
+  runStatuses: {},
+  latestRunId: null,
   connected: false,
   lastSeq: null,
   setConnected: (connected) => set({ connected }),
   reset: () => set({ states: {}, lastSeq: null }),
+  seedRun: (run) =>
+    set((store) => {
+      const existing = store.runSteps[run.id] ?? {}
+      const merged: Record<string, LiveRunStep> = { ...existing }
+      for (const st of run.steps) {
+        if (!merged[st.nodeId] || merged[st.nodeId].status === 'pending') {
+          merged[st.nodeId] = { ...st, runStatus: run.status }
+        }
+      }
+      return {
+        latestRunId: run.id,
+        runStatuses: { ...store.runStatuses, [run.id]: store.runStatuses[run.id] && store.runStatuses[run.id] !== 'running' ? store.runStatuses[run.id] : run.status },
+        runSteps: { ...store.runSteps, [run.id]: merged },
+      }
+    }),
   applyEnvelope: (envelope) => {
     const { lastSeq } = get()
     if (envelope.type === 'snapshot') {
@@ -37,7 +73,7 @@ export const useLiveStore = create<LiveStore>((set, get) => ({
       })
       return
     }
-    if (envelope.type !== 'state') return
+    if (envelope.type !== 'state' && envelope.type !== 'run_step') return
     // 跳号：漏了消息，丢弃本地缓存，交给调用方重连拿新快照（§6.3 第 3 条）。
     if (lastSeq !== null && envelope.seq > lastSeq + 1) {
       set({ states: {}, lastSeq: null })
@@ -47,10 +83,28 @@ export const useLiveStore = create<LiveStore>((set, get) => ({
     if (lastSeq !== null && envelope.seq <= lastSeq) {
       return
     }
-    const state = envelope.payload as LiveState
+    if (envelope.type === 'state') {
+      const state = envelope.payload as LiveState
+      set((store) => ({
+        lastSeq: envelope.seq,
+        states: { ...store.states, [keyOf(state.itemId, state.capabilityKey)]: state },
+      }))
+      return
+    }
+    const step = envelope.payload as LiveRunStep
     set((store) => ({
       lastSeq: envelope.seq,
-      states: { ...store.states, [keyOf(state.itemId, state.capabilityKey)]: state },
+      latestRunId: step.runId,
+      runStatuses: step.runStatus
+        ? { ...store.runStatuses, [step.runId]: step.runStatus }
+        : store.runStatuses,
+      runSteps: {
+        ...store.runSteps,
+        [step.runId]: {
+          ...(store.runSteps[step.runId] ?? {}),
+          [step.nodeId]: step,
+        },
+      },
     }))
   },
 }))
@@ -83,7 +137,7 @@ export function connectLiveState(onGap: () => void, onSynced?: () => void) {
         return
       }
       const { lastSeq } = useLiveStore.getState()
-      if (envelope.type === 'state' && lastSeq !== null && envelope.seq > lastSeq + 1) {
+      if ((envelope.type === 'state' || envelope.type === 'run_step') && lastSeq !== null && envelope.seq > lastSeq + 1) {
         useLiveStore.getState().reset()
         onGap()
         socket?.close()
