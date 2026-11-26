@@ -112,4 +112,34 @@ describe('实时状态 store', () => {
     expect(state.runSteps['run-1'].l1.status).toBe('ok')
     expect(state.states['item-a:on'].value).toBe(false)
   })
+
+  it('seedRun 在服务端返回取消/终态时覆盖本地陈旧 running 状态，且跳号时清空 runSteps 缓存', () => {
+    useLiveStore.getState().applyEnvelope(snapshot)
+    useLiveStore.getState().applyEnvelope({
+      seq: 8,
+      type: 'run_step',
+      payload: { runId: 'run-2', nodeId: 'l3', path: '002', status: 'running', runStatus: 'running' },
+    })
+    useLiveStore.getState().seedRun({
+      id: 'run-2',
+      status: 'cancelled',
+      source: 'manual',
+      startedAt: '2026-11-26T10:00:00Z',
+      steps: [{ runId: 'run-2', nodeId: 'l3', path: '002', status: 'skipped', error: '已取消' }],
+    })
+    expect(useLiveStore.getState().runStatuses['run-2']).toBe('cancelled')
+    expect(useLiveStore.getState().runSteps['run-2'].l3.status).toBe('skipped')
+
+    // 序号跳号时连同 runSteps / runStatuses / latestRunId 一并清空
+    useLiveStore.getState().applyEnvelope({
+      seq: 12,
+      type: 'run_step',
+      payload: { runId: 'run-2', nodeId: 'l4', path: '003', status: 'skipped' },
+    })
+    const afterGap = useLiveStore.getState()
+    expect(afterGap.lastSeq).toBeNull()
+    expect(afterGap.runSteps).toEqual({})
+    expect(afterGap.runStatuses).toEqual({})
+    expect(afterGap.latestRunId).toBeNull()
+  })
 })

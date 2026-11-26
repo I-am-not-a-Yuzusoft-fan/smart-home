@@ -46,19 +46,23 @@ export const useLiveStore = create<LiveStore>((set, get) => ({
   connected: false,
   lastSeq: null,
   setConnected: (connected) => set({ connected }),
-  reset: () => set({ states: {}, lastSeq: null }),
+  reset: () => set({ states: {}, runSteps: {}, runStatuses: {}, latestRunId: null, lastSeq: null }),
   seedRun: (run) =>
     set((store) => {
       const existing = store.runSteps[run.id] ?? {}
       const merged: Record<string, LiveRunStep> = { ...existing }
+      const runTerminal = run.status !== 'running'
       for (const st of run.steps) {
-        if (!merged[st.nodeId] || merged[st.nodeId].status === 'pending') {
+        const cur = merged[st.nodeId]
+        const stepTerminal = st.status === 'ok' || st.status === 'failed' || st.status === 'skipped'
+        // 服务端已进入终态或单步已进入终态时，以服务端权威记录为准，覆盖可能陈旧的 running 状态。
+        if (!cur || cur.status === 'pending' || stepTerminal || runTerminal) {
           merged[st.nodeId] = { ...st, runStatus: run.status }
         }
       }
       return {
         latestRunId: run.id,
-        runStatuses: { ...store.runStatuses, [run.id]: store.runStatuses[run.id] && store.runStatuses[run.id] !== 'running' ? store.runStatuses[run.id] : run.status },
+        runStatuses: { ...store.runStatuses, [run.id]: run.status },
         runSteps: { ...store.runSteps, [run.id]: merged },
       }
     }),
@@ -74,9 +78,9 @@ export const useLiveStore = create<LiveStore>((set, get) => ({
       return
     }
     if (envelope.type !== 'state' && envelope.type !== 'run_step') return
-    // 跳号：漏了消息，丢弃本地缓存，交给调用方重连拿新快照（§6.3 第 3 条）。
+    // 跳号：漏了消息，丢弃全部本地缓存，交给调用方重连拿新快照与回拉执行详情（§6.3 第 3 条）。
     if (lastSeq !== null && envelope.seq > lastSeq + 1) {
-      set({ states: {}, lastSeq: null })
+      set({ states: {}, runSteps: {}, runStatuses: {}, latestRunId: null, lastSeq: null })
       return
     }
     // 过期或重复的增量：直接丢弃，绝不回退 lastSeq 也不覆盖更新的值。

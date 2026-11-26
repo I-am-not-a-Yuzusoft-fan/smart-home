@@ -60,6 +60,7 @@ export default function ModesPanel({ onClose }: Props) {
   const liveRunSteps = useLiveStore((s) => (activeRun ? s.runSteps[activeRun.id] : undefined))
   const liveRunStatus = useLiveStore((s) => (activeRun ? s.runStatuses[activeRun.id] : undefined))
   const latestRunId = useLiveStore((s) => s.latestRunId)
+  const wsConnected = useLiveStore((s) => s.connected)
   const seedRun = useLiveStore((s) => s.seedRun)
 
   // 初次打开：加载场景列表，并尝试恢复上次执行（刷新/重连恢复时间线）
@@ -95,6 +96,24 @@ export default function ModesPanel({ onClose }: Props) {
       cancelled = true
     }
   }, [seedRun])
+
+  // WS 断线重连后主动回拉当前执行详情，补齐断线期间漏掉的 run_step
+  useEffect(() => {
+    if (!wsConnected) return
+    const runId = activeRun?.id ?? sessionStorage.getItem(LAST_RUN_KEY)
+    if (!runId) return
+    let cancelled = false
+    getRun(runId)
+      .then((run) => {
+        if (cancelled) return
+        setActiveRun(run)
+        seedRun(run)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [wsConnected, activeRun?.id, seedRun])
 
   // 双标签页同步：另一个标签页触发新场景时，通过 WS latestRunId 自动拉取详情并展示实时时间线
   useEffect(() => {

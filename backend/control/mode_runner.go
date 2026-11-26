@@ -21,6 +21,19 @@ var (
 	ErrRunNotFound  = errors.New("执行记录不存在")
 )
 
+const (
+	RunStatusRunning   = "running"
+	RunStatusOK        = "ok"
+	RunStatusFailed    = "failed"
+	RunStatusCancelled = "cancelled"
+
+	StepStatusPending = "pending"
+	StepStatusRunning = "running"
+	StepStatusOK      = "ok"
+	StepStatusFailed  = "failed"
+	StepStatusSkipped = "skipped"
+)
+
 // RunStepMessage 是经由 WS 广播的单个步骤进度事件，与 04-详细设计说明书 §3.2 对应。
 type RunStepMessage struct {
 	RunID      uuid.UUID
@@ -93,8 +106,9 @@ type ModeRunner struct {
 	commands    CommandHandler
 	broadcaster RunStepBroadcaster
 
-	mu     sync.Mutex
-	active map[uuid.UUID]*activeRun
+	mu          sync.Mutex
+	active      map[uuid.UUID]*activeRun
+	advanceLock map[uuid.UUID]*sync.Mutex
 }
 
 func NewModeRunner(pool *pgxpool.Pool, commands CommandHandler, broadcaster RunStepBroadcaster) *ModeRunner {
@@ -103,7 +117,19 @@ func NewModeRunner(pool *pgxpool.Pool, commands CommandHandler, broadcaster RunS
 		commands:    commands,
 		broadcaster: broadcaster,
 		active:      make(map[uuid.UUID]*activeRun),
+		advanceLock: make(map[uuid.UUID]*sync.Mutex),
 	}
+}
+
+func (r *ModeRunner) lockForRun(runID uuid.UUID) *sync.Mutex {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	m, ok := r.advanceLock[runID]
+	if !ok {
+		m = &sync.Mutex{}
+		r.advanceLock[runID] = m
+	}
+	return m
 }
 
 func (r *ModeRunner) ListModes(ctx context.Context) ([]storegen.Mode, error) {
@@ -158,7 +184,7 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 	run, err := q.InsertRun(ctx, storegen.InsertRunParams{
 		ID:                 pgUUID(runID),
 		ModeID:             pgUUID(modeID),
-		Status:             "running",
+		Status:             RunStatusRunning,
 		DefinitionSnapshot: mode.Definition,
 		TriggeredBy:        pgUUID(triggeredBy),
 		Source:             source,
@@ -176,7 +202,7 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 			NodeID: node.NodeID,
 			Path:   path,
 			Alias:  pgText(node.Alias),
-			Status: "pending",
+			Status: StepStatusPending,
 		})
 		if err != nil {
 			return RunDetail{}, err
@@ -195,6 +221,7 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 			cancel()
 			r.mu.Lock()
 			delete(r.active, runID)
+			delete(r.advanceLock, runID)
 			r.mu.Unlock()
 			close(ar.done)
 		}()
@@ -224,10 +251,10 @@ func (r *ModeRunner) Cancel(ctx context.Context, runID uuid.UUID) (RunDetail, er
 	if err != nil {
 		return RunDetail{}, err
 	}
-	if detail.Run.Status == "running" {
+	if detail.Run.Status == RunStatusRunning {
 		if err := storegen.New(r.pool).CompleteRun(ctx, storegen.CompleteRunParams{
 			ID:         pgUUID(runID),
-			Status:     "cancelled",
+			Status:     RunStatusCancelled,
 			FinishedAt: pgTime(time.Now()),
 		}); err != nil {
 			return RunDetail{}, err
@@ -237,8 +264,12 @@ func (r *ModeRunner) Cancel(ctx context.Context, runID uuid.UUID) (RunDetail, er
 	return detail, nil
 }
 
-// Advance 幂等推进一次执行：已处于终态（ok/failed/skipped）的节点不会重复执行。
+// Advance 幂等推进一次执行：同一 runID 互斥执行，已处于终态（ok/failed/skipped）的节点不会重复执行。
 func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
+	runMu := r.lockForRun(runID)
+	runMu.Lock()
+	defer runMu.Unlock()
+
 	q := storegen.New(r.pool)
 	run, err := q.GetRun(ctx, pgUUID(runID))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -247,7 +278,7 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	if run.Status != "running" {
+	if run.Status != RunStatusRunning {
 		return nil
 	}
 
@@ -262,7 +293,7 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 	}
 	doneNodes := make(map[string]bool, len(existingSteps))
 	for _, st := range existingSteps {
-		if st.Status == "ok" || st.Status == "failed" || st.Status == "skipped" {
+		if st.Status == StepStatusOK || st.Status == StepStatusFailed || st.Status == StepStatusSkipped {
 			doneNodes[st.NodeID] = true
 		}
 	}
@@ -278,24 +309,41 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 			continue
 		}
 		path := fmt.Sprintf("%03d", i)
+		isLast := i == len(def.Steps)-1
 
 		if ctx.Err() != nil {
-			r.skipRemaining(runID, def.Steps[i:], i, doneNodes, "已取消", "cancelled")
-			_ = q.CompleteRun(context.Background(), storegen.CompleteRunParams{
-				ID: pgUUID(runID), Status: "cancelled", FinishedAt: pgTime(time.Now()),
-			})
-			return nil
+			return r.cancelRemaining(runID, def.Steps[i:], i, doneNodes)
 		}
 
 		if node.Enabled != nil && !*node.Enabled {
 			now := time.Now()
-			r.saveAndBroadcast(context.Background(), runID, node.NodeID, path, node.Alias, "skipped", "步骤已禁用", "running", &now, &now)
+			runStatus := RunStatusRunning
+			if isLast {
+				runStatus = RunStatusOK
+				if err := q.CompleteRun(context.Background(), storegen.CompleteRunParams{
+					ID: pgUUID(runID), Status: runStatus, FinishedAt: pgTime(now),
+				}); err != nil {
+					return err
+				}
+			}
+			if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
+				RunID: runID, NodeID: node.NodeID, Path: path, Alias: node.Alias,
+				Status: StepStatusSkipped, Error: "步骤已禁用", RunStatus: runStatus,
+				StartedAt: &now, FinishedAt: &now,
+			}); err != nil {
+				return err
+			}
 			doneNodes[node.NodeID] = true
 			continue
 		}
 
 		startedAt := time.Now()
-		r.saveAndBroadcast(context.Background(), runID, node.NodeID, path, node.Alias, "running", "", "running", &startedAt, nil)
+		if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
+			RunID: runID, NodeID: node.NodeID, Path: path, Alias: node.Alias,
+			Status: StepStatusRunning, RunStatus: RunStatusRunning, StartedAt: &startedAt,
+		}); err != nil {
+			return err
+		}
 
 		var stepStatus string
 		var stepErr string
@@ -307,24 +355,20 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 				timer := time.NewTimer(time.Duration(node.Ms) * time.Millisecond)
 				select {
 				case <-timer.C:
-					stepStatus = "ok"
+					stepStatus = StepStatusOK
 				case <-ctx.Done():
 					timer.Stop()
-					r.skipRemaining(runID, def.Steps[i:], i, doneNodes, "已取消", "cancelled")
-					_ = q.CompleteRun(context.Background(), storegen.CompleteRunParams{
-						ID: pgUUID(runID), Status: "cancelled", FinishedAt: pgTime(time.Now()),
-					})
-					return nil
+					return r.cancelRemaining(runID, def.Steps[i:], i, doneNodes)
 				}
 			} else {
-				stepStatus = "ok"
+				stepStatus = StepStatusOK
 			}
 		case "action":
 			if node.ValueFrom == "comfort" {
-				stepStatus = "skipped"
+				stepStatus = StepStatusSkipped
 				stepErr = "动态舒适温控待 T13 接入"
 			} else if node.ItemID == nil || node.Capability == "" {
-				stepStatus = "failed"
+				stepStatus = StepStatusFailed
 				stepErr = "动作节点缺少设备或能力配置"
 				abort = !shouldContinue(node, defaultContinue)
 			} else {
@@ -338,53 +382,54 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 				})
 				if cmdErr != nil {
 					if ctx.Err() != nil {
-						r.skipRemaining(runID, def.Steps[i:], i, doneNodes, "已取消", "cancelled")
-						_ = q.CompleteRun(context.Background(), storegen.CompleteRunParams{
-							ID: pgUUID(runID), Status: "cancelled", FinishedAt: pgTime(time.Now()),
-						})
-						return nil
+						return r.cancelRemaining(runID, def.Steps[i:], i, doneNodes)
 					}
-					stepStatus = "failed"
+					stepStatus = StepStatusFailed
 					stepErr = cmdErr.Error()
 					abort = !shouldContinue(node, defaultContinue)
 				} else {
-					stepStatus = "ok"
+					stepStatus = StepStatusOK
 				}
 			}
 		case "choose":
-			stepStatus = "skipped"
+			stepStatus = StepStatusSkipped
 			stepErr = "条件分支待 T12 接入"
 		default:
-			stepStatus = "skipped"
+			stepStatus = StepStatusSkipped
 			stepErr = "不支持的节点类型: " + node.Type
 		}
 
 		finishedAt := time.Now()
-		runStatus := "running"
+		runStatus := RunStatusRunning
 		if abort {
-			runStatus = "failed"
-		} else if i == len(def.Steps)-1 {
-			runStatus = "ok"
+			runStatus = RunStatusFailed
+		} else if isLast {
+			runStatus = RunStatusOK
 		}
-		if runStatus == "ok" || runStatus == "failed" {
-			_ = q.CompleteRun(context.Background(), storegen.CompleteRunParams{
+		if runStatus == RunStatusOK || runStatus == RunStatusFailed {
+			if err := q.CompleteRun(context.Background(), storegen.CompleteRunParams{
 				ID: pgUUID(runID), Status: runStatus, FinishedAt: pgTime(finishedAt),
-			})
+			}); err != nil {
+				return err
+			}
 		}
-		r.saveAndBroadcast(context.Background(), runID, node.NodeID, path, node.Alias, stepStatus, stepErr, runStatus, &startedAt, &finishedAt)
+		if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
+			RunID: runID, NodeID: node.NodeID, Path: path, Alias: node.Alias,
+			Status: stepStatus, Error: stepErr, RunStatus: runStatus,
+			StartedAt: &startedAt, FinishedAt: &finishedAt,
+		}); err != nil {
+			return err
+		}
 		doneNodes[node.NodeID] = true
 
 		if abort {
-			r.skipRemaining(runID, def.Steps[i+1:], i+1, doneNodes, "前置步骤失败，已中止", "failed")
-			return nil
+			return r.skipRemaining(runID, def.Steps[i+1:], i+1, doneNodes, "前置步骤失败，已中止", RunStatusFailed)
 		}
 	}
 
-	// 若最后一步已被跳过（例如空 steps 或全部已终态），确保 run 落为 ok
-	_ = q.CompleteRun(context.Background(), storegen.CompleteRunParams{
-		ID: pgUUID(runID), Status: "ok", FinishedAt: pgTime(time.Now()),
+	return q.CompleteRun(context.Background(), storegen.CompleteRunParams{
+		ID: pgUUID(runID), Status: RunStatusOK, FinishedAt: pgTime(time.Now()),
 	})
-	return nil
 }
 
 func shouldContinue(node ModeNode, defaultContinue bool) bool {
@@ -394,52 +439,57 @@ func shouldContinue(node ModeNode, defaultContinue bool) bool {
 	return defaultContinue
 }
 
-func (r *ModeRunner) skipRemaining(runID uuid.UUID, remaining []ModeNode, startIdx int, doneNodes map[string]bool, reason string, runStatus string) {
+func (r *ModeRunner) cancelRemaining(runID uuid.UUID, remaining []ModeNode, startIdx int, doneNodes map[string]bool) error {
+	if err := storegen.New(r.pool).CompleteRun(context.Background(), storegen.CompleteRunParams{
+		ID: pgUUID(runID), Status: RunStatusCancelled, FinishedAt: pgTime(time.Now()),
+	}); err != nil {
+		return err
+	}
+	return r.skipRemaining(runID, remaining, startIdx, doneNodes, "已取消", RunStatusCancelled)
+}
+
+func (r *ModeRunner) skipRemaining(runID uuid.UUID, remaining []ModeNode, startIdx int, doneNodes map[string]bool, reason string, runStatus string) error {
 	now := time.Now()
 	for offset, node := range remaining {
 		if doneNodes[node.NodeID] {
 			continue
 		}
 		path := fmt.Sprintf("%03d", startIdx+offset)
-		r.saveAndBroadcast(context.Background(), runID, node.NodeID, path, node.Alias, "skipped", reason, runStatus, &now, &now)
+		if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
+			RunID: runID, NodeID: node.NodeID, Path: path, Alias: node.Alias,
+			Status: StepStatusSkipped, Error: reason, RunStatus: runStatus,
+			StartedAt: &now, FinishedAt: &now,
+		}); err != nil {
+			return err
+		}
 		doneNodes[node.NodeID] = true
 	}
+	return nil
 }
 
-func (r *ModeRunner) saveAndBroadcast(
-	ctx context.Context,
-	runID uuid.UUID,
-	nodeID, path, alias, status, errText, runStatus string,
-	startedAt, finishedAt *time.Time,
-) {
+// saveAndBroadcast 严格遵循 ADR 0002 单一写入点：先落库成功，再由 Broadcaster 广播。
+func (r *ModeRunner) saveAndBroadcast(ctx context.Context, msg RunStepMessage) error {
 	var startPG, finishPG pgtype.Timestamptz
-	if startedAt != nil {
-		startPG = pgTime(*startedAt)
+	if msg.StartedAt != nil {
+		startPG = pgTime(*msg.StartedAt)
 	}
-	if finishedAt != nil {
-		finishPG = pgTime(*finishedAt)
+	if msg.FinishedAt != nil {
+		finishPG = pgTime(*msg.FinishedAt)
 	}
-	_, _ = storegen.New(r.pool).UpsertRunStep(ctx, storegen.UpsertRunStepParams{
-		RunID:      pgUUID(runID),
-		NodeID:     nodeID,
-		Path:       path,
-		Alias:      pgText(alias),
-		Status:     status,
-		Error:      pgText(errText),
+	if _, err := storegen.New(r.pool).UpsertRunStep(ctx, storegen.UpsertRunStepParams{
+		RunID:      pgUUID(msg.RunID),
+		NodeID:     msg.NodeID,
+		Path:       msg.Path,
+		Alias:      pgText(msg.Alias),
+		Status:     msg.Status,
+		Error:      pgText(msg.Error),
 		StartedAt:  startPG,
 		FinishedAt: finishPG,
-	})
-	if r.broadcaster != nil {
-		r.broadcaster.BroadcastRunStep(RunStepMessage{
-			RunID:      runID,
-			NodeID:     nodeID,
-			Path:       path,
-			Alias:      alias,
-			Status:     status,
-			Error:      errText,
-			RunStatus:  runStatus,
-			StartedAt:  startedAt,
-			FinishedAt: finishedAt,
-		})
+	}); err != nil {
+		return err
 	}
+	if r.broadcaster != nil {
+		r.broadcaster.BroadcastRunStep(msg)
+	}
+	return nil
 }

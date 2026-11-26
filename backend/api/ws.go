@@ -173,7 +173,7 @@ type RunStepView struct {
 
 // BroadcastRunStep 把场景步骤状态变化推给所有连接，与 state 共用同一单调 seq。
 func (h *Hub) BroadcastRunStep(message control.RunStepMessage) {
-	view := RunStepView{
+	h.broadcast("run_step", RunStepView{
 		RunID:      message.RunID.String(),
 		NodeID:     message.NodeID,
 		Path:       message.Path,
@@ -183,34 +183,25 @@ func (h *Hub) BroadcastRunStep(message control.RunStepMessage) {
 		RunStatus:  message.RunStatus,
 		StartedAt:  message.StartedAt,
 		FinishedAt: message.FinishedAt,
-	}
-	h.broadcastMu.Lock()
-	defer h.broadcastMu.Unlock()
-	seq := h.seq.Add(1)
-	env := StateEnvelope{V: 1, Seq: seq, Type: "run_step", Payload: view}
-	h.conns.Range(func(key, _ any) bool {
-		c := key.(*client)
-		if err := c.send(env); err != nil {
-			h.conns.Delete(c)
-			_ = c.conn.Close(websocket.StatusNormalClosure, "")
-		}
-		return true
 	})
 }
 
 // Broadcast 把一次落库的结果推给所有连接。seq 在这里取号，保证与写出的顺序一致。
 func (h *Hub) Broadcast(message control.StateMessage) {
-	view := StateView{
+	h.broadcast("state", StateView{
 		ItemID:        message.ItemID.String(),
 		CapabilityKey: message.CapabilityKey,
 		Value:         message.Value,
 		Source:        message.Source,
 		TS:            message.UpdatedAt,
-	}
+	})
+}
+
+func (h *Hub) broadcast(msgType string, payload any) {
 	h.broadcastMu.Lock()
 	defer h.broadcastMu.Unlock()
 	seq := h.seq.Add(1)
-	env := StateEnvelope{V: 1, Seq: seq, Type: "state", Payload: view}
+	env := StateEnvelope{V: 1, Seq: seq, Type: msgType, Payload: payload}
 	h.conns.Range(func(key, _ any) bool {
 		c := key.(*client)
 		if err := c.send(env); err != nil {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
@@ -169,5 +170,61 @@ func TestModeRunnerCancelDuringDelay(t *testing.T) {
 	}
 	if skipped == 0 {
 		t.Fatalf("取消后剩余步骤应至少有一条 skipped，实际步骤: %+v", cancelled.Steps)
+	}
+}
+
+// 直接构造一条 running 且首步已 ok 的执行记录，验证 Advance 按 nodeId 判重不会重复下发已完成节点。
+func TestModeRunnerAdvanceSkipsAlreadyCompletedNode(t *testing.T) {
+	pool := openTestPool(t)
+	cmdInner := control.NewCommandHandler(pool, device.NewSimulatorAdapter(5*time.Millisecond, 0), time.Second)
+	cmdSpy := &countingCommandHandler{inner: cmdInner}
+	runner := control.NewModeRunner(pool, cmdSpy, nil)
+
+	q := storegen.New(pool)
+	leaveModeID := uuid.MustParse("00000000-0000-4000-8000-000000000502")
+	adminID := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	mode, err := runner.GetMode(context.Background(), leaveModeID)
+	if err != nil {
+		t.Fatalf("GetMode 失败: %v", err)
+	}
+
+	runID := uuid.New()
+	now := time.Now()
+	_, err = q.InsertRun(context.Background(), storegen.InsertRunParams{
+		ID:                 pgtype.UUID{Bytes: runID, Valid: true},
+		ModeID:             pgtype.UUID{Bytes: leaveModeID, Valid: true},
+		Status:             control.RunStatusRunning,
+		DefinitionSnapshot: mode.Definition,
+		TriggeredBy:        pgtype.UUID{Bytes: adminID, Valid: true},
+		Source:             "manual",
+		StartedAt:          pgtype.Timestamptz{Time: now, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("InsertRun 失败: %v", err)
+	}
+	// 预先将第 1 步 l1 标记为 ok
+	_, err = q.UpsertRunStep(context.Background(), storegen.UpsertRunStepParams{
+		RunID:      pgtype.UUID{Bytes: runID, Valid: true},
+		NodeID:     "l1",
+		Path:       "000",
+		Alias:      pgtype.Text{String: "关客厅主灯", Valid: true},
+		Status:     control.StepStatusOK,
+		StartedAt:  pgtype.Timestamptz{Time: now, Valid: true},
+		FinishedAt: pgtype.Timestamptz{Time: now, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("UpsertRunStep 失败: %v", err)
+	}
+
+	if err := runner.Advance(context.Background(), runID); err != nil {
+		t.Fatalf("Advance 失败: %v", err)
+	}
+	// 离家共 3 个 action（l1, l2, l4），l1 已完成故只应下发 2 条命令
+	if cmdSpy.count() != 2 {
+		t.Fatalf("已完成节点 l1 应被跳过，仅下发剩余 2 条命令，实际 %d", cmdSpy.count())
+	}
+	final, err := runner.GetRun(context.Background(), runID)
+	if err != nil || final.Run.Status != control.RunStatusOK {
+		t.Fatalf("Advance 完成后状态应为 ok，实际 %+v (err=%v)", final.Run.Status, err)
 	}
 }
