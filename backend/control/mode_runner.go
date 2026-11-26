@@ -122,7 +122,7 @@ type ModeRunner struct {
 	commands       CommandHandler
 	broadcaster    RunStepBroadcaster
 	simEnv         *SimEnvStore
-	overrides      *OverrideStore
+	yields         *YieldStore
 	maxRunDuration time.Duration
 
 	mu           sync.Mutex
@@ -152,8 +152,8 @@ func (r *ModeRunner) SetSimEnv(env *SimEnvStore) {
 	}
 }
 
-func (r *ModeRunner) SetOverrides(store *OverrideStore) {
-	r.overrides = store
+func (r *ModeRunner) SetYields(store *YieldStore) {
+	r.yields = store
 }
 
 // SetMaxRunDuration 允许测试注入短超时，默认 5 分钟。
@@ -260,11 +260,6 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 		}
 	}
 
-	// FR-5.9：场景执行启动时先清除本次涉及设备/能力的手动接管让位标记，再下发动作。
-	if r.overrides != nil {
-		r.overrides.ClearMany(collectModeOverrideKeys(def.Steps))
-	}
-
 	// 并发控制（按 modeID 串行化 Start，消除 single/restart 的 TOCTOU 竞态）
 	modeMu := r.lockForMode(modeID)
 	modeMu.Lock()
@@ -279,6 +274,11 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 		}
 		// restart：取消旧执行并等待其落库收尾
 		_, _ = r.Cancel(ctx, prevRunID)
+	}
+
+	// FR-5.9：确认可以启动执行后，再清除本次涉及（且未禁用）设备/能力的手动接管让位标记。
+	if r.yields != nil {
+		r.yields.ClearMany(collectModeYieldKeys(def.Steps))
 	}
 
 	runID := uuid.New()
@@ -955,32 +955,35 @@ func (r *ModeRunner) executeComfortAction(
 	}
 }
 
-func collectModeOverrideKeys(nodes []ModeNode) []OverrideKey {
-	var out []OverrideKey
+func collectModeYieldKeys(nodes []ModeNode) []YieldKey {
+	var out []YieldKey
 	for _, n := range nodes {
+		if n.Enabled != nil && !*n.Enabled {
+			continue
+		}
 		if n.Type == "action" && n.ItemID != nil {
 			if n.ValueFrom == "comfort" {
 				out = append(out,
-					OverrideKey{ItemID: *n.ItemID, CapabilityKey: "on"},
-					OverrideKey{ItemID: *n.ItemID, CapabilityKey: "mode"},
-					OverrideKey{ItemID: *n.ItemID, CapabilityKey: "target_temp"},
+					YieldKey{ItemID: *n.ItemID, CapabilityKey: "on"},
+					YieldKey{ItemID: *n.ItemID, CapabilityKey: "mode"},
+					YieldKey{ItemID: *n.ItemID, CapabilityKey: "target_temp"},
 				)
 			} else if n.Capability != "" {
-				out = append(out, OverrideKey{ItemID: *n.ItemID, CapabilityKey: n.Capability})
+				out = append(out, YieldKey{ItemID: *n.ItemID, CapabilityKey: n.Capability})
 			}
 		}
 		if len(n.Then) > 0 {
-			out = append(out, collectModeOverrideKeys(n.Then)...)
+			out = append(out, collectModeYieldKeys(n.Then)...)
 		}
 		if len(n.Else) > 0 {
-			out = append(out, collectModeOverrideKeys(n.Else)...)
+			out = append(out, collectModeYieldKeys(n.Else)...)
 		}
 	}
 	return out
 }
 
 func (r *ModeRunner) readRoomTempHumidity(ctx context.Context, roomHash pgtype.Text) (*float64, *float64) {
-	readings, _ := readRoomEnvReadings(ctx, r.pool, roomHash)
+	readings, _ := readRoomEnvReadings(ctx, r.pool, roomHash, true)
 	return readings.Temperature, readings.Humidity
 }
 

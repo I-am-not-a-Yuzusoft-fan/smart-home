@@ -49,7 +49,7 @@ type Handler struct {
 	adapter     device.Adapter
 	timeout     time.Duration
 	broadcaster Broadcaster
-	overrides   *OverrideStore
+	yields      *YieldStore
 }
 
 type Broadcaster interface {
@@ -65,20 +65,20 @@ type StateMessage struct {
 }
 
 func NewCommandHandler(pool *pgxpool.Pool, adapter device.Adapter, timeout time.Duration) *Handler {
-	return &Handler{pool: pool, adapter: adapter, timeout: timeout, overrides: NewOverrideStore()}
+	return &Handler{pool: pool, adapter: adapter, timeout: timeout, yields: NewYieldStore()}
 }
 
 func (h *Handler) SetBroadcaster(broadcaster Broadcaster) {
 	h.broadcaster = broadcaster
 }
 
-func (h *Handler) Overrides() *OverrideStore {
-	return h.overrides
+func (h *Handler) Yields() *YieldStore {
+	return h.yields
 }
 
-func (h *Handler) SetOverrides(store *OverrideStore) {
+func (h *Handler) SetYields(store *YieldStore) {
 	if store != nil {
-		h.overrides = store
+		h.yields = store
 	}
 }
 
@@ -208,16 +208,16 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	}
 
 	// FR-5.9 手动接管让位：
-	// - 手动命令：先记录 (itemId, capabilityKey) 的手动时刻与房间环境基线，再下发；
+	// - 手动命令：先记录 (itemId, capabilityKey) 的手动时刻与本房间环境基线，再下发；
 	// - 自动策略命令：检查是否仍在 30 分钟让位窗口内且未触发环境突变解除，受抑则拒绝并留痕。
-	if h.overrides != nil {
-		now := h.overrides.Now()
+	if h.yields != nil {
+		now := h.yields.Now()
 		if source == "manual" {
-			baseline, hasBaseline := readRoomEnvReadings(ctx, h.pool, item.RoomHash)
-			h.overrides.RecordManual(command.ItemID, command.CapabilityKey, baseline, hasBaseline, now)
+			baseline, hasBaseline := readRoomEnvReadings(ctx, h.pool, item.RoomHash, false)
+			h.yields.RecordManual(command.ItemID, command.CapabilityKey, baseline, hasBaseline, now)
 		} else if source == "automation" {
-			if entry, exists := h.overrides.Get(command.ItemID, command.CapabilityKey); exists {
-				current, _ := readRoomEnvReadings(ctx, h.pool, item.RoomHash)
+			if entry, exists := h.yields.Get(command.ItemID, command.CapabilityKey); exists {
+				current, _ := readRoomEnvReadings(ctx, h.pool, item.RoomHash, false)
 				dec := policy.EvaluateYield(policy.YieldInput{
 					ManualAt:    entry.ManualAt,
 					Now:         now,
@@ -260,7 +260,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 					return CommandResult{}, &CommandError{Code: "CONFLICT", Message: dec.Reason}
 				}
 				// 窗口过期或环境突变超阈值：立即清除让位标记并继续下发。
-				h.overrides.Clear(command.ItemID, command.CapabilityKey)
+				h.yields.Clear(command.ItemID, command.CapabilityKey)
 			}
 		}
 	}

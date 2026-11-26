@@ -70,7 +70,7 @@ func main() {
 	simEnv := control.NewSimEnvStore()
 	modeRunner := control.NewModeRunner(pool, commandHandler, hub)
 	modeRunner.SetSimEnv(simEnv)
-	modeRunner.SetOverrides(commandHandler.Overrides())
+	modeRunner.SetYields(commandHandler.Yields())
 	srv.SetHub(hub)
 	srv.SetSimEnv(simEnv)
 	srv.SetModeRunner(modeRunner)

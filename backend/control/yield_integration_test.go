@@ -13,7 +13,7 @@ import (
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/device"
 )
 
-func TestManualYieldWindowEnvJumpAndSceneClear(t *testing.T) {
+func TestManualYieldWindowEnvJumpAndModeClear(t *testing.T) {
 	pool := openTestPool(t)
 	lightID := uuid.MustParse("00000000-0000-4000-8000-000000000301")
 	curtainID := uuid.MustParse("00000000-0000-4000-8000-000000000303")
@@ -26,10 +26,10 @@ func TestManualYieldWindowEnvJumpAndSceneClear(t *testing.T) {
 
 	now := time.Date(2026, 11, 26, 14, 0, 0, 0, time.UTC)
 	cmdHandler := control.NewCommandHandler(pool, device.NewSimulatorAdapter(5*time.Millisecond, 0), time.Second)
-	cmdHandler.Overrides().SetNowFunc(func() time.Time { return now })
+	cmdHandler.Yields().SetNowFunc(func() time.Time { return now })
 
 	runner := control.NewModeRunner(pool, cmdHandler, nil)
-	runner.SetOverrides(cmdHandler.Overrides())
+	runner.SetYields(cmdHandler.Yields())
 
 	// 1. 用户手动开客厅主灯 → 记录 (lightID, "on") 的手动时刻与房间基线（25℃, 50%RH）
 	if _, err := cmdHandler.Handle(context.Background(), control.Command{
@@ -96,7 +96,7 @@ func TestManualYieldWindowEnvJumpAndSceneClear(t *testing.T) {
 	if final.Run.Status != control.RunStatusOK {
 		t.Fatalf("场景启动应先清让位并全部 ok，实际 %q", final.Run.Status)
 	}
-	if _, stillExists := cmdHandler.Overrides().Get(lightID, "on"); stillExists {
+	if _, stillExists := cmdHandler.Yields().Get(lightID, "on"); stillExists {
 		t.Fatal("场景执行后不应残留 (lightID, on) 的手动让位标记")
 	}
 }
