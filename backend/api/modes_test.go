@@ -225,3 +225,41 @@ func TestModeRunGuardRejectedReturnsCancelledAndReason(t *testing.T) {
 		t.Fatalf("回查 Run 应保留 reason，实际 %+v", fetched)
 	}
 }
+
+func TestModeRunSingleConflictReturns409(t *testing.T) {
+	h := newTestServer(t)
+	cookie := loginAs(t, h, "zhang")
+
+	pool, err := pgxpool.New(context.Background(), os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("连接测试库失败: %v", err)
+	}
+	defer pool.Close()
+
+	modeID := uuid.New()
+	adminID := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	_, err = pool.Exec(context.Background(),
+		`INSERT INTO mode (id, name, definition, run_mode, created_by) VALUES ($1, $2, '{"version":1,"steps":[{"nodeId":"d1","type":"delay","ms":500}]}'::jsonb, 'single', $3)`,
+		modeID, "single-conflict-"+modeID.String()[:8], adminID)
+	if err != nil {
+		t.Fatalf("插入测试模式失败: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM mode WHERE id = $1`, modeID)
+	})
+
+	w1 := do(t, h, http.MethodPost, "/api/modes/"+modeID.String()+"/run", "", cookie)
+	if w1.Code != http.StatusAccepted {
+		t.Fatalf("首次触发应 202，实际 %d：%s", w1.Code, w1.Body.String())
+	}
+	var started struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(w1.Body.Bytes(), &started)
+
+	w2 := do(t, h, http.MethodPost, "/api/modes/"+modeID.String()+"/run", "", cookie)
+	if w2.Code != http.StatusConflict {
+		t.Fatalf("single 模式运行中再次触发应 409，实际 %d：%s", w2.Code, w2.Body.String())
+	}
+	_ = do(t, h, http.MethodPost, "/api/runs/"+started.ID+"/cancel", "", cookie)
+}

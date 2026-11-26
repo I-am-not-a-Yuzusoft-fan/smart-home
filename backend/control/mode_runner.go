@@ -125,6 +125,7 @@ type ModeRunner struct {
 	active       map[uuid.UUID]*activeRun
 	activeByMode map[uuid.UUID]uuid.UUID
 	advanceLock  map[uuid.UUID]*sync.Mutex
+	modeLock     map[uuid.UUID]*sync.Mutex
 }
 
 func NewModeRunner(pool *pgxpool.Pool, commands CommandHandler, broadcaster RunStepBroadcaster) *ModeRunner {
@@ -136,6 +137,7 @@ func NewModeRunner(pool *pgxpool.Pool, commands CommandHandler, broadcaster RunS
 		active:         make(map[uuid.UUID]*activeRun),
 		activeByMode:   make(map[uuid.UUID]uuid.UUID),
 		advanceLock:    make(map[uuid.UUID]*sync.Mutex),
+		modeLock:       make(map[uuid.UUID]*sync.Mutex),
 	}
 }
 
@@ -153,6 +155,17 @@ func (r *ModeRunner) lockForRun(runID uuid.UUID) *sync.Mutex {
 	if !ok {
 		m = &sync.Mutex{}
 		r.advanceLock[runID] = m
+	}
+	return m
+}
+
+func (r *ModeRunner) lockForMode(modeID uuid.UUID) *sync.Mutex {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	m, ok := r.modeLock[modeID]
+	if !ok {
+		m = &sync.Mutex{}
+		r.modeLock[modeID] = m
 	}
 	return m
 }
@@ -232,7 +245,11 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 		}
 	}
 
-	// 并发控制（restart 取消旧执行，single 拒绝新触发）
+	// 并发控制（按 modeID 串行化 Start，消除 single/restart 的 TOCTOU 竞态）
+	modeMu := r.lockForMode(modeID)
+	modeMu.Lock()
+	defer modeMu.Unlock()
+
 	r.mu.Lock()
 	prevRunID, hasActive := r.activeByMode[modeID]
 	r.mu.Unlock()
@@ -526,6 +543,9 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 			}
 		case "choose":
 			ok, reason := r.evaluateGuard(ctx, node.When)
+			if ctx.Err() != nil {
+				return r.terminateOnContextErr(ctx.Err(), runID, frame, stack, doneNodes, &startedAt)
+			}
 			var branch []ModeNode
 			if ok {
 				branch = node.Then

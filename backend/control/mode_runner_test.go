@@ -369,6 +369,48 @@ func TestModeRunnerTopLevelGuardRejectedAndMissingReading(t *testing.T) {
 	if detailMissing.Run.Status != control.RunStatusCancelled || !strings.Contains(detailMissing.Reason, "缺失") {
 		t.Fatalf("读数缺失应 cancelled 且原因含「缺失」，实际 status=%q reason=%q", detailMissing.Run.Status, detailMissing.Reason)
 	}
+
+	// guard.Any：任意一条满足即放行，全部不满足则拒绝
+	modeAnyPass := insertTempMode(t, pool, "restart", control.ModeDefinition{
+		Version: 1,
+		Guard: &control.ModeGuard{
+			Any: []control.ModeCondition{
+				{ItemID: pirID, Capability: "occupied", Op: "==", Value: false},
+				{ItemID: pirID, Capability: "occupied", Op: "==", Value: true},
+			},
+		},
+		Steps: []control.ModeNode{
+			{NodeID: "a1", Type: "action", Alias: "开灯", ItemID: &lightID, Capability: "on", Value: true},
+		},
+	})
+	dPass, err := runner.Start(context.Background(), modeAnyPass, adminID, "manual")
+	if err != nil {
+		t.Fatalf("guard.Any 满足时 Start 失败: %v", err)
+	}
+	fPass := waitRunDone(t, runner, uuid.UUID(dPass.Run.ID.Bytes), 5*time.Second)
+	if fPass.Run.Status != control.RunStatusOK {
+		t.Fatalf("guard.Any 满足应 ok，实际 %q", fPass.Run.Status)
+	}
+
+	modeAnyFail := insertTempMode(t, pool, "restart", control.ModeDefinition{
+		Version: 1,
+		Guard: &control.ModeGuard{
+			Any: []control.ModeCondition{
+				{ItemID: pirID, Capability: "occupied", Op: "==", Value: false},
+				{ItemID: missingID, Capability: "temperature", Op: ">", Value: 20},
+			},
+		},
+		Steps: []control.ModeNode{
+			{NodeID: "a1", Type: "action", Alias: "开灯", ItemID: &lightID, Capability: "on", Value: true},
+		},
+	})
+	dFail, err := runner.Start(context.Background(), modeAnyFail, adminID, "manual")
+	if err != nil {
+		t.Fatalf("guard.Any 拒绝时 Start 失败: %v", err)
+	}
+	if dFail.Run.Status != control.RunStatusCancelled || dFail.Reason == "" {
+		t.Fatalf("guard.Any 全不满足应 cancelled 且带原因，实际 status=%q reason=%q", dFail.Run.Status, dFail.Reason)
+	}
 }
 
 func TestModeRunnerChooseNestedBranches(t *testing.T) {
@@ -459,13 +501,12 @@ func TestModeRunnerOfflineContinueAbortAndDeletedItem(t *testing.T) {
 		t.Fatalf("步骤状态应为 failed + skipped，实际 %q + %q", f1.Steps[0].Status, f1.Steps[1].Status)
 	}
 
-	// 2. continueOnError=true + 被删设备：离线记 failed 但继续，被删设备记 skipped 并继续
-	trueVal := true
+	// 2. 模式默认 defaults.continueOnError=true（节点本身不显式覆盖）+ 被删设备：离线记 failed 但继续，被删设备记 skipped 并继续
 	modeContinue := insertTempMode(t, pool, "restart", control.ModeDefinition{
 		Version:  1,
 		Defaults: &control.ModeDefaults{ContinueOnError: true},
 		Steps: []control.ModeNode{
-			{NodeID: "s1", Type: "action", Alias: "离线灯", ItemID: &lightID, Capability: "on", Value: true, ContinueOnError: &trueVal},
+			{NodeID: "s1", Type: "action", Alias: "离线灯", ItemID: &lightID, Capability: "on", Value: true},
 			{NodeID: "s2", Type: "action", Alias: "已删设备", ItemID: &deletedID, Capability: "on", Value: true},
 			{NodeID: "s3", Type: "action", Alias: "正常窗帘", ItemID: &curtainID, Capability: "position", Value: 50},
 		},
