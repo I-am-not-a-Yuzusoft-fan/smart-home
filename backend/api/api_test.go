@@ -66,6 +66,7 @@ func newTestServerWith(t *testing.T, adapter device.Adapter, timeout time.Durati
 	simEnv := control.NewSimEnvStore()
 	modeRunner := control.NewModeRunner(pool, commandHandler, hub)
 	modeRunner.SetSimEnv(simEnv)
+	modeRunner.SetYields(commandHandler.Yields())
 	srv.SetHub(hub)
 	srv.SetSimEnv(simEnv)
 	srv.SetModeRunner(modeRunner)
