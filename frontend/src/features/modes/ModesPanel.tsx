@@ -87,14 +87,14 @@ export default function ModesPanel({ userRole, onClose }: Props) {
   const [seasonDraft, setSeasonDraft] = useState<SimSeason>('auto')
   const [outdoorTempDraft, setOutdoorTempDraft] = useState<string>('')
   const [savingEnv, setSavingEnv] = useState(false)
-  const [devices, setDevices] = useState<Item[]>([])
+  const [items, setItems] = useState<Item[]>([])
   const [itemTypes, setItemTypes] = useState<ItemType[]>([])
   const [editingMode, setEditingMode] = useState<Mode | 'new' | null>(null)
 
   const typeMap = useMemo(() => new Map(itemTypes.map((t) => [t.key, t])), [itemTypes])
   const deviceItems = useMemo(
-    () => devices.filter((it) => typeMap.get(it.typeKey)?.kind === 'device'),
-    [devices, typeMap],
+    () => items.filter((it) => typeMap.get(it.typeKey)?.kind === 'device'),
+    [items, typeMap],
   )
 
   const liveRunSteps = useLiveStore((s) => (activeRun ? s.runSteps[activeRun.id] : undefined))
@@ -133,7 +133,7 @@ export default function ModesPanel({ userRole, onClose }: Props) {
       Promise.all([listItems(), listItemTypes()])
         .then(([its, types]) => {
           if (cancelled) return
-          setDevices(its)
+          setItems(its)
           setItemTypes(types)
         })
         .catch(() => {})

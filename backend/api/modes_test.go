@@ -425,6 +425,31 @@ func TestModeCRUDValidationAndPermissions(t *testing.T) {
 		t.Fatalf("PUT /api/modes/{id} 应 200，实际 %d：%s", wUpd.Code, wUpd.Body.String())
 	}
 
+	// 触发执行该自定义模式（3 action + 1 delay + 1 choose + 顶层 guard），验证完整跑通 ok
+	wRun := do(t, h, http.MethodPost, "/api/modes/"+created.ID+"/run", "", adminCookie)
+	if wRun.Code != http.StatusAccepted {
+		t.Fatalf("触发自定义模式应 202，实际 %d：%s", wRun.Code, wRun.Body.String())
+	}
+	var runResp struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(wRun.Body.Bytes(), &runResp)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		wr := do(t, h, http.MethodGet, "/api/runs/"+runResp.ID, "", adminCookie)
+		var r struct {
+			Status string `json:"status"`
+		}
+		_ = json.Unmarshal(wr.Body.Bytes(), &r)
+		if r.Status != "running" {
+			if r.Status != "ok" {
+				t.Fatalf("自定义模式执行应 ok，实际 %q", r.Status)
+			}
+			break
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
 	// 删除 204，再查 404
 	if wDel := do(t, h, http.MethodDelete, "/api/modes/"+created.ID, "", adminCookie); wDel.Code != http.StatusNoContent {
 		t.Fatalf("DELETE /api/modes/{id} 应 204，实际 %d", wDel.Code)

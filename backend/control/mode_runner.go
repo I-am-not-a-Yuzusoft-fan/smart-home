@@ -21,6 +21,7 @@ import (
 
 var (
 	ErrModeNotFound       = errors.New("场景不存在")
+	ErrModeDisabled       = errors.New("场景已停用，无法执行")
 	ErrRunNotFound        = errors.New("执行记录不存在")
 	ErrModeAlreadyRunning = errors.New("场景正在执行中，当前配置为忽略重复触发")
 	ErrRunModeUnsupported = errors.New("当前版本暂不支持该并发模式（仅支持 restart 与 single）")
@@ -343,6 +344,9 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 		return RunDetail{}, err
 	}
 
+	if !mode.Enabled {
+		return RunDetail{}, ErrModeDisabled
+	}
 	if mode.RunMode != "restart" && mode.RunMode != "single" {
 		return RunDetail{}, ErrRunModeUnsupported
 	}

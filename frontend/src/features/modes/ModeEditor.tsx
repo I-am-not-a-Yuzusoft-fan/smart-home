@@ -307,7 +307,7 @@ function StepListEditor({ steps, devices, typeMap, depth = 0, onChange }: StepLi
         const dev = node.itemId ? devices.find((d) => d.id === node.itemId) : undefined
         const writableCaps = (dev ? typeMap.get(dev.typeKey)?.capabilities ?? [] : []).filter((c) => c.writable)
         const selectedCap = writableCaps.find((c) => c.key === node.capability)
-        const canComfort = node.type === 'action' && dev?.typeKey === 'ac'
+        const canComfort = node.type === 'action' && writableCaps.some((c) => c.key === 'target_temp')
 
         return (
           <div

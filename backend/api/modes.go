@@ -241,7 +241,7 @@ func (s *Server) RunMode(w http.ResponseWriter, r *http.Request, id openapi_type
 			writeError(w, http.StatusConflict, gen.CONFLICT, err.Error())
 			return
 		}
-		if errors.Is(err, control.ErrRunModeUnsupported) {
+		if errors.Is(err, control.ErrRunModeUnsupported) || errors.Is(err, control.ErrModeDisabled) {
 			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, err.Error())
 			return
 		}
