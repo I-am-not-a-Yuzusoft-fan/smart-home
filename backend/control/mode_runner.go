@@ -122,6 +122,7 @@ type ModeRunner struct {
 	commands       CommandHandler
 	broadcaster    RunStepBroadcaster
 	simEnv         *SimEnvStore
+	overrides      *OverrideStore
 	maxRunDuration time.Duration
 
 	mu           sync.Mutex
@@ -149,6 +150,10 @@ func (r *ModeRunner) SetSimEnv(env *SimEnvStore) {
 	if env != nil {
 		r.simEnv = env
 	}
+}
+
+func (r *ModeRunner) SetOverrides(store *OverrideStore) {
+	r.overrides = store
 }
 
 // SetMaxRunDuration 允许测试注入短超时，默认 5 分钟。
@@ -253,6 +258,11 @@ func (r *ModeRunner) Start(ctx context.Context, modeID uuid.UUID, triggeredBy uu
 		if !ok {
 			return r.recordGuardRejectedRun(ctx, modeID, mode.Definition, triggeredBy, source, reason)
 		}
+	}
+
+	// FR-5.9：场景执行启动时先清除本次涉及设备/能力的手动接管让位标记，再下发动作。
+	if r.overrides != nil {
+		r.overrides.ClearMany(collectModeOverrideKeys(def.Steps))
 	}
 
 	// 并发控制（按 modeID 串行化 Start，消除 single/restart 的 TOCTOU 竞态）
@@ -540,6 +550,7 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 					ItemID:        *node.ItemID,
 					CapabilityKey: node.Capability,
 					Value:         node.Value,
+					Source:        "automation",
 					CreatedBy:     triggeredBy,
 				})
 				if cmdErr != nil {
@@ -605,13 +616,6 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 		} else if len(stack) == 0 {
 			runStatus = RunStatusOK
 		}
-		if runStatus == RunStatusOK || runStatus == RunStatusFailed {
-			if err := q.CompleteRun(context.Background(), storegen.CompleteRunParams{
-				ID: pgUUID(runID), Status: runStatus, FinishedAt: pgTime(finishedAt),
-			}); err != nil {
-				return err
-			}
-		}
 		if err := r.saveAndBroadcast(context.Background(), RunStepMessage{
 			RunID: runID, NodeID: node.NodeID, Path: frame.path, Alias: node.Alias,
 			Status: stepStatus, Error: stepErr, Note: stepNote, RunStatus: runStatus,
@@ -622,7 +626,19 @@ func (r *ModeRunner) Advance(ctx context.Context, runID uuid.UUID) error {
 		doneNodes[node.NodeID] = true
 
 		if abort {
-			return r.skipStack(runID, stack, doneNodes, "前置步骤失败，已中止", RunStatusFailed)
+			if err := r.skipStack(runID, stack, doneNodes, "前置步骤失败，已中止", RunStatusFailed); err != nil {
+				return err
+			}
+			return q.CompleteRun(context.Background(), storegen.CompleteRunParams{
+				ID: pgUUID(runID), Status: RunStatusFailed, FinishedAt: pgTime(finishedAt),
+			})
+		}
+		if runStatus == RunStatusOK {
+			if err := q.CompleteRun(context.Background(), storegen.CompleteRunParams{
+				ID: pgUUID(runID), Status: RunStatusOK, FinishedAt: pgTime(finishedAt),
+			}); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -660,11 +676,6 @@ func (r *ModeRunner) terminateOnContextErr(
 ) error {
 	now := time.Now()
 	if errors.Is(ctxErr, context.DeadlineExceeded) {
-		if err := storegen.New(r.pool).CompleteRun(context.Background(), storegen.CompleteRunParams{
-			ID: pgUUID(runID), Status: RunStatusFailed, FinishedAt: pgTime(now),
-		}); err != nil {
-			return err
-		}
 		stStart := startedAt
 		if stStart == nil {
 			stStart = &now
@@ -679,16 +690,21 @@ func (r *ModeRunner) terminateOnContextErr(
 			}
 			doneNodes[current.node.NodeID] = true
 		}
-		return r.skipStack(runID, remaining, doneNodes, "执行超时，已终止", RunStatusFailed)
+		if err := r.skipStack(runID, remaining, doneNodes, "执行超时，已终止", RunStatusFailed); err != nil {
+			return err
+		}
+		return storegen.New(r.pool).CompleteRun(context.Background(), storegen.CompleteRunParams{
+			ID: pgUUID(runID), Status: RunStatusFailed, FinishedAt: pgTime(now),
+		})
 	}
 
-	if err := storegen.New(r.pool).CompleteRun(context.Background(), storegen.CompleteRunParams{
-		ID: pgUUID(runID), Status: RunStatusCancelled, FinishedAt: pgTime(now),
-	}); err != nil {
+	all := append(remaining, current)
+	if err := r.skipStack(runID, all, doneNodes, "已取消", RunStatusCancelled); err != nil {
 		return err
 	}
-	all := append(remaining, current)
-	return r.skipStack(runID, all, doneNodes, "已取消", RunStatusCancelled)
+	return storegen.New(r.pool).CompleteRun(context.Background(), storegen.CompleteRunParams{
+		ID: pgUUID(runID), Status: RunStatusCancelled, FinishedAt: pgTime(now),
+	})
 }
 
 // skipStack 按执行顺序（栈顶到栈底）把剩余未执行节点全部标为 skipped 并广播。
@@ -902,7 +918,7 @@ func (r *ModeRunner) executeComfortAction(
 		if currentOn {
 			reqID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(runID.String()+":"+node.NodeID+":on"))
 			if _, cmdErr := r.commands.Handle(ctx, Command{
-				RequestID: reqID, ItemID: *node.ItemID, CapabilityKey: "on", Value: false, CreatedBy: triggeredBy,
+				RequestID: reqID, ItemID: *node.ItemID, CapabilityKey: "on", Value: false, Source: "automation", CreatedBy: triggeredBy,
 			}); cmdErr != nil {
 				return StepStatusFailed, cmdErr.Error(), dec.Reason, !shouldContinue(node, defaultContinue)
 			}
@@ -928,7 +944,7 @@ func (r *ModeRunner) executeComfortAction(
 		for _, c := range cmds {
 			reqID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(runID.String()+":"+node.NodeID+":"+c.suffix))
 			if _, cmdErr := r.commands.Handle(ctx, Command{
-				RequestID: reqID, ItemID: *node.ItemID, CapabilityKey: c.key, Value: c.val, CreatedBy: triggeredBy,
+				RequestID: reqID, ItemID: *node.ItemID, CapabilityKey: c.key, Value: c.val, Source: "automation", CreatedBy: triggeredBy,
 			}); cmdErr != nil {
 				return StepStatusFailed, cmdErr.Error(), dec.Reason, !shouldContinue(node, defaultContinue)
 			}
@@ -939,53 +955,33 @@ func (r *ModeRunner) executeComfortAction(
 	}
 }
 
-func (r *ModeRunner) readRoomTempHumidity(ctx context.Context, roomHash pgtype.Text) (*float64, *float64) {
-	q := storegen.New(r.pool)
-	items, err := q.ListItems(ctx, storegen.ListItemsParams{})
-	if err != nil {
-		return nil, nil
-	}
-	var fallbackSensor *uuid.UUID
-	var roomSensor *uuid.UUID
-	for _, it := range items {
-		if it.TypeKey != "sensor_th" {
-			continue
-		}
-		id := uuid.UUID(it.ID.Bytes)
-		if fallbackSensor == nil {
-			fallbackSensor = &id
-		}
-		if roomHash.Valid && it.RoomHash.Valid && it.RoomHash.String == roomHash.String {
-			roomSensor = &id
-			break
-		}
-	}
-	target := roomSensor
-	if target == nil {
-		target = fallbackSensor
-	}
-	if target == nil {
-		return nil, nil
-	}
-	states, err := q.ListStatesByItem(ctx, pgUUID(*target))
-	if err != nil {
-		return nil, nil
-	}
-	var temp, rh *float64
-	for _, st := range states {
-		var v any
-		if err := json.Unmarshal(st.Value, &v); err != nil || v == nil || v == "unavailable" {
-			continue
-		}
-		if f, ok := toFloat64(v); ok {
-			if st.CapabilityKey == "temperature" {
-				temp = &f
-			} else if st.CapabilityKey == "humidity" {
-				rh = &f
+func collectModeOverrideKeys(nodes []ModeNode) []OverrideKey {
+	var out []OverrideKey
+	for _, n := range nodes {
+		if n.Type == "action" && n.ItemID != nil {
+			if n.ValueFrom == "comfort" {
+				out = append(out,
+					OverrideKey{ItemID: *n.ItemID, CapabilityKey: "on"},
+					OverrideKey{ItemID: *n.ItemID, CapabilityKey: "mode"},
+					OverrideKey{ItemID: *n.ItemID, CapabilityKey: "target_temp"},
+				)
+			} else if n.Capability != "" {
+				out = append(out, OverrideKey{ItemID: *n.ItemID, CapabilityKey: n.Capability})
 			}
 		}
+		if len(n.Then) > 0 {
+			out = append(out, collectModeOverrideKeys(n.Then)...)
+		}
+		if len(n.Else) > 0 {
+			out = append(out, collectModeOverrideKeys(n.Else)...)
+		}
 	}
-	return temp, rh
+	return out
+}
+
+func (r *ModeRunner) readRoomTempHumidity(ctx context.Context, roomHash pgtype.Text) (*float64, *float64) {
+	readings, _ := readRoomEnvReadings(ctx, r.pool, roomHash)
+	return readings.Temperature, readings.Humidity
 }
 
 // saveAndBroadcast 严格遵循 ADR 0002 单一写入点：先落库成功，再由 Broadcaster 广播。

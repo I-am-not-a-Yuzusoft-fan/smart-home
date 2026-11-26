@@ -61,6 +61,8 @@ func (s *Server) SendItemCommand(w http.ResponseWriter, r *http.Request, id open
 				status, code = http.StatusServiceUnavailable, gen.DEVICEUNAVAILABLE
 			case "DEVICE_TIMEOUT":
 				status, code = http.StatusServiceUnavailable, gen.DEVICETIMEOUT
+			case "CONFLICT":
+				status, code = http.StatusConflict, gen.CONFLICT
 			}
 			writeError(w, status, code, commandErr.Message)
 			return

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/device"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/policy"
 	storegen "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
 
@@ -26,6 +27,7 @@ type Command struct {
 	ItemID        uuid.UUID
 	CapabilityKey string
 	Value         any
+	Source        string // 默认 "manual"；策略/场景自动下发传 "automation"
 	CreatedBy     uuid.UUID
 }
 
@@ -47,6 +49,7 @@ type Handler struct {
 	adapter     device.Adapter
 	timeout     time.Duration
 	broadcaster Broadcaster
+	overrides   *OverrideStore
 }
 
 type Broadcaster interface {
@@ -62,11 +65,21 @@ type StateMessage struct {
 }
 
 func NewCommandHandler(pool *pgxpool.Pool, adapter device.Adapter, timeout time.Duration) *Handler {
-	return &Handler{pool: pool, adapter: adapter, timeout: timeout}
+	return &Handler{pool: pool, adapter: adapter, timeout: timeout, overrides: NewOverrideStore()}
 }
 
 func (h *Handler) SetBroadcaster(broadcaster Broadcaster) {
 	h.broadcaster = broadcaster
+}
+
+func (h *Handler) Overrides() *OverrideStore {
+	return h.overrides
+}
+
+func (h *Handler) SetOverrides(store *OverrideStore) {
+	if store != nil {
+		h.overrides = store
+	}
 }
 
 func (h *Handler) ListLogs(ctx context.Context, limit int32) ([]storegen.ListCommandLogsRow, error) {
@@ -153,6 +166,11 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	if !capability.Writable {
 		return CommandResult{}, &CommandError{Code: "VALIDATION_FAILED", Message: "能力项 " + command.CapabilityKey + " 不可写"}
 	}
+	source := command.Source
+	if source == "" {
+		source = "manual"
+	}
+
 	if msg, code, ok := validateValue(command.Value, capability); !ok {
 		target, _ := json.Marshal(command.Value)
 		tx, err := h.pool.Begin(ctx)
@@ -168,7 +186,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 			CapabilityKey: pgText(command.CapabilityKey),
 			Target:        target,
 			Status:        "rejected",
-			Source:        "manual",
+			Source:        source,
 			CreatedBy:     pgUUID(command.CreatedBy),
 		}); err != nil {
 			return CommandResult{}, err
@@ -189,6 +207,64 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 		return CommandResult{}, &CommandError{Code: code, Message: msg}
 	}
 
+	// FR-5.9 手动接管让位：
+	// - 手动命令：先记录 (itemId, capabilityKey) 的手动时刻与房间环境基线，再下发；
+	// - 自动策略命令：检查是否仍在 30 分钟让位窗口内且未触发环境突变解除，受抑则拒绝并留痕。
+	if h.overrides != nil {
+		now := h.overrides.Now()
+		if source == "manual" {
+			baseline, hasBaseline := readRoomEnvReadings(ctx, h.pool, item.RoomHash)
+			h.overrides.RecordManual(command.ItemID, command.CapabilityKey, baseline, hasBaseline, now)
+		} else if source == "automation" {
+			if entry, exists := h.overrides.Get(command.ItemID, command.CapabilityKey); exists {
+				current, _ := readRoomEnvReadings(ctx, h.pool, item.RoomHash)
+				dec := policy.EvaluateYield(policy.YieldInput{
+					ManualAt:    entry.ManualAt,
+					Now:         now,
+					HasBaseline: entry.HasBaseline,
+					Baseline:    entry.Baseline,
+					Current:     current,
+				})
+				if dec.Suppressed {
+					target, _ := json.Marshal(command.Value)
+					tx, err := h.pool.Begin(ctx)
+					if err != nil {
+						return CommandResult{}, err
+					}
+					defer func() { _ = tx.Rollback(ctx) }()
+					txq := q.WithTx(tx)
+					if _, err := txq.InsertCommand(ctx, storegen.InsertCommandParams{
+						RequestID:     requestID,
+						ItemID:        pgUUID(command.ItemID),
+						CapabilityKey: pgText(command.CapabilityKey),
+						Target:        target,
+						Status:        "rejected",
+						Source:        source,
+						CreatedBy:     pgUUID(command.CreatedBy),
+					}); err != nil {
+						return CommandResult{}, err
+					}
+					if err := txq.CompleteCommand(ctx, storegen.CompleteCommandParams{
+						RequestID:   requestID,
+						Status:      "rejected",
+						Error:       pgText(dec.Reason),
+						ErrorCode:   pgText("CONFLICT"),
+						CompletedAt: pgTime(now),
+						DurationMs:  pgInt32(0),
+					}); err != nil {
+						return CommandResult{}, err
+					}
+					if err := tx.Commit(ctx); err != nil {
+						return CommandResult{}, err
+					}
+					return CommandResult{}, &CommandError{Code: "CONFLICT", Message: dec.Reason}
+				}
+				// 窗口过期或环境突变超阈值：立即清除让位标记并继续下发。
+				h.overrides.Clear(command.ItemID, command.CapabilityKey)
+			}
+		}
+	}
+
 	target, _ := json.Marshal(command.Value)
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
@@ -203,7 +279,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 		CapabilityKey: pgText(command.CapabilityKey),
 		Target:        target,
 		Status:        "failed",
-		Source:        "manual",
+		Source:        source,
 		CreatedBy:     pgUUID(command.CreatedBy),
 	}); err != nil {
 		return CommandResult{}, err
@@ -213,7 +289,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	defer cancel()
 	value, dispatchErr := h.adapter.Dispatch(execCtx, device.Command{
 		RequestID: command.RequestID, ItemID: command.ItemID,
-		CapabilityKey: command.CapabilityKey, Value: command.Value, Source: "manual",
+		CapabilityKey: command.CapabilityKey, Value: command.Value, Source: source,
 		Driver: typ.Driver.String,
 	})
 	if dispatchErr != nil {
@@ -242,13 +318,13 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	completedAt := time.Now()
 	if err := txq.UpsertState(ctx, storegen.UpsertStateParams{
 		ItemID: pgUUID(command.ItemID), CapabilityKey: command.CapabilityKey,
-		Value: valueJSON, Source: "manual", UpdatedAt: pgTime(completedAt),
+		Value: valueJSON, Source: source, UpdatedAt: pgTime(completedAt),
 	}); err != nil {
 		return CommandResult{}, err
 	}
 	if err := txq.InsertHistory(ctx, storegen.InsertHistoryParams{
 		ItemID: pgUUID(command.ItemID), CapabilityKey: command.CapabilityKey,
-		Value: valueJSON, Source: "manual", RecordedAt: pgTime(completedAt),
+		Value: valueJSON, Source: source, RecordedAt: pgTime(completedAt),
 	}); err != nil {
 		return CommandResult{}, err
 	}
@@ -264,7 +340,7 @@ func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, e
 	if h.broadcaster != nil {
 		h.broadcaster.Broadcast(StateMessage{
 			ItemID: command.ItemID, CapabilityKey: command.CapabilityKey,
-			Value: value, Source: "manual", UpdatedAt: completedAt,
+			Value: value, Source: source, UpdatedAt: completedAt,
 		})
 	}
 	return CommandResult{RequestID: command.RequestID, Status: "ok", Value: value}, nil
