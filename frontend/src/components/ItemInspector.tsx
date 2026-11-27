@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { listItemStates, sendItemCommand, type Item, type ItemType, type Room } from '../api/client.ts'
 import { isCapabilityStale, liveValuesFor, mergeControlValues } from '../features/control/live.ts'
+import { useNow } from '../features/control/useNow.ts'
 import { ItemIcon } from '../lib/icons.tsx'
 import { useLiveStore } from '../store/liveState.ts'
 import CapabilityForm, { type CapabilityValues } from './CapabilityForm.tsx'
@@ -66,8 +67,8 @@ export default function ItemInspector({
   const [draftValues, setDraftValues] = useState<CapabilityValues>({})
   const [controlState, setControlState] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle')
   const [stateUpdatedAt, setStateUpdatedAt] = useState<Record<string, string>>({})
-  const [nowMs, setNowMs] = useState(() => Date.now())
   const [propsOpen, setPropsOpen] = useState(mode === 'edit')
+  const nowMs = useNow()
 
   const liveStates = useLiveStore((store) => store.states)
   const liveConnected = useLiveStore((store) => store.connected)
@@ -75,14 +76,6 @@ export default function ItemInspector({
   useEffect(() => {
     setPropsOpen(mode === 'edit' || item?.kind === 'furniture')
   }, [mode, item?.kind])
-
-  const hasReadOnly = Boolean(type?.capabilities.some((capability) => !capability.writable))
-  useEffect(() => {
-    if (!hasReadOnly) return
-    setNowMs(Date.now())
-    const timer = window.setInterval(() => setNowMs(Date.now()), 5000)
-    return () => window.clearInterval(timer)
-  }, [hasReadOnly, item?.id])
 
   const liveValues = useMemo(
     () => (item ? liveValuesFor(liveStates, item.id, type, nowMs) : {}),

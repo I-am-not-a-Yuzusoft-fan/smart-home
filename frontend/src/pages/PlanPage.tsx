@@ -651,15 +651,15 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         return
       }
       if (isTyping(e.target)) return
-      // Ctrl/Cmd+Z 撤销，再加 Shift 重做；Ctrl+Y 也认，习惯 Windows 的人会按。
+      // Ctrl/Cmd+Z 撤销，再加 Shift 重做；Ctrl+Y 也认（仅户型编辑模式生效）
       const mod = e.metaKey || e.ctrlKey
-      if (mod && (e.key === 'z' || e.key === 'Z')) {
+      if (effectiveMode === 'edit' && mod && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
         if (e.shiftKey) void redo()
         else void undo()
         return
       }
-      if (mod && (e.key === 'y' || e.key === 'Y')) {
+      if (effectiveMode === 'edit' && mod && (e.key === 'y' || e.key === 'Y')) {
         e.preventDefault()
         void redo()
         return
@@ -670,9 +670,18 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         setDraft(null)
         setBend(null)
         setEditing(null)
+        setArcMode(false)
         setGuide({ kind: 'none' })
+        setSelectedItemId(null)
+        setSelectedId(null)
+        setSelectedRoomHash(null)
+        if (window.innerWidth < 1280) {
+          setLeftOpen(false)
+          setRightOpen(false)
+        }
         return
       }
+      if (effectiveMode !== 'edit') return
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
       if (selectedItemId) {
         void removeItem(selectedItemId)
@@ -1679,6 +1688,21 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
+  // 窄屏/分屏自适应：当窗口从宽屏缩小到 < 1280px 时自动折叠两侧抽屉，防止挤压画布
+  useEffect(() => {
+    let wasWide = window.innerWidth >= 1280
+    const onResize = () => {
+      const isWide = window.innerWidth >= 1280
+      if (wasWide && !isWide) {
+        setLeftOpen(false)
+        setRightOpen(false)
+      }
+      wasWide = isWide
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   // 点选设备自动切到「设备详情」，取消选中自动回到「场景模式」
   useEffect(() => {
     if (selectedItemId) {
@@ -2296,6 +2320,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                   wall={wall}
                   scale={viewport.scale}
                   swing={swingSide(opening, wall, (x, y) => roomAt(x, y) !== null)}
+                  theme={canvasTheme}
                   onPick={() => {
                     setSelectedId(wall.id)
                     setSelectedItemId(null)
@@ -3119,12 +3144,14 @@ function OpeningShape({
   wall,
   scale,
   swing,
+  theme,
   onPick,
 }: {
   opening: Opening
   wall: Wall
   scale: number
   swing: 1 | -1
+  theme: CanvasTheme
   onPick: () => void
 }) {
   const length = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay)
@@ -3152,14 +3179,14 @@ function OpeningShape({
         y={-thickness / 2}
         width={opening.width}
         height={thickness + 2}
-        fill="#ffffff"
-        stroke="#94a3b8"
+        fill={theme.openingFill}
+        stroke={theme.openingStroke}
         strokeWidth={1 / scale}
       />
       {opening.kind === 'window' ? (
         <Line
           points={[0, 0, opening.width, 0]}
-          stroke="#4f6bed"
+          stroke={theme.openingWindow}
           strokeWidth={1.5 / scale}
           listening={false}
         />
@@ -3169,7 +3196,7 @@ function OpeningShape({
               门弧以合页为圆心、门宽为半径，从门洞另一侧扫到门扇端头——和制图规范一致。 */}
           <Line
             points={[0, 0, 0, swing * opening.width]}
-            stroke="#475569"
+            stroke={theme.openingDoor}
             strokeWidth={2 / scale}
             lineCap="round"
             listening={false}
@@ -3178,7 +3205,7 @@ function OpeningShape({
             data={`M ${opening.width} 0 A ${opening.width} ${opening.width} 0 0 ${
               swing > 0 ? 1 : 0
             } 0 ${swing * opening.width}`}
-            stroke="#94a3b8"
+            stroke={theme.openingStroke}
             strokeWidth={1 / scale}
             listening={false}
           />

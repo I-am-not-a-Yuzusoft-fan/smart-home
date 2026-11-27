@@ -10,6 +10,7 @@ import {
   Spline,
   Undo2,
 } from 'lucide-react'
+import { motion } from 'motion/react'
 import { Button } from '../ui/button.tsx'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip.tsx'
 import type { WorkspaceMode } from './AppHeader.tsx'
@@ -65,7 +66,10 @@ export default function CanvasFloatingBar({
   onExportPng,
 }: Props) {
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.18, ease: 'easeOut' }}
       className="surface-glass pointer-events-auto absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border px-2 py-1.5 shadow-[var(--shadow-md)]"
       onMouseDown={(e) => e.stopPropagation()}
     >
@@ -240,6 +244,6 @@ export default function CanvasFloatingBar({
         </TooltipTrigger>
         <TooltipContent>导出平面图 PNG</TooltipContent>
       </Tooltip>
-    </div>
+    </motion.div>
   )
 }

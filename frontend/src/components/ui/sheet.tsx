@@ -20,7 +20,7 @@ export function SheetContent({
   return (
     <DialogPrimitive.Portal>
       {showOverlay && (
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-slate-950/30 backdrop-blur-[2px] transition-opacity" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-[var(--overlay-scrim)] backdrop-blur-[2px] transition-opacity" />
       )}
       <DialogPrimitive.Content
         className={cn(
