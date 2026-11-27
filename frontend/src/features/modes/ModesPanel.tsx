@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   cancelRun,
+  deleteMode,
   getRun,
   getSimEnv,
+  listItems,
+  listItemTypes,
   listModes,
   runMode,
   updateSimEnv,
   type EffectiveSeason,
+  type Item,
+  type ItemType,
   type Mode,
   type Run,
   type RunStatus,
@@ -15,6 +20,7 @@ import {
   type SimEnv,
   type SimSeason,
 } from '../../api/client.ts'
+import ModeEditor from './ModeEditor.tsx'
 
 const SEASON_LABEL: Record<SimSeason, string> = {
   auto: '自动（按月份）',
@@ -81,6 +87,15 @@ export default function ModesPanel({ userRole, onClose }: Props) {
   const [seasonDraft, setSeasonDraft] = useState<SimSeason>('auto')
   const [outdoorTempDraft, setOutdoorTempDraft] = useState<string>('')
   const [savingEnv, setSavingEnv] = useState(false)
+  const [items, setItems] = useState<Item[]>([])
+  const [itemTypes, setItemTypes] = useState<ItemType[]>([])
+  const [editingMode, setEditingMode] = useState<Mode | 'new' | null>(null)
+
+  const typeMap = useMemo(() => new Map(itemTypes.map((t) => [t.key, t])), [itemTypes])
+  const deviceItems = useMemo(
+    () => items.filter((it) => typeMap.get(it.typeKey)?.kind === 'device'),
+    [items, typeMap],
+  )
 
   const liveRunSteps = useLiveStore((s) => (activeRun ? s.runSteps[activeRun.id] : undefined))
   const liveRunStatus = useLiveStore((s) => (activeRun ? s.runStatuses[activeRun.id] : undefined))
@@ -113,6 +128,16 @@ export default function ModesPanel({ userRole, onClose }: Props) {
         setOutdoorTempDraft(env.outdoorTemp !== undefined ? String(env.outdoorTemp) : '')
       })
       .catch(() => {})
+
+    if (userRole === 'admin') {
+      Promise.all([listItems(), listItemTypes()])
+        .then(([its, types]) => {
+          if (cancelled) return
+          setItems(its)
+          setItemTypes(types)
+        })
+        .catch(() => {})
+    }
 
     const savedRunId = sessionStorage.getItem(LAST_RUN_KEY) ?? useLiveStore.getState().latestRunId
     if (savedRunId) {
@@ -247,6 +272,37 @@ export default function ModesPanel({ userRole, onClose }: Props) {
       setError(e instanceof Error ? e.message : '取消执行失败')
     } finally {
       setCancelling(false)
+    }
+  }
+
+  const handleDeleteMode = async (mode: Mode) => {
+    setError(null)
+    try {
+      await deleteMode(mode.id)
+      const list = await listModes()
+      setModes(list)
+      if (selectedModeId === mode.id) {
+        setSelectedModeId(list[0]?.id ?? null)
+      }
+      if (editingMode !== 'new' && editingMode?.id === mode.id) {
+        setEditingMode(null)
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '删除场景失败')
+    }
+  }
+
+  const handleModeSaved = async (saved: Mode) => {
+    setEditingMode(null)
+    setSelectedModeId(saved.id)
+    try {
+      const list = await listModes()
+      setModes(list)
+    } catch {
+      setModes((prev) => {
+        const exists = prev.some((m) => m.id === saved.id)
+        return exists ? prev.map((m) => (m.id === saved.id ? saved : m)) : [...prev, saved]
+      })
     }
   }
 
@@ -393,9 +449,21 @@ export default function ModesPanel({ userRole, onClose }: Props) {
             className="overflow-y-auto p-4 md:col-span-5"
             style={{ borderRight: '1px solid var(--color-border)' }}
           >
-            <h3 className="mb-2 text-xs font-medium uppercase" style={{ color: 'var(--color-muted)' }}>
-              内置场景（{modes.length}）
-            </h3>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-xs font-medium uppercase" style={{ color: 'var(--color-muted)' }}>
+                场景列表（{modes.length}）
+              </h3>
+              {userRole === 'admin' ? (
+                <button
+                  type="button"
+                  onClick={() => setEditingMode('new')}
+                  className="px-2 py-0.5 text-xs font-medium text-white"
+                  style={{ background: 'var(--color-primary, #4f6bed)', borderRadius: '4px' }}
+                >
+                  + 新建场景
+                </button>
+              ) : null}
+            </div>
             {loading ? (
               <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
                 正在加载场景…
@@ -439,21 +507,50 @@ export default function ModesPanel({ userRole, onClose }: Props) {
                           {m.definition.guard ? ' · 含守卫条件' : ''}
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        disabled={busy || !m.enabled}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          void handleTrigger(m)
-                        }}
-                        className="shrink-0 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-                        style={{
-                          background: 'var(--color-primary, #4f6bed)',
-                          borderRadius: 'var(--radius-sm)',
-                        }}
-                      >
-                        {busy ? '启动中…' : '执行'}
-                      </button>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {userRole === 'admin' ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditingMode(m)
+                              }}
+                              className="px-2 py-1 text-xs"
+                              style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', background: '#fff' }}
+                            >
+                              编辑
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                void handleDeleteMode(m)
+                              }}
+                              className="px-2 py-1 text-xs"
+                              style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', color: '#dc2626', background: '#fff' }}
+                            >
+                              删
+                            </button>
+                          </>
+                        ) : null}
+                        <button
+                          type="button"
+                          disabled={busy || !m.enabled}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setEditingMode(null)
+                            void handleTrigger(m)
+                          }}
+                          className="shrink-0 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+                          style={{
+                            background: 'var(--color-primary, #4f6bed)',
+                            borderRadius: 'var(--radius-sm)',
+                          }}
+                        >
+                          {busy ? '启动中…' : '执行'}
+                        </button>
+                      </div>
                     </li>
                   )
                 })}
@@ -481,8 +578,19 @@ export default function ModesPanel({ userRole, onClose }: Props) {
             ) : null}
           </section>
 
-          {/* 右侧：实时运行时间线 */}
+          {/* 右侧：编辑器或实时运行时间线 */}
           <section className="flex min-h-0 flex-col overflow-y-auto p-4 md:col-span-7">
+            {editingMode !== null && userRole === 'admin' ? (
+              <ModeEditor
+                key={editingMode === 'new' ? 'new' : editingMode.id}
+                initial={editingMode === 'new' ? null : editingMode}
+                devices={deviceItems}
+                typeMap={typeMap}
+                onSaved={(saved) => void handleModeSaved(saved)}
+                onCancel={() => setEditingMode(null)}
+              />
+            ) : (
+              <>
             <div className="mb-3 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-medium">
@@ -604,6 +712,8 @@ export default function ModesPanel({ userRole, onClose }: Props) {
                   )
                 })}
                 </ol>
+              </>
+            )}
               </>
             )}
           </section>

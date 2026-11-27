@@ -596,11 +596,36 @@ export type Run = {
   steps: RunStep[]
 }
 
+export type ModeInput = {
+  name: string
+  definition: ModeDefinition
+  runMode?: 'single' | 'restart' | 'queued' | 'parallel'
+  enabled?: boolean
+}
+
 /** 列出所有场景模式。 */
 export const listModes = () => request<Mode[]>('/api/modes')
 
 /** 获取单个场景模式详情。 */
 export const getMode = (id: string) => request<Mode>(`/api/modes/${encodeURIComponent(id)}`)
+
+/** 新建场景模式（仅管理员）。 */
+export const createMode = (input: ModeInput) =>
+  request<Mode>('/api/modes', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+
+/** 更新场景模式（仅管理员）。 */
+export const updateMode = (id: string, input: ModeInput) =>
+  request<Mode>(`/api/modes/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+
+/** 删除场景模式（仅管理员）。 */
+export const deleteMode = (id: string) =>
+  request<void>(`/api/modes/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 /** 触发执行场景模式，返回 202 与初始 Run。 */
 export const runMode = (id: string, requestId?: string) =>
