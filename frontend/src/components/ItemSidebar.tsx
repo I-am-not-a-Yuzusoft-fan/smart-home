@@ -1,8 +1,13 @@
+import { GripVertical, Search } from 'lucide-react'
 import { useMemo } from 'react'
 import type { Item, ItemKind, ItemType, Room } from '../api/client.ts'
-import { useLiveStore } from '../store/liveState.ts'
 import { liveValuesFor, stateSummary } from '../features/control/live.ts'
 import { useNow } from '../features/control/useNow.ts'
+import { ItemIcon } from '../lib/icons.tsx'
+import { cn } from '../lib/utils.ts'
+import { useLiveStore } from '../store/liveState.ts'
+import { Badge } from './ui/badge.tsx'
+import { Input } from './ui/input.tsx'
 
 export type ItemFilters = {
   room: string
@@ -21,8 +26,8 @@ type Props = {
 }
 
 /**
- * 左侧家具库 + 筛选 + 物品列表。
- * 家具库只负责 HTML5 拖拽源；真正的落点在 PlanPage 的画布上。
+ * 「户型编辑」模式下的左侧素材库 + 已放物品筛选。
+ * 家具库负责 HTML5 拖拽源，真正的落点在 PlanPage 的画布上。
  */
 export default function ItemSidebar({
   types,
@@ -35,7 +40,6 @@ export default function ItemSidebar({
 }: Props) {
   const namedRooms = useMemo(() => rooms.filter((room) => room.name), [rooms])
   const liveStates = useLiveStore((store) => store.states)
-  // 定时重渲染：传感器停止上报 60 秒后列表也要变「不可用」，而不是停在最后一个读数。
   const nowMs = useNow()
   const typeByKey = useMemo(() => new Map(types.map((typ) => [typ.key, typ])), [types])
   const summaryOf = (item: Item) => {
@@ -53,48 +57,67 @@ export default function ItemSidebar({
   }, [filters, items])
 
   return (
-    <aside className="flex w-60 min-w-60 flex-col gap-3 overflow-auto p-3" style={{ borderRight: '1px solid var(--color-border)' }}>
-      <section>
-        <h2 className="mb-2 text-sm font-semibold">家具库</h2>
-        <p className="mb-2 text-[11px]" style={{ color: 'var(--color-muted)' }}>
-          拖到画布上布放；类型由元数据驱动。
-        </p>
-        <div className="grid gap-1">
+    <div className="flex h-full flex-col overflow-y-auto p-3">
+      <section className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-semibold tracking-wide text-text-secondary">素材库（拖入画布）</h2>
+          <Badge variant="secondary">{types.length}</Badge>
+        </div>
+        <div className="grid gap-1.5">
           {types.map((typ) => (
             <button
               key={typ.key}
+              type="button"
               draggable
               onDragStart={(e) => {
                 e.dataTransfer.setData('application/x-smart-home-type', typ.key)
                 e.dataTransfer.effectAllowed = 'copy'
               }}
-              className="cursor-grab px-2 py-1 text-left text-xs active:cursor-grabbing"
-              style={{
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-sm)',
-                background: 'var(--color-bg)',
-              }}
-              title={`${typ.name}（${typ.key}）`}
+              className="group flex cursor-grab items-center gap-2 rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2.5 py-2 text-left transition-colors hover:border-accent-border hover:bg-accent-soft/40 active:cursor-grabbing"
+              title={`拖拽放置「${typ.name}」`}
             >
-              <span className="block text-sm">{typ.name}</span>
-              <span style={{ color: 'var(--color-muted)' }}>
-                {typ.kind === 'device' ? '设备' : '家具'} · {typ.defaultWidth}×{typ.defaultDepth}cm
-                {typ.mount === 'wall' ? ' · 挂墙' : typ.mount === 'ceiling' ? ' · 吸顶' : ''}
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-bg-subtle text-text-secondary group-hover:bg-accent-soft group-hover:text-accent">
+                <ItemIcon iconName={typ.icons} typeKey={typ.key} kind={typ.kind} className="h-3.5 w-3.5" />
               </span>
+              <div className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-medium text-text-primary">{typ.name}</span>
+                <span className="block truncate text-[10px] text-text-muted">
+                  {typ.kind === 'device' ? '设备' : '家具'} · {typ.defaultWidth}×{typ.defaultDepth}cm
+                  {typ.mount === 'wall' ? ' · 挂墙' : typ.mount === 'ceiling' ? ' · 吸顶' : ''}
+                </span>
+              </div>
+              <GripVertical className="h-3.5 w-3.5 shrink-0 text-text-muted/50" />
             </button>
           ))}
         </div>
       </section>
 
-      <section className="grid gap-2">
-        <h2 className="text-sm font-semibold">筛选</h2>
-        <label className="grid gap-1 text-[11px]">
-          房间
+      <section className="mt-4 space-y-2 border-t border-border-default pt-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-semibold tracking-wide text-text-secondary">
+            已放置物品
+          </h2>
+          <span className="text-[11px] text-text-muted">
+            {visibleItems.length}/{items.length}
+          </span>
+        </div>
+
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted" />
+          <Input
+            value={filters.q}
+            onChange={(e) => onFiltersChange({ q: e.target.value })}
+            placeholder="按名称筛选…"
+            className="h-8 pl-8 text-xs"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-1.5">
           <select
+            aria-label="按房间筛选"
             value={filters.room}
             onChange={(e) => onFiltersChange({ room: e.target.value })}
-            style={inputStyle}
-            className="px-2 py-1 text-xs"
+            className="h-7 rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2 text-[11px] text-text-primary outline-none focus:border-accent"
           >
             <option value="">全部房间</option>
             {namedRooms.map((room) => (
@@ -103,73 +126,56 @@ export default function ItemSidebar({
               </option>
             ))}
           </select>
-        </label>
-        <label className="grid gap-1 text-[11px]">
-          类别
           <select
+            aria-label="按类别筛选"
             value={filters.kind}
             onChange={(e) => onFiltersChange({ kind: e.target.value as ItemFilters['kind'] })}
-            style={inputStyle}
-            className="px-2 py-1 text-xs"
+            className="h-7 rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2 text-[11px] text-text-primary outline-none focus:border-accent"
           >
             <option value="">全部类别</option>
-            <option value="furniture">家具</option>
             <option value="device">设备</option>
+            <option value="furniture">家具</option>
           </select>
-        </label>
-        <label className="grid gap-1 text-[11px]">
-          关键字
-          <input
-            value={filters.q}
-            onChange={(e) => onFiltersChange({ q: e.target.value })}
-            placeholder="按名称搜索"
-            style={inputStyle}
-            className="px-2 py-1 text-xs"
-          />
-        </label>
-      </section>
+        </div>
 
-      <section className="min-h-0">
-        <h2 className="mb-2 text-sm font-semibold">
-          物品 <span style={{ color: 'var(--color-muted)' }}>({visibleItems.length}/{items.length})</span>
-        </h2>
-        <div className="grid gap-1">
-          {visibleItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => onSelectItem(item.id)}
-              className="px-2 py-1 text-left text-xs"
-              style={{
-                border: '1px solid',
-                borderColor: item.id === selectedItemId ? 'var(--color-accent, #4f6bed)' : 'var(--color-border)',
-                borderRadius: 'var(--radius-sm)',
-                background: item.id === selectedItemId ? 'var(--color-bg)' : 'transparent',
-              }}
-            >
-              <span className="block text-sm">{item.name}</span>
-              <span className="flex items-center gap-1" style={{ color: 'var(--color-muted)' }}>
-                {item.kind === 'device' ? '设备' : '家具'}
-                {item.roomName ? ` · ${item.roomName}` : ' · 未分配房间'}
-                {summaryOf(item) ? (
-                  <span style={{ color: 'var(--color-accent, #4f6bed)' }}>· {summaryOf(item)}</span>
-                ) : null}
-              </span>
-            </button>
-          ))}
+        <div className="grid gap-1 pt-1">
+          {visibleItems.map((item) => {
+            const typ = typeByKey.get(item.typeKey)
+            const selected = item.id === selectedItemId
+            const summary = summaryOf(item)
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onSelectItem(item.id)}
+                className={cn(
+                  'flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] border px-2.5 py-1.5 text-left transition-colors',
+                  selected
+                    ? 'border-accent bg-accent-soft/70'
+                    : 'border-border-default bg-bg-surface hover:bg-bg-subtle/60',
+                )}
+              >
+                <ItemIcon
+                  iconName={typ?.icons}
+                  typeKey={item.typeKey}
+                  kind={item.kind}
+                  className="h-3.5 w-3.5 shrink-0 text-text-muted"
+                />
+                <div className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-medium text-text-primary">{item.name}</span>
+                  <span className="flex items-center gap-1 truncate text-[10px] text-text-muted">
+                    {item.roomName || '未分配房间'}
+                    {summary ? <span className="text-accent">· {summary}</span> : null}
+                  </span>
+                </div>
+              </button>
+            )
+          })}
           {visibleItems.length === 0 ? (
-            <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
-              没有匹配的物品。
-            </p>
+            <p className="py-4 text-center text-xs text-text-muted">没有匹配的物品</p>
           ) : null}
         </div>
       </section>
-    </aside>
+    </div>
   )
 }
-
-const inputStyle = {
-  border: '1px solid var(--color-border)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--color-bg)',
-  color: 'inherit',
-} as const

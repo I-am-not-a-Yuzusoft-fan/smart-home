@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import {
   ApiError,
   createItemType,
@@ -14,6 +15,16 @@ import CapabilityForm, {
   defaultCapabilityValues,
   type CapabilityValues,
 } from './CapabilityForm.tsx'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './ui/alert-dialog.tsx'
 
 type DraftCapability = Capability & {
   /** 编辑既有类型时保存的原始定义；新建的能力没有它。 */
@@ -123,6 +134,19 @@ export default function TypeManager({ onClose }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [previewOverrides, setPreviewOverrides] = useState<CapabilityValues>({})
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    title: string
+    description: string
+    onConfirm: () => void
+  } | null>(null)
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !pendingConfirm) onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose, pendingConfirm])
 
   async function refresh(selectKey?: string) {
     setLoading(true)
@@ -194,7 +218,17 @@ export default function TypeManager({ onClose }: Props) {
 
   function removeCapability(index: number) {
     const original = draft.capabilities[index]?.original
-    if (original && !window.confirm(`删除能力项「${original.name}」？历史值会保留但不再显示。`)) {
+    if (original) {
+      setPendingConfirm({
+        title: `删除能力项「${original.name}」？`,
+        description: '历史值会保留在数据库中，但不再显示于设备操控面板。',
+        onConfirm: () => {
+          setDraft((current) => ({
+            ...current,
+            capabilities: current.capabilities.filter((_, i) => i !== index),
+          }))
+        },
+      })
       return
     }
     setDraft((current) => ({
@@ -275,6 +309,7 @@ export default function TypeManager({ onClose }: Props) {
         })
       }
       await refresh(creating ? input.key : selectedKey ?? undefined)
+      toast.success(creating ? `已创建类型「${input.name}」` : `已保存类型「${input.name}」`)
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : '保存失败')
     } finally {
@@ -282,20 +317,29 @@ export default function TypeManager({ onClose }: Props) {
     }
   }
 
-  async function remove() {
+  function remove() {
     if (!selectedKey) return
-    if (!window.confirm(`删除类型「${draft.name || selectedKey}」？仍被物品引用时会被拒绝。`)) return
-    setSaving(true)
-    setError(null)
-    try {
-      await deleteItemType(selectedKey)
-      startCreate()
-      await refresh()
-    } catch (e) {
-      setError(e instanceof ApiError || e instanceof Error ? e.message : '删除失败')
-    } finally {
-      setSaving(false)
-    }
+    const keyToDelete = selectedKey
+    setPendingConfirm({
+      title: `删除类型「${draft.name || keyToDelete}」？`,
+      description: '若该类型仍被户型中的物品引用，后端会拒绝本次删除。',
+      onConfirm: () => {
+        void (async () => {
+          setSaving(true)
+          setError(null)
+          try {
+            await deleteItemType(keyToDelete)
+            toast.success(`已删除类型「${draft.name || keyToDelete}」`)
+            startCreate()
+            await refresh()
+          } catch (e) {
+            setError(e instanceof ApiError || e instanceof Error ? e.message : '删除失败')
+          } finally {
+            setSaving(false)
+          }
+        })()
+      },
+    })
   }
 
   return (
@@ -497,7 +541,7 @@ export default function TypeManager({ onClose }: Props) {
 
         <footer className="flex items-center justify-end gap-2 px-4 py-3" style={{ borderTop: '1px solid var(--color-border)' }}>
           {!creating && selectedKey ? (
-            <button onClick={() => void remove()} disabled={saving} className="px-3 py-1 text-xs" style={{ ...buttonStyle, color: 'var(--color-danger)' }}>
+            <button onClick={() => remove()} disabled={saving} className="px-3 py-1 text-xs" style={{ ...buttonStyle, color: 'var(--color-danger)' }}>
               删除类型
             </button>
           ) : null}
@@ -506,6 +550,26 @@ export default function TypeManager({ onClose }: Props) {
           </button>
         </footer>
       </section>
+
+      <AlertDialog open={Boolean(pendingConfirm)} onOpenChange={(open) => { if (!open) setPendingConfirm(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{pendingConfirm?.title}</AlertDialogTitle>
+            <AlertDialogDescription>{pendingConfirm?.description}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                pendingConfirm?.onConfirm()
+                setPendingConfirm(null)
+              }}
+            >
+              确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

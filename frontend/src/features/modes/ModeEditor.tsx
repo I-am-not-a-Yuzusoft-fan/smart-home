@@ -1,4 +1,19 @@
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Code2,
+  GitBranch,
+  Plus,
+  ShieldCheck,
+  Sliders,
+  Sparkles,
+  Trash2,
+} from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import {
   createMode,
   updateMode,
@@ -12,8 +27,21 @@ import {
   type ModeNode,
 } from '../../api/client.ts'
 import CapabilityForm, { defaultCapabilityValues } from '../../components/CapabilityForm.tsx'
+import { Badge } from '../../components/ui/badge.tsx'
+import { Button } from '../../components/ui/button.tsx'
+import { Input } from '../../components/ui/input.tsx'
+import { Label } from '../../components/ui/label.tsx'
+import { Switch } from '../../components/ui/switch.tsx'
+import { cn } from '../../lib/utils.ts'
 
-const OPS: ModeCondition['op'][] = ['==', '!=', '>', '>=', '<', '<=']
+const OP_LABELS: { value: ModeCondition['op']; label: string }[] = [
+  { value: '==', label: '等于' },
+  { value: '!=', label: '不等于' },
+  { value: '>', label: '大于' },
+  { value: '>=', label: '大于等于' },
+  { value: '<', label: '小于' },
+  { value: '<=', label: '小于等于' },
+]
 
 function genNodeId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 7)}`
@@ -26,15 +54,17 @@ function defaultValueForCap(cap: Capability | undefined): unknown {
 }
 
 type GuardEditorProps = {
-  label: string
+  title: string
+  hint?: string
   guard?: ModeGuard
   devices: Item[]
   typeMap: Map<string, ItemType>
   onChange: (next?: ModeGuard) => void
 }
 
-function GuardEditor({ label, guard, devices, typeMap, onChange }: GuardEditorProps) {
-  const mode: 'all' | 'any' = guard?.any && guard.any.length > 0 && (!guard.all || guard.all.length === 0) ? 'any' : 'all'
+function GuardEditor({ title, hint, guard, devices, typeMap, onChange }: GuardEditorProps) {
+  const mode: 'all' | 'any' =
+    guard?.any && guard.any.length > 0 && (!guard.all || guard.all.length === 0) ? 'any' : 'all'
   const list: ModeCondition[] = (mode === 'all' ? guard?.all : guard?.any) ?? []
 
   const setList = (nextMode: 'all' | 'any', nextList: ModeCondition[]) => {
@@ -59,46 +89,35 @@ function GuardEditor({ label, guard, devices, typeMap, onChange }: GuardEditorPr
   }
 
   return (
-    <div
-      className="space-y-2 p-2.5"
-      style={{
-        border: '1px dashed var(--color-border)',
-        borderRadius: 'var(--radius-sm)',
-        background: 'var(--color-bg)',
-      }}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium">{label}</span>
+    <div className="space-y-2.5 rounded-[var(--radius-md)] border border-dashed border-border-strong bg-bg-subtle/50 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
-          {list.length > 0 ? (
+          <ShieldCheck className="h-4 w-4 text-accent" />
+          <span className="text-xs font-semibold text-text-primary">{title}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {list.length > 1 ? (
             <select
+              aria-label="条件组合方式"
               value={mode}
               onChange={(e) => setList(e.target.value as 'all' | 'any', list)}
-              className="px-1.5 py-0.5 text-xs"
-              style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
+              className="h-7 rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2 text-xs text-text-primary outline-none focus:border-accent"
             >
-              <option value="all">满足全部 (all)</option>
-              <option value="any">满足任一 (any)</option>
+              <option value="all">同时满足以下全部</option>
+              <option value="any">满足以下任意一条</option>
             </select>
           ) : null}
-          <button
-            type="button"
-            onClick={addCondition}
-            disabled={devices.length === 0}
-            className="px-2 py-0.5 text-xs"
-            style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
-          >
-            + 添加条件
-          </button>
+          <Button type="button" variant="outline" size="xs" onClick={addCondition} disabled={devices.length === 0}>
+            <Plus className="h-3 w-3" />
+            添加条件
+          </Button>
         </div>
       </div>
 
-      {list.length === 0 ? (
-        <p className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
-          未设置条件（默认放行）
-        </p>
-      ) : (
-        <div className="space-y-1.5">
+      {hint && list.length === 0 ? <p className="text-[11px] text-text-muted">{hint}</p> : null}
+
+      {list.length > 0 ? (
+        <div className="space-y-2">
           {list.map((cond, idx) => {
             const dev = devices.find((d) => d.id === cond.itemId)
             const caps = dev ? typeMap.get(dev.typeKey)?.capabilities ?? [] : []
@@ -107,9 +126,15 @@ function GuardEditor({ label, guard, devices, typeMap, onChange }: GuardEditorPr
               const next = list.map((c, i) => (i === idx ? { ...c, ...patch } : c))
               setList(mode, next)
             }
+
             return (
-              <div key={idx} className="flex flex-wrap items-center gap-1.5 text-xs">
+              <div
+                key={idx}
+                className="flex flex-wrap items-center gap-1.5 rounded-[var(--radius-sm)] border border-border-default bg-bg-surface p-2 text-xs"
+              >
+                <span className="text-[11px] text-text-muted">当</span>
                 <select
+                  aria-label="条件设备"
                   value={cond.itemId}
                   onChange={(e) => {
                     const nextDev = devices.find((d) => d.id === e.target.value)
@@ -121,70 +146,72 @@ function GuardEditor({ label, guard, devices, typeMap, onChange }: GuardEditorPr
                       value: defaultValueForCap(firstCap),
                     })
                   }}
-                  className="px-1.5 py-1 text-xs"
-                  style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
+                  className="h-7 max-w-[140px] rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2 text-xs text-text-primary outline-none focus:border-accent"
                 >
                   {devices.map((d) => (
                     <option key={d.id} value={d.id}>
-                      {d.name}
+                      {d.roomName ? `${d.roomName} · ${d.name}` : d.name}
                     </option>
                   ))}
                 </select>
 
+                <span className="text-[11px] text-text-muted">的</span>
                 <select
+                  aria-label="条件属性"
                   value={cond.capability}
                   onChange={(e) => {
                     const nextCap = caps.find((c) => c.key === e.target.value)
                     updateAt({ capability: e.target.value, value: defaultValueForCap(nextCap) })
                   }}
-                  className="px-1.5 py-1 text-xs"
-                  style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
+                  className="h-7 rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2 text-xs text-text-primary outline-none focus:border-accent"
                 >
                   {caps.map((c) => (
                     <option key={c.key} value={c.key}>
-                      {c.name} ({c.key})
+                      {c.name}
                     </option>
                   ))}
                 </select>
 
                 <select
+                  aria-label="比较方式"
                   value={cond.op}
                   onChange={(e) => updateAt({ op: e.target.value as ModeCondition['op'] })}
-                  className="px-1.5 py-1 text-xs"
-                  style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
+                  className="h-7 rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2 text-xs text-text-primary outline-none focus:border-accent"
                 >
-                  {OPS.map((op) => (
-                    <option key={op} value={op}>
-                      {op}
+                  {OP_LABELS.map((op) => (
+                    <option key={op.value} value={op.value}>
+                      {op.label}
                     </option>
                   ))}
                 </select>
 
                 {cap?.type === 'bool' ? (
                   <select
+                    aria-label="条件目标值"
                     value={String(cond.value === true)}
                     onChange={(e) => updateAt({ value: e.target.value === 'true' })}
-                    className="px-1.5 py-1 text-xs"
-                    style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
+                    className="h-7 rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2 text-xs text-text-primary outline-none focus:border-accent"
                   >
-                    <option value="true">是 (true)</option>
-                    <option value="false">否 (false)</option>
+                    <option value="true">是 / 开启</option>
+                    <option value="false">否 / 关闭</option>
                   </select>
                 ) : cap?.type === 'number' ? (
-                  <input
-                    type="number"
-                    step={cap.step ?? 'any'}
-                    value={typeof cond.value === 'number' ? cond.value : 0}
-                    onChange={(e) => updateAt({ value: Number(e.target.value) })}
-                    className="w-20 px-1.5 py-1 text-xs"
-                    style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
-                  />
+                  <div className="flex items-center gap-1">
+                    <Input
+                      type="number"
+                      step={cap.step ?? 'any'}
+                      value={typeof cond.value === 'number' ? cond.value : 0}
+                      onChange={(e) => updateAt({ value: Number(e.target.value) })}
+                      className="h-7 w-20 text-xs"
+                    />
+                    {cap.unit ? <span className="text-[11px] text-text-muted">{cap.unit}</span> : null}
+                  </div>
                 ) : cap?.type === 'enum' && cap.options ? (
                   <select
+                    aria-label="条件枚举值"
                     value={String(cond.value ?? '')}
                     onChange={(e) => updateAt({ value: e.target.value })}
-                    className="px-1.5 py-1 text-xs"
-                    style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
+                    className="h-7 rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2 text-xs text-text-primary outline-none focus:border-accent"
                   >
                     {cap.options.map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -193,28 +220,29 @@ function GuardEditor({ label, guard, devices, typeMap, onChange }: GuardEditorPr
                     ))}
                   </select>
                 ) : (
-                  <input
+                  <Input
                     type="text"
                     value={String(cond.value ?? '')}
                     onChange={(e) => updateAt({ value: e.target.value })}
-                    className="w-24 px-1.5 py-1 text-xs"
-                    style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
+                    className="h-7 w-24 text-xs"
                   />
                 )}
 
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="ml-auto h-7 w-7 text-status-danger hover:bg-status-danger-soft"
                   onClick={() => setList(mode, list.filter((_, i) => i !== idx))}
-                  className="px-1.5 py-0.5 text-xs"
-                  style={{ color: '#dc2626' }}
+                  aria-label="删除条件"
                 >
-                  删
-                </button>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
               </div>
             )
           })}
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
@@ -227,6 +255,12 @@ type StepListEditorProps = {
   onChange: (next: ModeNode[]) => void
 }
 
+const STEP_BADGE: Record<ModeNode['type'], { label: string; icon: typeof Sliders }> = {
+  action: { label: '控制设备', icon: Sliders },
+  delay: { label: '等待', icon: Clock },
+  choose: { label: '条件分支', icon: GitBranch },
+}
+
 function StepListEditor({ steps, devices, typeMap, depth = 0, onChange }: StepListEditorProps) {
   const writableDevices = useMemo(
     () =>
@@ -235,6 +269,17 @@ function StepListEditor({ steps, devices, typeMap, depth = 0, onChange }: StepLi
       ),
     [devices, typeMap],
   )
+
+  const groupedWritableDevices = useMemo(() => {
+    const map = new Map<string, Item[]>()
+    for (const d of writableDevices) {
+      const key = d.roomName || '未分配房间'
+      const arr = map.get(key)
+      if (arr) arr.push(d)
+      else map.set(key, [d])
+    }
+    return Array.from(map.entries())
+  }, [writableDevices])
 
   const addAction = () => {
     const dev = writableDevices[0]
@@ -245,7 +290,7 @@ function StepListEditor({ steps, devices, typeMap, depth = 0, onChange }: StepLi
       {
         nodeId: genNodeId('a'),
         type: 'action',
-        alias: dev && cap ? `${dev.name}·${cap.name}` : '设备动作',
+        alias: dev && cap ? `${dev.name} · ${cap.name}` : '控制设备',
         enabled: true,
         itemId: dev?.id,
         capability: cap?.key,
@@ -277,7 +322,10 @@ function StepListEditor({ steps, devices, typeMap, depth = 0, onChange }: StepLi
         type: 'choose',
         alias: '条件分支',
         enabled: true,
-        when: dev && cap ? { all: [{ itemId: dev.id, capability: cap.key, op: '==', value: defaultValueForCap(cap) }] } : undefined,
+        when:
+          dev && cap
+            ? { all: [{ itemId: dev.id, capability: cap.key, op: '==', value: defaultValueForCap(cap) }] }
+            : undefined,
         then: [],
         else: [],
       },
@@ -301,202 +349,232 @@ function StepListEditor({ steps, devices, typeMap, depth = 0, onChange }: StepLi
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2.5">
       {steps.map((node, idx) => {
         const isDisabled = node.enabled === false
         const dev = node.itemId ? devices.find((d) => d.id === node.itemId) : undefined
         const writableCaps = (dev ? typeMap.get(dev.typeKey)?.capabilities ?? [] : []).filter((c) => c.writable)
         const selectedCap = writableCaps.find((c) => c.key === node.capability)
         const canComfort = node.type === 'action' && writableCaps.some((c) => c.key === 'target_temp')
+        const meta = STEP_BADGE[node.type]
+        const StepIcon = meta.icon
 
         return (
           <div
             key={node.nodeId}
-            className="space-y-2 p-2.5"
-            style={{
-              marginLeft: `${depth * 14}px`,
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-sm)',
-              background: isDisabled ? '#f9fafb' : 'var(--color-surface, #fff)',
-              opacity: isDisabled ? 0.72 : 1,
-            }}
+            className={cn(
+              'space-y-3 rounded-[var(--radius-md)] border border-border-default bg-bg-surface p-3 shadow-[var(--shadow-sm)] transition-opacity',
+              isDisabled && 'bg-bg-subtle/60 opacity-65',
+            )}
           >
+            {/* 卡片头 */}
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[11px] font-mono" style={{ color: 'var(--color-muted)' }}>
-                  #{idx + 1} [{node.type}]
-                </span>
-                <input
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <Badge variant={node.type === 'choose' ? 'warning' : node.type === 'delay' ? 'secondary' : 'accent'}>
+                  <StepIcon className="h-3 w-3" />
+                  <span>
+                    #{idx + 1} {meta.label}
+                  </span>
+                </Badge>
+                <Input
                   type="text"
                   value={node.alias ?? ''}
-                  placeholder="步骤别名"
+                  placeholder="给这一步起个名字…"
                   onChange={(e) => updateAt(idx, { ...node, alias: e.target.value })}
-                  className="w-40 px-1.5 py-0.5 text-xs"
-                  style={{ border: '1px solid var(--color-border)', borderRadius: '4px' }}
+                  className="h-7 max-w-[200px] text-xs"
                 />
               </div>
-              <div className="flex items-center gap-1.5 text-xs">
-                <label className="flex items-center gap-1">
-                  <input
-                    type="checkbox"
+
+              <div className="flex items-center gap-1">
+                <label className="mr-1 inline-flex cursor-pointer items-center gap-1 text-[11px] text-text-muted">
+                  <Switch
                     checked={node.enabled !== false}
-                    onChange={(e) => updateAt(idx, { ...node, enabled: e.target.checked })}
+                    onCheckedChange={(checked) => updateAt(idx, { ...node, enabled: checked })}
                   />
-                  启用
+                  <span>启用</span>
                 </label>
-                <label className="flex items-center gap-1" title="失败后继续执行后续步骤">
-                  <input
-                    type="checkbox"
-                    checked={node.continueOnError === true}
-                    onChange={(e) => updateAt(idx, { ...node, continueOnError: e.target.checked })}
-                  />
-                  失败继续
-                </label>
-                <button type="button" onClick={() => moveAt(idx, -1)} disabled={idx === 0} className="px-1 disabled:opacity-40">
-                  ↑
-                </button>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => moveAt(idx, -1)}
+                  disabled={idx === 0}
+                  aria-label="上移"
+                >
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
                   onClick={() => moveAt(idx, 1)}
                   disabled={idx === steps.length - 1}
-                  className="px-1 disabled:opacity-40"
+                  aria-label="下移"
                 >
-                  ↓
-                </button>
-                <button type="button" onClick={() => removeAt(idx)} style={{ color: '#dc2626' }} className="px-1">
-                  删
-                </button>
+                  <ArrowDown className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-status-danger hover:bg-status-danger-soft"
+                  onClick={() => removeAt(idx)}
+                  aria-label="删除步骤"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
               </div>
             </div>
 
+            {/* 动作步骤 */}
             {node.type === 'action' ? (
-              <div className="space-y-2 text-xs">
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={node.itemId ?? ''}
-                    onChange={(e) => {
-                      const nextDev = writableDevices.find((d) => d.id === e.target.value)
-                      const nextCaps = (nextDev ? typeMap.get(nextDev.typeKey)?.capabilities ?? [] : []).filter(
-                        (c) => c.writable,
-                      )
-                      const first = nextCaps[0]
-                      updateAt(idx, {
-                        ...node,
-                        itemId: e.target.value,
-                        capability: first?.key,
-                        value: defaultValueForCap(first),
-                        valueFrom: undefined,
-                      })
-                    }}
-                    className="px-2 py-1 text-xs"
-                    style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
-                  >
-                    {writableDevices.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name}
-                      </option>
-                    ))}
-                  </select>
+              <div className="space-y-2.5 text-xs">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label>目标设备</Label>
+                    <select
+                      value={node.itemId ?? ''}
+                      onChange={(e) => {
+                        const nextDev = writableDevices.find((d) => d.id === e.target.value)
+                        const nextCaps = (nextDev ? typeMap.get(nextDev.typeKey)?.capabilities ?? [] : []).filter(
+                          (c) => c.writable,
+                        )
+                        const first = nextCaps[0]
+                        updateAt(idx, {
+                          ...node,
+                          itemId: e.target.value,
+                          capability: first?.key,
+                          value: defaultValueForCap(first),
+                          valueFrom: undefined,
+                        })
+                      }}
+                      className="h-8 w-full rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2.5 text-xs text-text-primary outline-none focus:border-accent"
+                    >
+                      {groupedWritableDevices.map(([roomLabel, roomDevices]) => (
+                        <optgroup key={roomLabel} label={roomLabel}>
+                          {roomDevices.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                  </div>
 
-                  {canComfort ? (
-                    <label className="flex items-center gap-1">
-                      <input
-                        type="checkbox"
-                        checked={node.valueFrom === 'comfort'}
-                        onChange={(e) =>
+                  {node.valueFrom !== 'comfort' ? (
+                    <div className="space-y-1">
+                      <Label>要调整的参数</Label>
+                      <select
+                        value={node.capability ?? ''}
+                        onChange={(e) => {
+                          const nextCap = writableCaps.find((c) => c.key === e.target.value)
                           updateAt(idx, {
                             ...node,
-                            capability: e.target.checked ? 'target_temp' : node.capability || writableCaps[0]?.key,
-                            valueFrom: e.target.checked ? 'comfort' : undefined,
-                            value: e.target.checked ? undefined : defaultValueForCap(selectedCap ?? writableCaps[0]),
+                            capability: e.target.value,
+                            value: defaultValueForCap(nextCap),
                           })
-                        }
-                      />
-                      动态舒适温控（valueFrom: comfort）
-                    </label>
+                        }}
+                        className="h-8 w-full rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2.5 text-xs text-text-primary outline-none focus:border-accent"
+                      >
+                        {writableCaps.map((c) => (
+                          <option key={c.key} value={c.key}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   ) : null}
                 </div>
 
-                {node.valueFrom === 'comfort' ? (
-                  <p className="text-[11px]" style={{ color: '#1e40af' }}>
-                    执行时由策略层按当前季节、室温与湿度动态计算目标温度并附带调节依据。
-                  </p>
-                ) : (
-                  <div className="space-y-2">
-                    <select
-                      value={node.capability ?? ''}
-                      onChange={(e) => {
-                        const nextCap = writableCaps.find((c) => c.key === e.target.value)
+                {canComfort ? (
+                  <div className="flex items-center justify-between rounded-[var(--radius-sm)] border border-accent-border/70 bg-accent-soft/50 px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-3.5 w-3.5 text-accent" />
+                      <div>
+                        <p className="text-xs font-medium text-text-primary">按季节自动计算舒适温度</p>
+                        <p className="text-[11px] text-text-muted">
+                          执行时结合当前季节、室内外温湿度自动决策目标温度
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      checked={node.valueFrom === 'comfort'}
+                      onCheckedChange={(checked) =>
                         updateAt(idx, {
                           ...node,
-                          capability: e.target.value,
-                          value: defaultValueForCap(nextCap),
+                          capability: checked ? 'target_temp' : node.capability || writableCaps[0]?.key,
+                          valueFrom: checked ? 'comfort' : undefined,
+                          value: checked ? undefined : defaultValueForCap(selectedCap ?? writableCaps[0]),
                         })
-                      }}
-                      className="px-2 py-1 text-xs"
-                      style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
-                    >
-                      {writableCaps.map((c) => (
-                        <option key={c.key} value={c.key}>
-                          {c.name} ({c.key})
-                        </option>
-                      ))}
-                    </select>
-                    {selectedCap ? (
-                      <div className="max-w-xs">
-                        <CapabilityForm
-                          capabilities={[selectedCap]}
-                          values={{ [selectedCap.key]: node.value }}
-                          onChange={(_k, v) => updateAt(idx, { ...node, value: v })}
-                          idPrefix={`mode-${node.nodeId}`}
-                        />
-                      </div>
-                    ) : null}
+                      }
+                    />
                   </div>
-                )}
+                ) : null}
+
+                {node.valueFrom !== 'comfort' && selectedCap ? (
+                  <CapabilityForm
+                    capabilities={[selectedCap]}
+                    values={{ [selectedCap.key]: node.value }}
+                    onChange={(_k, v) => updateAt(idx, { ...node, value: v })}
+                    idPrefix={`mode-${node.nodeId}`}
+                  />
+                ) : null}
               </div>
             ) : null}
 
+            {/* 等待步骤（面向用户以秒为单位） */}
             {node.type === 'delay' ? (
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span>延时（毫秒）：</span>
-                <input
+                <span className="text-text-secondary">等待</span>
+                <Input
                   type="number"
                   min={0}
-                  max={300000}
-                  step={500}
-                  value={node.ms ?? 0}
-                  onChange={(e) => updateAt(idx, { ...node, ms: Math.max(0, Number(e.target.value)) })}
-                  className="w-24 px-2 py-1 text-xs"
-                  style={{ border: '1px solid var(--color-border)', borderRadius: '4px' }}
+                  max={300}
+                  step={0.5}
+                  value={Math.round(((node.ms ?? 0) / 1000) * 10) / 10}
+                  onChange={(e) => {
+                    const sec = Math.max(0, Number(e.target.value))
+                    updateAt(idx, {
+                      ...node,
+                      ms: Math.round(sec * 1000),
+                      alias: `等待 ${sec} 秒`,
+                    })
+                  }}
+                  className="h-8 w-20 text-xs"
                 />
-                {[1000, 2000, 5000].map((ms) => (
-                  <button
-                    key={ms}
-                    type="button"
-                    onClick={() => updateAt(idx, { ...node, ms })}
-                    className="px-1.5 py-0.5 text-[11px]"
-                    style={{ border: '1px solid var(--color-border)', borderRadius: '4px' }}
-                  >
-                    {ms / 1000}s
-                  </button>
-                ))}
+                <span className="text-text-secondary">秒</span>
+                <div className="flex items-center gap-1">
+                  {[1, 2, 5, 10].map((sec) => (
+                    <Button
+                      key={sec}
+                      type="button"
+                      variant={node.ms === sec * 1000 ? 'soft' : 'outline'}
+                      size="xs"
+                      onClick={() => updateAt(idx, { ...node, ms: sec * 1000, alias: `等待 ${sec} 秒` })}
+                    >
+                      {sec} 秒
+                    </Button>
+                  ))}
+                </div>
               </div>
             ) : null}
 
+            {/* 条件分支步骤 */}
             {node.type === 'choose' ? (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <GuardEditor
-                  label="分支条件 (when)"
+                  title="如果满足以下条件"
+                  hint="添加一个条件，满足时执行「那么」，否则执行「否则」"
                   guard={node.when}
                   devices={devices}
                   typeMap={typeMap}
                   onChange={(nextWhen) => updateAt(idx, { ...node, when: nextWhen })}
                 />
-                <div className="pl-2" style={{ borderLeft: '2px solid #93c5fd' }}>
-                  <p className="mb-1 text-[11px] font-medium" style={{ color: '#1d4ed8' }}>
-                    条件成立执行 (then)：
-                  </p>
+                <div className="space-y-2 border-l-2 border-accent/60 pl-3">
+                  <p className="text-[11px] font-semibold text-accent">那么执行：</p>
                   <StepListEditor
                     steps={node.then ?? []}
                     devices={devices}
@@ -505,10 +583,8 @@ function StepListEditor({ steps, devices, typeMap, depth = 0, onChange }: StepLi
                     onChange={(nextThen) => updateAt(idx, { ...node, then: nextThen })}
                   />
                 </div>
-                <div className="pl-2" style={{ borderLeft: '2px solid #fcd34d' }}>
-                  <p className="mb-1 text-[11px] font-medium" style={{ color: '#92400e' }}>
-                    否则执行 (else)：
-                  </p>
+                <div className="space-y-2 border-l-2 border-status-warning/60 pl-3">
+                  <p className="text-[11px] font-semibold text-status-warning">否则执行：</p>
                   <StepListEditor
                     steps={node.else ?? []}
                     devices={devices}
@@ -523,34 +599,33 @@ function StepListEditor({ steps, devices, typeMap, depth = 0, onChange }: StepLi
         )
       })}
 
-      <div className="flex flex-wrap gap-1.5 pt-1" style={{ marginLeft: `${depth * 14}px` }}>
-        <button
+      {/* 添加步骤按钮条 */}
+      <div className="flex flex-wrap gap-1.5 pt-1">
+        <Button
           type="button"
+          variant="soft"
+          size="xs"
           onClick={addAction}
           disabled={writableDevices.length === 0}
-          className="px-2 py-1 text-xs"
-          style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
         >
-          + 动作 (action)
-        </button>
-        <button
-          type="button"
-          onClick={addDelay}
-          className="px-2 py-1 text-xs"
-          style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
-        >
-          + 延时 (delay)
-        </button>
+          <Plus className="h-3.5 w-3.5" />
+          控制设备
+        </Button>
+        <Button type="button" variant="outline" size="xs" onClick={addDelay}>
+          <Clock className="h-3.5 w-3.5" />
+          等待
+        </Button>
         {depth < 2 ? (
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="xs"
             onClick={addChoose}
             disabled={devices.length === 0}
-            className="px-2 py-1 text-xs"
-            style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
           >
-            + 条件分支 (choose)
-          </button>
+            <GitBranch className="h-3.5 w-3.5" />
+            条件分支
+          </Button>
         ) : null}
       </div>
     </div>
@@ -578,6 +653,18 @@ export default function ModeEditor({ initial, devices, typeMap, onSaved, onCance
   const [steps, setSteps] = useState<ModeNode[]>(initial?.definition.steps ?? [])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [jsonPreviewOpen, setJsonPreviewOpen] = useState(false)
+
+  const draftDefinition: ModeDefinition = useMemo(
+    () => ({
+      version: 1,
+      ...(guard ? { guard } : {}),
+      defaults: { continueOnError: defaultContinue },
+      steps,
+    }),
+    [guard, defaultContinue, steps],
+  )
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -591,108 +678,145 @@ export default function ModeEditor({ initial, devices, typeMap, onSaved, onCance
     }
     setSaving(true)
     setError(null)
-    const definition: ModeDefinition = {
-      version: 1,
-      ...(guard ? { guard } : {}),
-      defaults: { continueOnError: defaultContinue },
-      steps,
-    }
     try {
       const saved = initial
-        ? await updateMode(initial.id, { name: name.trim(), runMode, enabled, definition })
-        : await createMode({ name: name.trim(), runMode, enabled, definition })
+        ? await updateMode(initial.id, { name: name.trim(), runMode, enabled, definition: draftDefinition })
+        : await createMode({ name: name.trim(), runMode, enabled, definition: draftDefinition })
+      toast.success(initial ? `已保存场景「${saved.name}」` : `已创建场景「${saved.name}」`)
       onSaved(saved)
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : '保存场景失败')
+      const msg = err instanceof Error ? err.message : '保存场景失败'
+      setError(msg)
+      toast.error(msg)
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <form onSubmit={(e) => void handleSubmit(e)} className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">{initial ? `编辑场景 · ${initial.name}` : '新建自定义场景'}</h3>
-        <div className="flex items-center gap-2">
+    <form onSubmit={(e) => void handleSubmit(e)} className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        {error ? (
+          <div
+            role="alert"
+            className="rounded-[var(--radius-sm)] border border-status-danger/25 bg-status-danger-soft px-3 py-2 text-xs text-status-danger"
+          >
+            {error}
+          </div>
+        ) : null}
+
+        {/* 基本信息 */}
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="mode-name">场景名称</Label>
+            <Input
+              id="mode-name"
+              type="text"
+              value={name}
+              maxLength={64}
+              placeholder="例如：影院模式、午休模式"
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between rounded-[var(--radius-sm)] border border-border-default bg-bg-subtle/40 px-3 py-2">
+            <div>
+              <p className="text-xs font-medium text-text-primary">启用此场景</p>
+              <p className="text-[11px] text-text-muted">关闭后将暂时无法被一键触发</p>
+            </div>
+            <Switch checked={enabled} onCheckedChange={setEnabled} />
+          </div>
+        </div>
+
+        {/* 前提条件 */}
+        <GuardEditor
+          title="前提条件（可选）"
+          hint="未设置前提条件时，点击即可直接执行；设置后不满足条件会自动拦截并说明原因。"
+          guard={guard}
+          devices={devices}
+          typeMap={typeMap}
+          onChange={setGuard}
+        />
+
+        {/* 执行步骤 */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold text-text-secondary">执行步骤（按顺序运行）</h4>
+            <Badge variant="secondary">{steps.length} 步</Badge>
+          </div>
+          {steps.length === 0 ? (
+            <div className="rounded-[var(--radius-md)] border border-dashed border-border-strong bg-bg-subtle/30 px-4 py-5 text-center text-xs text-text-muted">
+              点击下方按钮添加第一步设备控制、等待或条件分支
+            </div>
+          ) : null}
+          <StepListEditor steps={steps} devices={devices} typeMap={typeMap} onChange={setSteps} />
+        </div>
+
+        {/* 渐进式披露：高级运行选项 */}
+        <div className="rounded-[var(--radius-md)] border border-border-default bg-bg-subtle/30">
           <button
             type="button"
-            onClick={onCancel}
-            className="px-2.5 py-1 text-xs"
-            style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }}
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className="flex w-full cursor-pointer items-center justify-between px-3 py-2.5 text-xs font-medium text-text-secondary hover:text-text-primary"
           >
-            取消
+            <span>高级运行选项</span>
+            {advancedOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           </button>
+          {advancedOpen ? (
+            <div className="space-y-3 border-t border-border-default p-3 text-xs">
+              <div className="space-y-1">
+                <Label htmlFor="mode-concurrency">重复触发时的行为</Label>
+                <select
+                  id="mode-concurrency"
+                  value={runMode}
+                  onChange={(e) => setRunMode(e.target.value as 'restart' | 'single')}
+                  className="h-8 w-full rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2.5 text-xs text-text-primary outline-none focus:border-accent"
+                >
+                  <option value="restart">重新开始执行（推荐）</option>
+                  <option value="single">正在运行时忽略重复触发</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium text-text-primary">遇到离线设备时继续执行后续步骤</p>
+                  <p className="text-[11px] text-text-muted">关闭时，任意设备失败将中断整条场景</p>
+                </div>
+                <Switch checked={defaultContinue} onCheckedChange={setDefaultContinue} />
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {/* 渐进式披露：只读 JSON 预览 */}
+        <div className="rounded-[var(--radius-md)] border border-border-default bg-bg-subtle/30">
           <button
-            type="submit"
-            disabled={saving}
-            className="px-3 py-1 text-xs font-medium text-white disabled:opacity-50"
-            style={{ background: 'var(--color-primary, #4f6bed)', borderRadius: 'var(--radius-sm)' }}
+            type="button"
+            onClick={() => setJsonPreviewOpen((v) => !v)}
+            className="flex w-full cursor-pointer items-center justify-between px-3 py-2 text-xs font-medium text-text-muted hover:text-text-primary"
           >
-            {saving ? '保存中…' : '保存场景'}
+            <span className="inline-flex items-center gap-1.5">
+              <Code2 className="h-3.5 w-3.5" />
+              只读结构预览（排错用）
+            </span>
+            {jsonPreviewOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           </button>
+          {jsonPreviewOpen ? (
+            <pre className="max-h-48 overflow-auto border-t border-border-default bg-bg-canvas p-3 font-mono text-[11px] text-text-secondary">
+              {JSON.stringify(draftDefinition, null, 2)}
+            </pre>
+          ) : null}
         </div>
       </div>
 
-      {error ? (
-        <div className="px-3 py-2 text-xs" style={{ background: '#fee2e2', color: '#991b1b', borderRadius: '4px' }}>
-          {error}
-        </div>
-      ) : null}
-
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <label className="grid gap-1 text-xs">
-          <span>场景名称</span>
-          <input
-            type="text"
-            value={name}
-            maxLength={64}
-            placeholder="例如：影院模式"
-            onChange={(e) => setName(e.target.value)}
-            className="px-2 py-1 text-xs"
-            style={{ border: '1px solid var(--color-border)', borderRadius: '4px' }}
-          />
-        </label>
-        <label className="grid gap-1 text-xs">
-          <span>重复触发策略 (runMode)</span>
-          <select
-            value={runMode}
-            onChange={(e) => setRunMode(e.target.value as 'restart' | 'single')}
-            className="px-2 py-1 text-xs"
-            style={{ border: '1px solid var(--color-border)', borderRadius: '4px', background: '#fff' }}
-          >
-            <option value="restart">重跑 (restart，默认)</option>
-            <option value="single">忽略重复 (single)</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-4 text-xs">
-        <label className="flex items-center gap-1.5">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          启用该场景
-        </label>
-        <label className="flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={defaultContinue}
-            onChange={(e) => setDefaultContinue(e.target.checked)}
-          />
-          默认失败后继续执行（defaults.continueOnError）
-        </label>
-      </div>
-
-      <GuardEditor
-        label="模式级顶层守卫 (guard，不满足时不执行并说明原因)"
-        guard={guard}
-        devices={devices}
-        typeMap={typeMap}
-        onChange={setGuard}
-      />
-
-      <div>
-        <h4 className="mb-1.5 text-xs font-medium">步骤序列 (steps)</h4>
-        <StepListEditor steps={steps} devices={devices} typeMap={typeMap} onChange={setSteps} />
-      </div>
+      {/* 吸底保存条 */}
+      <footer className="flex items-center justify-end gap-2 border-t border-border-default bg-bg-surface px-5 py-3">
+        <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+          取消
+        </Button>
+        <Button type="submit" variant="default" size="sm" disabled={saving}>
+          {saving ? '保存中…' : initial ? '保存修改' : '创建场景'}
+        </Button>
+      </footer>
     </form>
   )
 }

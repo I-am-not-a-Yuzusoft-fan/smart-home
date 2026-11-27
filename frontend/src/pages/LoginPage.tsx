@@ -1,5 +1,12 @@
+import { AlertCircle, Home, KeyRound, Loader2, Shield, User } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
+import { toast } from 'sonner'
 import { ApiError, login, type SessionUser } from '../api/client.ts'
+import { Badge } from '../components/ui/badge.tsx'
+import { Button } from '../components/ui/button.tsx'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card.tsx'
+import { Input } from '../components/ui/input.tsx'
+import { Label } from '../components/ui/label.tsx'
 
 type Props = {
   onSignedIn: (user: SessionUser) => void
@@ -7,9 +14,7 @@ type Props = {
 }
 
 /**
- * 登录页。错误提示分两种：口令错（401，后端统一说「用户名或口令错误」）
- * 与其他失败（网络、500）。口令框声明 current-password，让密码管理器正常填充；
- * 用完退出会清掉会话 Cookie，但浏览器里保存的口令需要演示机自行处理。
+ * 登录页：使用统一 Design Tokens 与表单原语，并提供演示账号一键填入。
  */
 export default function LoginPage({ onSignedIn, notice }: Props) {
   const [username, setUsername] = useState('')
@@ -22,7 +27,9 @@ export default function LoginPage({ onSignedIn, notice }: Props) {
     setError(null)
     setSubmitting(true)
     try {
-      onSignedIn(await login(username.trim(), password))
+      const me = await login(username.trim(), password)
+      toast.success(`欢迎回来，${me.displayName || me.username}`)
+      onSignedIn(me)
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.status === 401 ? '用户名或口令错误' : err.message)
@@ -34,90 +41,130 @@ export default function LoginPage({ onSignedIn, notice }: Props) {
     }
   }
 
+  function fillDemo(user: string, pass: string) {
+    setUsername(user)
+    setPassword(pass)
+    setError(null)
+  }
+
   return (
-    <main className="flex h-full items-center justify-center px-6">
-      <form
-        onSubmit={onSubmit}
-        className="w-full max-w-sm space-y-4 p-8"
-        style={{
-          background: 'var(--color-surface)',
-          border: '1px solid var(--color-border)',
-          borderRadius: 'var(--radius-md)',
-        }}
-      >
-        <header className="space-y-1">
-          <h1 className="text-xl font-semibold">智能家居系统</h1>
-          <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
-            用家庭账号登录，登录后进入平面图
-          </p>
-        </header>
+    <main className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-bg-app px-4 py-8">
+      {/* 柔和环境光晕背景 */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -top-32 left-1/2 h-96 w-[36rem] -translate-x-1/2 rounded-full bg-accent/10 blur-3xl"
+      />
 
-        {notice && (
-          <p
-            className="text-sm"
-            style={{ color: 'var(--color-danger)' }}
-            role="status"
-          >
-            {notice}
-          </p>
-        )}
+      <Card className="relative w-full max-w-md border-border-default/90 shadow-[var(--shadow-lg)]">
+        <CardHeader className="space-y-3 pb-4">
+          <div className="flex items-center justify-between">
+            <div className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] bg-accent-soft text-accent">
+              <Home className="h-5 w-5" />
+            </div>
+            <Badge variant="accent">智能家居可视化中枢</Badge>
+          </div>
+          <div>
+            <CardTitle className="text-xl">欢迎登录</CardTitle>
+            <CardDescription className="mt-1 text-sm">
+              使用家庭账号登录，进入平面图实时控制与场景编排
+            </CardDescription>
+          </div>
+        </CardHeader>
 
-        <label className="block space-y-1">
-          <span className="text-sm">用户名</span>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="username"
-            required
-            className="w-full px-3 py-2 text-sm outline-none"
-            style={{
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--color-bg)',
-            }}
-          />
-        </label>
+        <CardContent className="space-y-5">
+          {notice && (
+            <div
+              role="status"
+              className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-status-warning/30 bg-status-warning-soft px-3 py-2.5 text-xs text-status-warning"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{notice}</span>
+            </div>
+          )}
 
-        <label className="block space-y-1">
-          <span className="text-sm">口令</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-            className="w-full px-3 py-2 text-sm outline-none"
-            style={{
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--color-bg)',
-            }}
-          />
-        </label>
+          <form onSubmit={onSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="login-username">用户名</Label>
+              <div className="relative">
+                <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+                <Input
+                  id="login-username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="username"
+                  placeholder="请输入家庭账号"
+                  required
+                  className="pl-9"
+                />
+              </div>
+            </div>
 
-        {error && (
-          <p className="text-sm" style={{ color: 'var(--color-danger)' }} role="alert">
-            {error}
-          </p>
-        )}
+            <div className="space-y-1.5">
+              <Label htmlFor="login-password">口令</Label>
+              <div className="relative">
+                <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-muted" />
+                <Input
+                  id="login-password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  placeholder="请输入登录口令"
+                  required
+                  className="pl-9"
+                />
+              </div>
+            </div>
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="w-full px-3 py-2 text-sm font-medium disabled:opacity-60"
-          style={{
-            background: 'var(--color-primary)',
-            color: '#fff',
-            borderRadius: 'var(--radius-sm)',
-          }}
-        >
-          {submitting ? '登录中…' : '登录'}
-        </button>
+            {error && (
+              <div
+                role="alert"
+                className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-status-danger/25 bg-status-danger-soft px-3 py-2 text-xs text-status-danger"
+              >
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
 
-        <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
-          演示账号：zhang / demo1234（管理员），li / demo1234（家庭成员）
-        </p>
-      </form>
+            <Button type="submit" variant="default" size="lg" className="w-full" disabled={submitting}>
+              {submitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  登录中…
+                </>
+              ) : (
+                '进入智能家居工作台'
+              )}
+            </Button>
+          </form>
+
+          <div className="space-y-2 border-t border-border-default pt-4">
+            <p className="text-xs font-medium text-text-muted">演示账号（点击一键填入）</p>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => fillDemo('zhang', 'demo1234')}
+                className="justify-start"
+              >
+                <Shield className="h-3.5 w-3.5 text-accent" />
+                <span>管理员 (zhang)</span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => fillDemo('li', 'demo1234')}
+                className="justify-start"
+              >
+                <User className="h-3.5 w-3.5 text-text-muted" />
+                <span>家庭成员 (li)</span>
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </main>
   )
 }

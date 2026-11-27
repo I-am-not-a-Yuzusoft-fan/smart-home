@@ -1,4 +1,10 @@
 import type { Capability } from '../api/client.ts'
+import { cn } from '../lib/utils.ts'
+import { Badge } from './ui/badge.tsx'
+import { Input } from './ui/input.tsx'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select.tsx'
+import { Slider } from './ui/slider.tsx'
+import { Switch } from './ui/switch.tsx'
 
 export type CapabilityValues = Record<string, unknown>
 
@@ -59,53 +65,116 @@ export default function CapabilityForm({
 }: Props) {
   if (capabilities.length === 0) {
     return (
-      <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+      <p className="text-xs text-text-muted">
         这个类型没有可配置的能力项（家具或纯占位设备）。
       </p>
     )
   }
 
   return (
-    <div className="grid gap-3">
+    <div className="space-y-3">
       {capabilities.map((capability) => {
         const id = `${idPrefix}-${capability.key}`
         const readOnly = disabled || !capability.writable
         const value = values[capability.key]
+
+        // 只读传感器项：紧凑卡片读数展示
+        if (!capability.writable) {
+          const display =
+            value === undefined || value === null
+              ? '—'
+              : capability.type === 'bool'
+                ? value === true
+                  ? '是'
+                  : '否'
+                : capability.type === 'enum'
+                  ? capability.options?.find((o) => o.value === value)?.label ?? String(value)
+                  : `${String(value)}${capability.unit ? ` ${capability.unit}` : ''}`
+
+          return (
+            <div
+              key={capability.key}
+              className="flex items-center justify-between rounded-[var(--radius-sm)] border border-border-default bg-bg-subtle/60 px-3 py-2"
+            >
+              <span className="text-xs text-text-secondary">{capability.name}</span>
+              <span className="font-mono text-xs font-semibold text-text-primary">{display}</span>
+            </div>
+          )
+        }
+
+        const hasRange =
+          capability.type === 'number' &&
+          capability.min !== undefined &&
+          capability.max !== undefined &&
+          capability.max > capability.min
+
+        const numVal =
+          typeof value === 'number' && Number.isFinite(value)
+            ? value
+            : capability.min ?? 0
+
+        const options = capability.options ?? []
+
         return (
-          <div key={capability.key} className="grid gap-1">
-            <label htmlFor={id} className="flex items-baseline justify-between text-xs">
-              <span>
+          <div
+            key={capability.key}
+            className="space-y-1.5 rounded-[var(--radius-sm)] border border-border-default bg-bg-surface p-2.5"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor={id} className="text-xs font-medium text-text-primary">
                 {capability.name}
                 {capability.unit ? (
-                  <span className="ml-1" style={{ color: 'var(--color-muted)' }}>
-                    ({capability.unit})
-                  </span>
+                  <span className="ml-1 font-normal text-text-muted">({capability.unit})</span>
                 ) : null}
-              </span>
-              {!capability.writable ? (
-                <span style={{ color: 'var(--color-muted)' }}>只读</span>
-              ) : null}
-            </label>
-
-            {capability.type === 'bool' ? (
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  id={id}
-                  type="checkbox"
-                  checked={value === true}
-                  disabled={readOnly}
-                  onChange={(e) => onChange(capability.key, e.target.checked)}
-                />
-                <span style={{ color: 'var(--color-muted)' }}>{value === true ? '开' : '关'}</span>
               </label>
-            ) : null}
 
-            {capability.type === 'number' ? (
-              <input
+              {capability.type === 'bool' ? (
+                <div className="flex items-center gap-2">
+                  <Badge variant={value === true ? 'success' : 'secondary'}>
+                    {value === true ? '开启' : '关闭'}
+                  </Badge>
+                  <Switch
+                    id={id}
+                    checked={value === true}
+                    disabled={readOnly}
+                    onCheckedChange={(checked) => onChange(capability.key, checked)}
+                  />
+                </div>
+              ) : capability.type === 'number' ? (
+                <span className="font-mono text-xs font-semibold text-accent">
+                  {typeof value === 'number' ? value : '—'}
+                  {capability.unit ? ` ${capability.unit}` : ''}
+                </span>
+              ) : null}
+            </div>
+
+            {capability.type === 'number' && hasRange ? (
+              <div className="space-y-1 pt-0.5">
+                <Slider
+                  id={id}
+                  min={capability.min}
+                  max={capability.max}
+                  step={capability.step ?? 1}
+                  disabled={readOnly}
+                  value={[Math.min(Math.max(numVal, capability.min!), capability.max!)]}
+                  onValueChange={([v]) => onChange(capability.key, v)}
+                />
+                <div className="flex items-center justify-between text-[10px] text-text-muted">
+                  <span>
+                    {capability.min}
+                    {capability.unit ?? ''}
+                  </span>
+                  <span>
+                    {capability.max}
+                    {capability.unit ?? ''}
+                  </span>
+                </div>
+              </div>
+            ) : capability.type === 'number' ? (
+              <Input
                 id={id}
                 type="number"
-                className="w-full px-2 py-1 text-sm"
-                style={inputStyle}
+                className="h-8 text-xs"
                 value={typeof value === 'number' ? value : ''}
                 min={capability.min}
                 max={capability.max}
@@ -118,39 +187,57 @@ export default function CapabilityForm({
               />
             ) : null}
 
-            {capability.type === 'enum' ? (
-              <select
-                id={id}
-                className="w-full px-2 py-1 text-sm"
-                style={inputStyle}
+            {capability.type === 'enum' && options.length > 0 && options.length <= 4 ? (
+              <div className="grid gap-1 pt-0.5" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+                {options.map((option) => {
+                  const active = value === option.value
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={readOnly}
+                      onClick={() => onChange(capability.key, option.value)}
+                      className={cn(
+                        'cursor-pointer rounded-[var(--radius-sm)] border px-2 py-1 text-xs font-medium transition-colors',
+                        active
+                          ? 'border-accent bg-accent-soft text-accent'
+                          : 'border-border-default bg-bg-subtle/50 text-text-secondary hover:bg-bg-subtle',
+                        readOnly && 'pointer-events-none opacity-50',
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : capability.type === 'enum' ? (
+              <Select
                 value={typeof value === 'string' ? value : ''}
                 disabled={readOnly}
-                onChange={(e) => onChange(capability.key, e.target.value)}
+                onValueChange={(v) => onChange(capability.key, v)}
               >
-                {(capability.options ?? []).map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id={id} className="h-8 text-xs">
+                  <SelectValue placeholder="请选择…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {options.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             ) : null}
 
             {capability.type === 'string' ? (
-              <input
+              <Input
                 id={id}
                 type="text"
-                className="w-full px-2 py-1 text-sm"
-                style={inputStyle}
+                className="h-8 text-xs"
                 value={typeof value === 'string' ? value : ''}
                 disabled={readOnly}
                 onChange={(e) => onChange(capability.key, e.target.value)}
               />
-            ) : null}
-
-            {capability.type === 'number' && (capability.min !== undefined || capability.max !== undefined) ? (
-              <span className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
-                范围 {capability.min ?? '−∞'} – {capability.max ?? '+∞'}
-              </span>
             ) : null}
           </div>
         )
@@ -158,10 +245,3 @@ export default function CapabilityForm({
     </div>
   )
 }
-
-const inputStyle = {
-  border: '1px solid var(--color-border)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--color-bg)',
-  color: 'inherit',
-} as const

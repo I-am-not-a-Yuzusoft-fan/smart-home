@@ -1,27 +1,60 @@
+import { AlertTriangle, ChevronDown, ChevronRight, MousePointerClick, Send, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import { listItemStates, sendItemCommand, type Item, type ItemType, type Room } from '../api/client.ts'
 import { isCapabilityStale, liveValuesFor, mergeControlValues } from '../features/control/live.ts'
+import { useNow } from '../features/control/useNow.ts'
+import { ItemIcon } from '../lib/icons.tsx'
 import { useLiveStore } from '../store/liveState.ts'
 import CapabilityForm, { type CapabilityValues } from './CapabilityForm.tsx'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from './ui/alert-dialog.tsx'
+import { Badge } from './ui/badge.tsx'
+import { Button } from './ui/button.tsx'
+import { Input } from './ui/input.tsx'
+import { Label } from './ui/label.tsx'
+import type { WorkspaceMode } from './workspace/AppHeader.tsx'
 
 type Props = {
   item: Item | null
   type?: ItemType
   rooms: Room[]
-  onUpdate: (id: string, patch: {
-    name?: string
-    roomHash?: string
-    x?: number
-    y?: number
-    rotation?: number
-    wallId?: string
-    wallOffset?: number
-  }) => Promise<void>
+  mode?: WorkspaceMode
+  isAdmin?: boolean
+  onUpdate: (
+    id: string,
+    patch: {
+      name?: string
+      roomHash?: string
+      x?: number
+      y?: number
+      rotation?: number
+      wallId?: string
+      wallOffset?: number
+    },
+  ) => Promise<void>
   onDelete: (id: string) => Promise<void>
 }
 
-/** 选中物品后的属性面板：名称、房间、坐标、旋转、删除。 */
-export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }: Props) {
+/** 选中物品后的详情与控制面板（嵌入右侧栏「设备详情」Tab）。 */
+export default function ItemInspector({
+  item,
+  type,
+  rooms,
+  mode = 'control',
+  isAdmin = true,
+  onUpdate,
+  onDelete,
+}: Props) {
   const [name, setName] = useState('')
   const [roomHash, setRoomHash] = useState('')
   const [x, setX] = useState('0')
@@ -34,20 +67,16 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
   const [draftValues, setDraftValues] = useState<CapabilityValues>({})
   const [controlState, setControlState] = useState<'idle' | 'sending' | 'ok' | 'error'>('idle')
   const [stateUpdatedAt, setStateUpdatedAt] = useState<Record<string, string>>({})
-  const [nowMs, setNowMs] = useState(() => Date.now())
+  const [propsOpen, setPropsOpen] = useState(mode === 'edit')
+  const nowMs = useNow()
+
   const liveStates = useLiveStore((store) => store.states)
   const liveConnected = useLiveStore((store) => store.connected)
 
-  // 只读传感器每 5 秒刷新一次当前时间，避免停报超过 60 秒后页面不重渲染而一直显示旧值。
-  const hasReadOnly = Boolean(type?.capabilities.some((capability) => !capability.writable))
   useEffect(() => {
-    if (!hasReadOnly) return
-    setNowMs(Date.now())
-    const timer = window.setInterval(() => setNowMs(Date.now()), 5000)
-    return () => window.clearInterval(timer)
-  }, [hasReadOnly, item?.id])
+    setPropsOpen(mode === 'edit' || item?.kind === 'furniture')
+  }, [mode, item?.kind])
 
-  // 推送来的值覆盖一次性拉取的结果，用户尚未下发的本地编辑草稿优先级最高。
   const liveValues = useMemo(
     () => (item ? liveValuesFor(liveStates, item.id, type, nowMs) : {}),
     [liveStates, item, type, nowMs],
@@ -56,7 +85,6 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
     () => mergeControlValues(capabilityValues, liveValues, draftValues),
     [capabilityValues, liveValues, draftValues],
   )
-  // 陈旧判定优先用推送带来的时间，没收到推送时退回一次性拉取的时间。
   const updatedAtOf = (key: string) => liveStates[`${item?.id}:${key}`]?.ts ?? stateUpdatedAt[key]
 
   useEffect(() => {
@@ -84,13 +112,23 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
 
   if (!item) {
     return (
-      <aside className="w-64 min-w-64 p-3 text-xs" style={{ borderLeft: '1px solid var(--color-border)', color: 'var(--color-muted)' }}>
-        选中画布或列表里的物品后，这里可以改名称、所属房间和坐标。
-      </aside>
+      <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+        <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-bg-subtle text-text-muted">
+          <MousePointerClick className="h-5 w-5" />
+        </div>
+        <p className="text-sm font-medium text-text-primary">未选中设备或物品</p>
+        <p className="mt-1 text-xs leading-relaxed text-text-muted">
+          点击户型画布或左侧列表中的任意设备，即可在这里实时控制参数或调整位置。
+        </p>
+      </div>
     )
   }
 
   const namedRooms = rooms.filter((room) => room.name)
+  const writableCaps = (type?.capabilities ?? []).filter((c) => c.writable)
+  const hasStale = Boolean(
+    type?.capabilities.some((capability) => isCapabilityStale(capability, updatedAtOf(capability.key), nowMs)),
+  )
 
   async function save() {
     if (!item) return
@@ -108,12 +146,10 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
     setSaving(true)
     setError(null)
     try {
-      // 挂墙物品只报沿墙偏移：x/y/rotation 是墙的函数，直接写会被后端拒掉（400）。
       if (item.wallId) {
         const nOffset = Number(wallOffset)
         if (!Number.isFinite(nOffset) || nOffset < 0) {
           setError('沿墙偏移必须是不小于 0 的数字')
-          setSaving(false)
           return
         }
         await onUpdate(item.id, {
@@ -122,111 +158,106 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
           wallId: item.wallId,
           wallOffset: nOffset,
         })
-        return
+      } else {
+        await onUpdate(item.id, {
+          name: name.trim(),
+          roomHash,
+          x: nx,
+          y: ny,
+          rotation: nr,
+        })
       }
-      await onUpdate(item.id, {
-        name: name.trim(),
-        roomHash,
-        x: nx,
-        y: ny,
-        rotation: nr,
-      })
+      toast.success(`已保存「${name.trim()}」属性`)
     } catch (e) {
-      setError(e instanceof Error ? e.message : '保存失败')
+      const msg = e instanceof Error ? e.message : '保存失败'
+      setError(msg)
+      toast.error(msg)
     } finally {
       setSaving(false)
     }
   }
 
+  async function dispatchCapability(capabilityKey: string, capabilityName: string, nextValue?: unknown) {
+    if (!item) return
+    const val = nextValue !== undefined ? nextValue : mergedValues[capabilityKey]
+    if (val === undefined) return
+    setControlState('sending')
+    setError(null)
+    try {
+      await sendItemCommand(item.id, {
+        capabilityKey,
+        value: val,
+        requestId: crypto.randomUUID(),
+      })
+      setDraftValues((current) => {
+        const next = { ...current }
+        delete next[capabilityKey]
+        return next
+      })
+      const states = await listItemStates(item.id)
+      setCapabilityValues(Object.fromEntries(states.map((state) => [state.capabilityKey, state.value])))
+      setStateUpdatedAt(Object.fromEntries(states.map((state) => [state.capabilityKey, state.updatedAt])))
+      setControlState('ok')
+      toast.success(`${item.name} · ${capabilityName} 已更新`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '设备命令执行失败'
+      setError(msg)
+      setControlState('error')
+      toast.error(msg)
+    }
+  }
+
   return (
-    <aside className="flex w-64 min-w-64 flex-col gap-3 overflow-auto p-3" style={{ borderLeft: '1px solid var(--color-border)' }}>
-      <div>
-        <h2 className="text-sm font-semibold">{item.name}</h2>
-        <p className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
-          {item.kind === 'device' ? '设备' : '家具'} · {type?.name ?? item.typeKey}
-          {type ? ` · ${type.defaultWidth}×${type.defaultDepth}cm` : ''}
-          {item.wallId ? ' · 挂墙' : type?.mount === 'ceiling' ? ' · 吸顶' : ''}
-        </p>
+    <div className="flex h-full flex-col gap-3 overflow-y-auto p-3.5">
+      {/* 头部摘要 */}
+      <div className="flex items-start gap-2.5">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-accent-soft text-accent">
+          <ItemIcon iconName={type?.icons} typeKey={item.typeKey} kind={item.kind} className="h-4.5 w-4.5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-semibold text-text-primary">{item.name}</h2>
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            <Badge variant="secondary">{type?.name ?? item.typeKey}</Badge>
+            {item.roomName ? <Badge variant="outline">{item.roomName}</Badge> : null}
+            {item.kind === 'device' ? (
+              <Badge variant={liveConnected ? 'success' : 'warning'}>
+                {liveConnected ? '实时' : '重连中'}
+              </Badge>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       {error ? (
-        <p className="text-xs" style={{ color: 'var(--color-danger)' }} role="alert">{error}</p>
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-status-danger/25 bg-status-danger-soft px-3 py-2 text-xs text-status-danger"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{error}</span>
+        </div>
       ) : null}
 
-      <label className="grid gap-1 text-[11px]">
-        名称
-        <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm" />
-      </label>
-      <label className="grid gap-1 text-[11px]">
-        所属房间
-        <select value={roomHash} onChange={(e) => setRoomHash(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm">
-          <option value="">未分配房间</option>
-          {namedRooms.map((room) => (
-            <option key={room.hash} value={room.hash}>{room.name}</option>
-          ))}
-        </select>
-      </label>
-      {!item.wallId && type?.mount === 'wall' ? (
-        <p className="text-[11px]" style={{ color: '#b45309' }}>
-          这件「{type.name}」还没挂到墙上：把它拖到某面墙边（40 像素内）就会贴上去，
-          位置和朝向之后都跟着墙走。
-        </p>
-      ) : item.wallId ? (
-        <>
-          <label className="grid gap-1 text-[11px]">
-            沿墙偏移（cm）
-            <input
-              type="number"
-              min={0}
-              value={wallOffset}
-              onChange={(e) => setWallOffset(e.target.value)}
-              style={inputStyle}
-              className="px-2 py-1 text-sm"
-            />
-          </label>
-          <p className="text-[11px]" style={{ color: 'var(--color-muted)' }}>
-            {type?.mount === 'wall'
-              ? '挂墙物品的位置与朝向由墙决定：挪这面墙，它会跟着走；拖到另一面墙边就能换墙。'
-              : '这面墙的位置与朝向决定它的摆放：挪墙它会跟着走。把它拖离墙面就能自由摆放。'}
-          </p>
-        </>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="grid gap-1 text-[11px]">
-              x（cm）
-              <input type="number" value={x} onChange={(e) => setX(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm" />
-            </label>
-            <label className="grid gap-1 text-[11px]">
-              y（cm）
-              <input type="number" value={y} onChange={(e) => setY(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm" />
-            </label>
-          </div>
-          <label className="grid gap-1 text-[11px]">
-            旋转（度）
-            <input type="number" step={90} value={rotation} onChange={(e) => setRotation(e.target.value)} style={inputStyle} className="px-2 py-1 text-sm" />
-          </label>
-          <div className="flex flex-wrap gap-1">
-            {[0, 90, 180, 270].map((deg) => (
-              <button key={deg} onClick={() => setRotation(String(deg))} className="px-2 py-1 text-xs" style={buttonStyle}>
-                {deg}°
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-
+      {/* 设备控制区（运行模式下放在最顶部） */}
       {item.kind === 'device' && type ? (
-        <section className="grid gap-2 border-t pt-3" style={{ borderColor: 'var(--color-border)' }}>
+        <section className="space-y-2.5">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold">设备控制</h3>
-            <span className="text-[11px]" style={{ color: liveConnected ? 'var(--color-success, #15803d)' : 'var(--color-muted)' }}>
-              {liveConnected ? '实时' : '重连中'}
-            </span>
+            <h3 className="text-xs font-semibold text-text-secondary">实时控制与状态</h3>
+            {Object.keys(draftValues).length > 0 ? (
+              <Badge variant="warning">有未下发修改</Badge>
+            ) : null}
           </div>
-          {type.capabilities.some((capability) => isCapabilityStale(capability, updatedAtOf(capability.key), nowMs)) ? (
-            <p className="text-xs" style={{ color: 'var(--color-danger)' }} role="status">传感器读数不可用：超过更新时间窗口</p>
+
+          {hasStale ? (
+            <div
+              role="status"
+              className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-status-warning/30 bg-status-warning-soft px-2.5 py-1.5 text-[11px] text-status-warning"
+            >
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              传感器读数超过更新时间窗口，当前不可用
+            </div>
           ) : null}
+
           <CapabilityForm
             capabilities={type.capabilities}
             values={Object.fromEntries(
@@ -236,80 +267,179 @@ export default function ItemInspector({ item, type, rooms, onUpdate, onDelete }:
               }),
             )}
             idPrefix={`control-${item.id}`}
-            onChange={(key, value) => setDraftValues((current) => ({ ...current, [key]: value }))}
+            onChange={(key, value) => {
+              setDraftValues((current) => ({ ...current, [key]: value }))
+              // 布尔开关直接即时下发，无需二次点击“下发”按钮
+              const cap = type.capabilities.find((c) => c.key === key)
+              if (cap?.type === 'bool' && cap.writable) {
+                void dispatchCapability(key, cap.name, value)
+              }
+            }}
             disabled={controlState === 'sending'}
           />
-          {controlState === 'ok' ? (
-            <p className="text-xs" style={{ color: 'var(--color-success, #15803d)' }} role="status">下发成功，状态已落库</p>
+
+          {writableCaps.filter((c) => c.type !== 'bool').length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {writableCaps
+                .filter((c) => c.type !== 'bool')
+                .map((capability) => (
+                  <Button
+                    key={capability.key}
+                    variant={Object.prototype.hasOwnProperty.call(draftValues, capability.key) ? 'default' : 'soft'}
+                    size="xs"
+                    disabled={controlState === 'sending' || mergedValues[capability.key] === undefined}
+                    onClick={() => void dispatchCapability(capability.key, capability.name)}
+                  >
+                    <Send className="h-3 w-3" />
+                    应用{capability.name}
+                  </Button>
+                ))}
+            </div>
           ) : null}
-          {controlState === 'error' ? (
-            <p className="text-xs" style={{ color: 'var(--color-danger)' }} role="alert">{error}</p>
-          ) : null}
-          <div className="flex flex-wrap gap-1">
-            {type.capabilities.filter((capability) => capability.writable).map((capability) => (
-              <button
-                key={capability.key}
-                disabled={controlState === 'sending' || mergedValues[capability.key] === undefined}
-                onClick={async () => {
-                  setControlState('sending')
-                  setError(null)
-                  try {
-                    const requestId = crypto.randomUUID()
-                    await sendItemCommand(item.id, {
-                      capabilityKey: capability.key,
-                      value: mergedValues[capability.key],
-                      requestId,
-                    })
-                    setDraftValues((current) => {
-                      const next = { ...current }
-                      delete next[capability.key]
-                      return next
-                    })
-                    const states = await listItemStates(item.id)
-                    setCapabilityValues(Object.fromEntries(states.map((state) => [state.capabilityKey, state.value])))
-                    setStateUpdatedAt(Object.fromEntries(states.map((state) => [state.capabilityKey, state.updatedAt])))
-                    setControlState('ok')
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : '设备命令执行失败')
-                    setControlState('error')
-                  }
-                }}
-                className="px-2 py-1 text-xs"
-                style={buttonStyle}
-              >
-                下发{capability.name}
-              </button>
-            ))}
-          </div>
         </section>
       ) : null}
 
-      <div className="mt-auto flex items-center justify-between gap-2">
-        <button
-          onClick={() => void onDelete(item.id)}
-          disabled={saving}
-          className="px-2 py-1 text-xs"
-          style={{ ...buttonStyle, color: 'var(--color-danger)' }}
-        >
-          删除物品
-        </button>
-        <button onClick={() => void save()} disabled={saving} className="px-2 py-1 text-xs" style={buttonStyle}>
-          {saving ? '保存中…' : '保存'}
-        </button>
-      </div>
-    </aside>
+      {/* 几何与基础属性（编辑模式默认展开，运行模式默认折叠；仅管理员可改） */}
+      {isAdmin ? (
+        <section className="rounded-[var(--radius-md)] border border-border-default bg-bg-subtle/40">
+          <button
+            type="button"
+            onClick={() => setPropsOpen((v) => !v)}
+            className="flex w-full cursor-pointer items-center justify-between px-3 py-2 text-xs font-medium text-text-secondary hover:text-text-primary"
+          >
+            <span>位置与基础属性</span>
+            {propsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          </button>
+
+          {propsOpen ? (
+            <div className="space-y-2.5 border-t border-border-default p-3">
+              <div className="space-y-1">
+                <Label htmlFor="insp-name">名称</Label>
+                <Input
+                  id="insp-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="h-8 text-xs"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="insp-room">所属房间</Label>
+                <select
+                  id="insp-room"
+                  value={roomHash}
+                  onChange={(e) => setRoomHash(e.target.value)}
+                  className="h-8 w-full rounded-[var(--radius-sm)] border border-border-default bg-bg-surface px-2.5 text-xs text-text-primary outline-none focus:border-accent"
+                >
+                  <option value="">未分配房间</option>
+                  {namedRooms.map((room) => (
+                    <option key={room.hash} value={room.hash}>
+                      {room.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {!item.wallId && type?.mount === 'wall' ? (
+                <p className="rounded-[var(--radius-sm)] bg-status-warning-soft px-2.5 py-1.5 text-[11px] text-status-warning">
+                  这件「{type.name}」尚未挂墙：拖到墙边（40px 内）会自动贴合。
+                </p>
+              ) : item.wallId ? (
+                <div className="space-y-1">
+                  <Label htmlFor="insp-wall-offset">沿墙偏移（cm）</Label>
+                  <Input
+                    id="insp-wall-offset"
+                    type="number"
+                    min={0}
+                    value={wallOffset}
+                    onChange={(e) => setWallOffset(e.target.value)}
+                    className="h-8 text-xs"
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label htmlFor="insp-x">X（cm）</Label>
+                      <Input
+                        id="insp-x"
+                        type="number"
+                        value={x}
+                        onChange={(e) => setX(e.target.value)}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="insp-y">Y（cm）</Label>
+                      <Input
+                        id="insp-y"
+                        type="number"
+                        value={y}
+                        onChange={(e) => setY(e.target.value)}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="insp-rot">旋转角度</Label>
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        id="insp-rot"
+                        type="number"
+                        step={90}
+                        value={rotation}
+                        onChange={(e) => setRotation(e.target.value)}
+                        className="h-8 w-20 text-xs"
+                      />
+                      <div className="flex flex-1 gap-1">
+                        {[0, 90, 180, 270].map((deg) => (
+                          <button
+                            key={deg}
+                            type="button"
+                            onClick={() => setRotation(String(deg))}
+                            className="flex-1 cursor-pointer rounded-[var(--radius-sm)] border border-border-default bg-bg-surface py-1 text-[11px] text-text-secondary hover:bg-bg-subtle"
+                          >
+                            {deg}°
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="ghost" size="xs" disabled={saving} className="text-status-danger hover:bg-status-danger-soft">
+                      <Trash2 className="h-3.5 w-3.5" />
+                      删除
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>删除「{item.name}」？</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        删除后该物品将从户型图中移除；若场景模式引用了此设备，后续运行该步骤会自动跳过。
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>取消</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => void onDelete(item.id)}>
+                        确认删除
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+
+                <Button variant="default" size="xs" disabled={saving} onClick={() => void save()}>
+                  {saving ? '保存中…' : '保存属性'}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+    </div>
   )
 }
-
-const buttonStyle = {
-  border: '1px solid var(--color-border)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--color-bg)',
-} as const
-
-const inputStyle = {
-  border: '1px solid var(--color-border)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--color-bg)',
-  color: 'inherit',
-} as const

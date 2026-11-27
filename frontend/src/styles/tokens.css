@@ -1,15 +1,130 @@
-/* 主题层：配色与字体集中在这里，组件只引用变量，不写死颜色。
-   MVP 只建立骨架，二次元化的图标与看板娘在迭代三补。 */
-:root {
-  --color-bg: #f7f7fb;
-  --color-surface: #ffffff;
-  --color-border: #e3e3ef;
-  --color-text: #1d1d29;
-  --color-muted: #6b6b80;
-  --color-primary: #4f6bed;
-  --color-primary-weak: #e8ecff;
-  --color-danger: #d64545;
+/* ============================================================================
+   Design System Tokens — Tailwind CSS v4 (@theme inline + [data-theme])
+   默认皮肤：studio（现代工程浅色风格，适合日常操控与正式答辩）
+   Phase B 多皮肤引擎（sakura-glass / ark-hud / custom）只需覆写以下语义变量。
+   ============================================================================ */
+
+:root,
+[data-theme="studio"] {
+  /* 背景层次 */
+  --bg-canvas: #f1f5f9;
+  --bg-app: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f1f5f9;
+  --bg-hover: #e2e8f0;
+
+  /* 文本层次 */
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+
+  /* 边框层次 */
+  --border-default: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  /* 品牌主色 */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: #eff6ff;
+  --accent-border: #bfdbfe;
+  --accent-foreground: #ffffff;
+
+  /* 语义状态色 */
+  --status-success: #059669;
+  --status-success-soft: #ecfdf5;
+  --status-warning: #d97706;
+  --status-warning-soft: #fffbeb;
+  --status-danger: #dc2626;
+  --status-danger-soft: #fef2f2;
+  --status-info: #0284c7;
+  --status-info-soft: #f0f9ff;
+
+  /* 毛玻璃 / 悬浮层（Phase B 二次元毛玻璃主题可直接调高 blur 与透明度） */
+  --glass-bg: rgba(255, 255, 255, 0.88);
+  --glass-border: rgba(226, 232, 240, 0.9);
+  --glass-blur: 12px;
+  --overlay-scrim: rgba(15, 23, 42, 0.35);
+  --tooltip-bg: #0f172a;
+  --tooltip-fg: #f8fafc;
+
+  /* 圆角与阴影 */
   --radius-sm: 6px;
   --radius-md: 10px;
-  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px 0 rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 12px 28px -6px rgba(15, 23, 42, 0.14), 0 4px 10px -4px rgba(15, 23, 42, 0.06);
+
+  /* Konva 平面图画布专用语义 Token（由 useCanvasTheme() 实时桥接） */
+  --canvas-bg: #f1f5f9;
+  --canvas-grid: #e2e8f0;
+  --canvas-grid-major: #cbd5e1;
+  --canvas-room-fill: rgba(37, 99, 235, 0.08);
+  --canvas-room-fill-selected: rgba(37, 99, 235, 0.20);
+  --canvas-room-stroke: rgba(37, 99, 235, 0.30);
+  --canvas-wall: #334155;
+  --canvas-wall-hover: #475569;
+  --canvas-wall-selected: #2563eb;
+  --canvas-opening: #0ea5e9;
+  --canvas-selection: #2563eb;
+  --canvas-device-on: #f59e0b;
+  --canvas-device-on-glow: rgba(245, 158, 11, 0.35);
+  --canvas-device-cool: #0ea5e9;
+  --canvas-device-cool-glow: rgba(14, 165, 233, 0.35);
+  --canvas-device-off: #94a3b8;
+  --canvas-device-offline: #ef4444;
+  --canvas-furniture-fill: #e8e1d4;
+  --canvas-label: #1e293b;
+  --canvas-label-muted: #64748b;
+
+  /* 字体 */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* 兼容旧变量别名，平滑过渡不破坏既有样式 */
+  --color-bg: var(--bg-app);
+  --color-surface: var(--bg-surface);
+  --color-border: var(--border-default);
+  --color-text: var(--text-primary);
+  --color-muted: var(--text-muted);
+  --color-primary: var(--accent);
+  --color-primary-weak: var(--accent-soft);
+  --color-danger: var(--status-danger);
+}
+
+@theme inline {
+  --color-bg-canvas: var(--bg-canvas);
+  --color-bg-app: var(--bg-app);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-subtle: var(--bg-subtle);
+  --color-bg-hover: var(--bg-hover);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-border: var(--accent-border);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-status-success: var(--status-success);
+  --color-status-success-soft: var(--status-success-soft);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-soft: var(--status-warning-soft);
+  --color-status-danger: var(--status-danger);
+  --color-status-danger-soft: var(--status-danger-soft);
+  --color-status-info: var(--status-info);
+  --color-status-info-soft: var(--status-info-soft);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
 }

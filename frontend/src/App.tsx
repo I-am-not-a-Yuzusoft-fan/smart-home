@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Toaster } from 'sonner'
 import { ApiError, getMe, type SessionUser } from './api/client.ts'
+import { TooltipProvider } from './components/ui/tooltip.tsx'
 import LoginPage from './pages/LoginPage.tsx'
 import PlanPage from './pages/PlanPage.tsx'
 
@@ -46,17 +48,19 @@ export default function App() {
     setPhase('anonymous')
   }, [])
 
-  if (phase === 'booting') {
-    return (
-      <main className="flex h-full items-center justify-center text-sm" style={{ color: 'var(--color-muted)' }}>
-        正在载入…
-      </main>
-    )
-  }
-
-  if (phase === 'anonymous' || !user) {
-    return <LoginPage onSignedIn={onSignedIn} notice={notice} />
-  }
-
-  return <PlanPage user={user} onSignedOut={onSignedOut} />
+  return (
+    <TooltipProvider delayDuration={250}>
+      {phase === 'booting' ? (
+        <main className="flex h-dvh flex-col items-center justify-center gap-3 bg-bg-app text-text-muted">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-border-strong border-t-accent" />
+          <p className="text-sm">正在连接智能家居中枢…</p>
+        </main>
+      ) : phase === 'anonymous' || !user ? (
+        <LoginPage onSignedIn={onSignedIn} notice={notice} />
+      ) : (
+        <PlanPage user={user} onSignedOut={onSignedOut} />
+      )}
+      <Toaster position="bottom-right" richColors closeButton />
+    </TooltipProvider>
+  )
 }

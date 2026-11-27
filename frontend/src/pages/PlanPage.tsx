@@ -1,9 +1,10 @@
+import { SlidersHorizontal, Sparkles } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import { Circle, Group, Image as KonvaImage, Layer, Line, Path, Rect, Stage, Text } from 'react-konva'
 import type Konva from 'konva'
+import { toast } from 'sonner'
 import {
   ApiError,
-  advanceSimulation,
   createItem,
   createOpening,
   clearRoomName,
@@ -38,7 +39,23 @@ import ItemInspector from '../components/ItemInspector.tsx'
 import ItemSidebar, { type ItemFilters } from '../components/ItemSidebar.tsx'
 import { UnderlayPanel } from '../components/UnderlayPanel.tsx'
 import TypeManager from '../components/TypeManager.tsx'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog.tsx'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.tsx'
+import AppHeader, { type WorkspaceMode } from '../components/workspace/AppHeader.tsx'
+import CanvasFloatingBar from '../components/workspace/CanvasFloatingBar.tsx'
+import RoomDeviceList from '../components/workspace/RoomDeviceList.tsx'
+import ShortcutHelpDialog from '../components/workspace/ShortcutHelpDialog.tsx'
 import ModesPanel from '../features/modes/ModesPanel.tsx'
+import { useCanvasTheme, type CanvasTheme } from '../lib/useCanvasTheme.ts'
 import { tidy, wallAngle, wallLength, withAngle, withEndpoint, withLength } from '../features/plan/edit.ts'
 import {
   arcCircle,
@@ -338,7 +355,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [selectedRoomHash, setSelectedRoomHash] = useState<string | null>(null)
   const [filters, setFilters] = useState<ItemFilters>({ room: '', kind: '', q: '' })
   const [showTypes, setShowTypes] = useState(false)
-  const [showModes, setShowModes] = useState(false)
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('control')
+  const [leftOpen, setLeftOpen] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 1280 : true))
+  const [rightOpen, setRightOpen] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 1280 : true))
+  const [rightTab, setRightTab] = useState<'modes' | 'device'>('modes')
+  const [showShortcuts, setShowShortcuts] = useState(false)
+  const [pendingWallDelete, setPendingWallDelete] = useState<{ id: string; message: string } | null>(null)
+  const canvasTheme = useCanvasTheme()
+  const effectiveMode: WorkspaceMode = user.role === 'admin' ? workspaceMode : 'control'
   const [showDims, setShowDims] = useState(true)
   // 正在拖的端点：整段坐标都存下来，渲染预览时直接用，不必回头找 wall。
   const [editing, setEditing] = useState<Edit | null>(null)
@@ -627,15 +651,15 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         return
       }
       if (isTyping(e.target)) return
-      // Ctrl/Cmd+Z 撤销，再加 Shift 重做；Ctrl+Y 也认，习惯 Windows 的人会按。
+      // Ctrl/Cmd+Z 撤销，再加 Shift 重做；Ctrl+Y 也认（仅户型编辑模式生效）
       const mod = e.metaKey || e.ctrlKey
-      if (mod && (e.key === 'z' || e.key === 'Z')) {
+      if (effectiveMode === 'edit' && mod && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault()
         if (e.shiftKey) void redo()
         else void undo()
         return
       }
-      if (mod && (e.key === 'y' || e.key === 'Y')) {
+      if (effectiveMode === 'edit' && mod && (e.key === 'y' || e.key === 'Y')) {
         e.preventDefault()
         void redo()
         return
@@ -646,9 +670,18 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         setDraft(null)
         setBend(null)
         setEditing(null)
+        setArcMode(false)
         setGuide({ kind: 'none' })
+        setSelectedItemId(null)
+        setSelectedId(null)
+        setSelectedRoomHash(null)
+        if (window.innerWidth < 1280) {
+          setLeftOpen(false)
+          setRightOpen(false)
+        }
         return
       }
+      if (effectiveMode !== 'edit') return
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
       if (selectedItemId) {
         void removeItem(selectedItemId)
@@ -1065,6 +1098,18 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       dimHint()
       return
     }
+
+    // 运行控制模式下：左键空白处取消选中并直接拖动画布，绝不误画墙体。
+    if (effectiveMode !== 'edit') {
+      if (e.evt.button === 0) {
+        setSelectedItemId(null)
+        setSelectedId(null)
+        setSelectedRoomHash(null)
+        panRef.current = { sx: raw.x, sy: raw.y, vx: viewport.x, vy: viewport.y }
+        dimHint()
+      }
+      return
+    }
     if (e.evt.button === 2) {
       // 右键取消进行中的画线或拖动。
       setDraft(null)
@@ -1391,18 +1436,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     }
   }
 
-  async function removeWall(id: string) {
-    // 开口与挂墙物品是级联删除的（issue #8 二选一里选了级联）：
-    // 删之前把数量说清楚，别让用户以为是只删一面墙。
-    const openingCount = plan.openings.filter((o) => o.wallId === id).length
-    const itemCount = items.filter((it) => it.wallId === id).length
-    if (openingCount + itemCount > 0) {
-      const parts = [
-        openingCount > 0 ? `${openingCount} 个门窗` : '',
-        itemCount > 0 ? `${itemCount} 件挂墙物品` : '',
-      ].filter(Boolean)
-      if (!window.confirm(`这面墙上还有 ${parts.join('、')}，删墙会把它们一起删掉。继续？`)) return
-    }
+  async function executeRemoveWall(id: string) {
     const seq = ++writeSeq.current
     const snapshot = snapshotOf(plan)
     setSaving(true)
@@ -1412,7 +1446,9 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       // 404 说明库里本来就没有（双击、连按 Delete、别人先删了）：
       // 当作成功继续本地清理，否则会出现"库里没了、画布还在"。
       if (!(e instanceof ApiError && e.status === 404)) {
-        setError(e instanceof Error ? e.message : '删除失败')
+        const msg = e instanceof Error ? e.message : '删除失败'
+        setError(msg)
+        toast.error(msg)
         setSaving(false)
         return
       }
@@ -1427,12 +1463,32 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           setPlan(next)
           setSelectedId(null)
           setError(null)
+          toast.success('已删除墙体')
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : '刷新户型失败')
       }
     }
     setSaving(false)
+  }
+
+  async function removeWall(id: string) {
+    // 开口与挂墙物品是级联删除的（issue #8 二选一里选了级联）：
+    // 删之前用 AlertDialog 把数量说清楚，替代原生 window.confirm。
+    const openingCount = plan.openings.filter((o) => o.wallId === id).length
+    const itemCount = items.filter((it) => it.wallId === id).length
+    if (openingCount + itemCount > 0) {
+      const parts = [
+        openingCount > 0 ? `${openingCount} 个门窗` : '',
+        itemCount > 0 ? `${itemCount} 件挂墙物品` : '',
+      ].filter(Boolean)
+      setPendingWallDelete({
+        id,
+        message: `这面墙上还有 ${parts.join('、')}，删墙会把它们一起级联删除。确认继续吗？`,
+      })
+      return
+    }
+    await executeRemoveWall(id)
   }
 
   async function removeItem(id: string) {
@@ -1604,6 +1660,77 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     }
   }
 
+  // 工作区快捷键：[ 折叠左栏、] 折叠右栏、? 打开快捷键速查
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return
+      }
+      if (e.key === '[') {
+        e.preventDefault()
+        setLeftOpen((v) => !v)
+      } else if (e.key === ']') {
+        e.preventDefault()
+        setRightOpen((v) => !v)
+      } else if (e.key === '?') {
+        e.preventDefault()
+        setShowShortcuts((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // 窄屏/分屏自适应：当窗口从宽屏缩小到 < 1280px 时自动折叠两侧抽屉，防止挤压画布
+  useEffect(() => {
+    let wasWide = window.innerWidth >= 1280
+    const onResize = () => {
+      const isWide = window.innerWidth >= 1280
+      if (wasWide && !isWide) {
+        setLeftOpen(false)
+        setRightOpen(false)
+      }
+      wasWide = isWide
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  // 点选设备自动切到「设备详情」，取消选中自动回到「场景模式」
+  useEffect(() => {
+    if (selectedItemId) {
+      setRightTab('device')
+      setRightOpen(true)
+    } else if (effectiveMode === 'control') {
+      setRightTab('modes')
+    }
+  }, [selectedItemId, effectiveMode])
+
+  const zoomBy = useCallback(
+    (factor: number) => {
+      setViewport((vp) => {
+        const nextScale = clamp(vp.scale * factor, ZOOM_MIN, ZOOM_MAX)
+        const cx = size.width / 2
+        const cy = size.height / 2
+        const worldX = (cx - vp.x) / vp.scale
+        const worldY = (cy - vp.y) / vp.scale
+        return {
+          scale: nextScale,
+          x: cx - worldX * nextScale,
+          y: cy - worldY * nextScale,
+        }
+      })
+    },
+    [size.width, size.height],
+  )
+
   // 网格按视口算：只画看得见的那一段，缩小时把步长翻倍，避免几千条线。
   const gridLines = useMemo(() => {
     const step = viewport.scale < 0.6 ? GRID_CM * 5 : GRID_CM
@@ -1616,16 +1743,16 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     const startY = Math.floor(y0 / step) * step
     for (let x = startX; x <= x1; x += step) {
       lines.push(
-        <Line key={`v${x}`} points={[x, y0, x, y1]} stroke="#e8e8f2" strokeWidth={1 / viewport.scale} />,
+        <Line key={`v${x}`} points={[x, y0, x, y1]} stroke={canvasTheme.grid} strokeWidth={1 / viewport.scale} />,
       )
     }
     for (let y = startY; y <= y1; y += step) {
       lines.push(
-        <Line key={`h${y}`} points={[x0, y, x1, y]} stroke="#e8e8f2" strokeWidth={1 / viewport.scale} />,
+        <Line key={`h${y}`} points={[x0, y, x1, y]} stroke={canvasTheme.grid} strokeWidth={1 / viewport.scale} />,
       )
     }
     return lines
-  }, [size.height, size.width, viewport])
+  }, [size.height, size.width, viewport, canvasTheme.grid])
 
   // 拖动中的那面墙按编辑后的坐标画，其余原样——这份派生数据同时喂给渲染与手柄。
   const renderWalls = editing
@@ -1695,223 +1822,50 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     </label>
   )
 
+  const deviceCount = useMemo(() => items.filter((it) => it.kind === 'device').length, [items])
+
   return (
-    <div className="flex h-full flex-col">
-      <header
-        className="flex min-w-0 items-center justify-between gap-4 px-4 py-3"
-        style={{ background: 'var(--color-surface)', borderBottom: '1px solid var(--color-border)' }}
-      >
-        <div className="flex min-w-0 items-baseline gap-3">
-          <h1 className="shrink-0 whitespace-nowrap text-base font-semibold">平面图</h1>
-          <span className="whitespace-nowrap text-xs" style={{ color: 'var(--color-muted)' }}>
-            {loading ? '读取中…' : `${plan.walls.length} 面墙 · ${items.length} 件物品`}
-          </span>
-          {selected && (
-            <button
-              onClick={() => void removeWall(selected.id)}
-              disabled={saving}
-              className="whitespace-nowrap px-2 py-1 text-xs"
-              style={{
-                border: '1px solid var(--color-danger)',
-                borderRadius: 'var(--radius-sm)',
-                color: 'var(--color-danger)',
-                background: 'transparent',
-              }}
-            >
-              删除这面墙（{formatLength(selected)}）
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-3 text-sm">
-          <button
-            onClick={() => setGridSnap((v) => !v)}
-            aria-pressed={gridSnap}
-            title={`吸附到 ${GRID_CM} 厘米网格`}
-            className="whitespace-nowrap px-2 py-1 text-xs"
-            style={{
-              border: `1px solid ${gridSnap ? 'var(--color-primary)' : 'var(--color-border)'}`,
-              borderRadius: 'var(--radius-sm)',
-              background: gridSnap ? 'var(--color-primary-weak)' : 'var(--color-bg)',
-              color: gridSnap ? 'var(--color-primary)' : 'inherit',
-            }}
-          >
-            网格 {GRID_CM}cm
-          </button>
-          <button
-            onClick={() => setShowDims((v) => !v)}
-            className="whitespace-nowrap px-2 py-1 text-xs"
-            style={{
-              border: `1px solid ${showDims ? 'var(--color-primary)' : 'var(--color-border)'}`,
-              borderRadius: 'var(--radius-sm)',
-              background: showDims ? 'var(--color-primary-weak)' : 'var(--color-bg)',
-              color: showDims ? 'var(--color-primary)' : 'inherit',
-            }}
-          >
-            尺寸标注
-          </button>
-          <button
-            onClick={() => setArcMode((v) => !v)}
-            disabled={saving}
-            title="画弧模式：拖出弦后松手，移动鼠标定弧度，单击落定"
-            className="whitespace-nowrap px-2 py-1 text-xs"
-            style={{
-              border: `1px solid ${arcMode ? 'var(--color-primary)' : 'var(--color-border)'}`,
-              borderRadius: 'var(--radius-sm)',
-              background: arcMode ? 'var(--color-primary-weak)' : 'var(--color-bg)',
-              color: arcMode ? 'var(--color-primary)' : 'inherit',
-            }}
-          >
-            画弧
-          </button>
-          <button
-            onClick={() => {
-              const stage = stageRef.current
-              if (!stage) return
-              const url = stage.toDataURL({ pixelRatio: 2 })
-              const a = document.createElement('a')
-              a.href = url
-              a.download = `户型-${new Date().toISOString().slice(0, 10)}.png`
-              a.click()
-            }}
-            className="whitespace-nowrap px-2 py-1 text-xs"
-            style={{
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--color-bg)',
-            }}
-          >
-            导出 PNG
-          </button>
-          <button
-            onClick={() => void undo()}
-            disabled={history.past.length === 0 || saving}
-            title="撤销（Ctrl/Cmd+Z）"
-            className="whitespace-nowrap px-2 py-1 text-xs"
-            style={{
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--color-bg)',
-              opacity: history.past.length === 0 || saving ? 0.45 : 1,
-            }}
-          >
-            撤销
-          </button>
-          <button
-            onClick={() => void redo()}
-            disabled={history.future.length === 0 || saving}
-            title="重做（Ctrl/Cmd+Shift+Z）"
-            className="whitespace-nowrap px-2 py-1 text-xs"
-            style={{
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--color-bg)',
-              opacity: history.future.length === 0 || saving ? 0.45 : 1,
-            }}
-          >
-            重做
-          </button>
-          <button
-            onClick={fitToContent}
-            className="whitespace-nowrap px-2 py-1 text-xs"
-            style={{
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--color-bg)',
-            }}
-          >
-            回到全览
-          </button>
-          <span className="text-xs" style={{ color: 'var(--color-muted)' }}>
-            {Math.round(viewport.scale * 100)}%
-          </span>
-          <button
-            onClick={() => setShowUnderlay((v) => !v)}
-            aria-pressed={showUnderlay}
-            title="上传一张户型图垫在画布下面照着描"
-            className="whitespace-nowrap px-2 py-1 text-xs"
-            style={{
-              border: `1px solid ${showUnderlay ? 'var(--color-primary)' : 'var(--color-border)'}`,
-              borderRadius: 'var(--radius-sm)',
-              background: showUnderlay ? 'var(--color-primary-weak)' : 'var(--color-bg)',
-              color: showUnderlay ? 'var(--color-primary)' : 'inherit',
-            }}
-          >
-            底图
-          </button>
-          <button
-            onClick={() => setShowModes(true)}
-            className="whitespace-nowrap px-2 py-1 text-xs"
-            style={{
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--color-bg)',
-            }}
-          >
-            场景
-          </button>
-          {user.role === 'admin' ? (
-            <button
-              onClick={() => setShowTypes(true)}
-              className="whitespace-nowrap px-2 py-1 text-xs"
-              style={{
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-sm)',
-                background: 'var(--color-bg)',
-              }}
-            >
-              类型管理
-            </button>
-          ) : null}
-          {user.role === 'admin' ? (
-            <button
-              onClick={async () => {
-                try {
-                  await advanceSimulation(60)
-                  setError(null)
-                } catch (e) {
-                  setError(e instanceof Error ? e.message : '推进模拟时间失败')
-                }
-              }}
-              className="whitespace-nowrap px-2 py-1 text-xs"
-              style={{
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-sm)',
-                background: 'var(--color-bg)',
-              }}
-            >
-              推进60分钟
-            </button>
-          ) : null}
-          <span className="whitespace-nowrap">
-            {user.displayName}
-            <span className="ml-2 text-xs" style={{ color: 'var(--color-muted)' }}>
-              {user.role === 'admin' ? '管理员' : '家庭成员'}
-            </span>
-          </span>
-          <button
-            onClick={onLogout}
-            className="whitespace-nowrap px-2 py-1 text-xs"
-            style={{
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--color-bg)',
-            }}
-          >
-            退出
-          </button>
-        </div>
-      </header>
+    <div className="flex h-dvh flex-col overflow-hidden bg-bg-app text-text-primary">
+      <AppHeader
+        user={user}
+        mode={effectiveMode}
+        onModeChange={(next) => {
+          setWorkspaceMode(next)
+          if (next === 'control') {
+            setSelectedId(null)
+            setSelectedRoomHash(null)
+            setArcMode(false)
+            setShowUnderlay(false)
+          }
+        }}
+        liveConnected={liveConnected}
+        loading={loading}
+        roomCount={plan.rooms.length}
+        deviceCount={deviceCount}
+        leftOpen={leftOpen}
+        rightOpen={rightOpen}
+        onToggleLeft={() => setLeftOpen((v) => !v)}
+        onToggleRight={() => setRightOpen((v) => !v)}
+        onOpenTypes={() => setShowTypes(true)}
+        onOpenShortcuts={() => setShowShortcuts(true)}
+        onLogout={() => void onLogout()}
+      />
 
       {error && (
-        <p className="px-4 py-2 text-sm" style={{ color: 'var(--color-danger)' }} role="alert">
-          {error}
-        </p>
+        <div
+          className="flex items-center justify-between gap-2 border-b border-status-danger/25 bg-status-danger-soft px-4 py-1.5 text-xs text-status-danger"
+          role="alert"
+        >
+          <span>{error}</span>
+          <button type="button" onClick={() => setError(null)} className="cursor-pointer underline">
+            忽略
+          </button>
+        </div>
       )}
 
-      {plan.staleRooms.length > 0 && (
+      {effectiveMode === 'edit' && plan.staleRooms.length > 0 && (
         <div
-          className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-xs"
-          style={{ background: 'rgba(245, 158, 11, 0.14)', color: '#7c4a03' }}
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-status-warning/25 bg-status-warning-soft px-4 py-1.5 text-xs text-status-warning"
           role="status"
         >
           <span>
@@ -1919,8 +1873,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             {plan.staleRooms.map((stale) => `「${stale.name}」`).join('、')}
           </span>
           <button
-            className="rounded px-2 py-0.5 font-medium"
-            style={{ border: '1px solid rgba(124, 74, 3, 0.35)' }}
+            type="button"
+            className="cursor-pointer rounded border border-status-warning/40 px-2 py-0.5 font-medium hover:bg-status-warning/10"
             onClick={() => void forgetAllStaleRooms()}
           >
             全部清理
@@ -1928,36 +1882,56 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         </div>
       )}
 
-      {!liveConnected ? (
-        <div className="px-4 py-1 text-xs" role="status" style={{ background: 'rgba(220,38,38,0.12)', color: '#991b1b' }}>
-          实时连接已断开，正在重连…（重连后会自动重取一次全量快照）
-        </div>
-      ) : null}
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        {leftOpen ? (
+          <aside className="absolute inset-y-0 left-0 z-20 w-60 shrink-0 border-r border-border-default bg-bg-surface shadow-[var(--shadow-lg)] xl:static xl:shadow-none">
+            {effectiveMode === 'control' ? (
+              <RoomDeviceList
+                items={items}
+                types={types}
+                rooms={plan.rooms}
+                loading={loading}
+                isAdmin={user.role === 'admin'}
+                selectedItemId={selectedItemId}
+                onSelectItem={(id) => {
+                  setSelectedItemId(id)
+                  setSelectedId(null)
+                  setSelectedRoomHash(null)
+                }}
+                onSwitchToEdit={user.role === 'admin' ? () => setWorkspaceMode('edit') : undefined}
+              />
+            ) : (
+              <ItemSidebar
+                types={types}
+                items={items}
+                rooms={plan.rooms}
+                filters={filters}
+                selectedItemId={selectedItemId}
+                onFiltersChange={(patch) => setFilters((current) => ({ ...current, ...patch }))}
+                onSelectItem={(id) => {
+                  setSelectedItemId(id)
+                  setSelectedId(null)
+                  setSelectedRoomHash(null)
+                }}
+              />
+            )}
+          </aside>
+        ) : null}
 
-      <div className="flex min-h-0 flex-1">
-        <ItemSidebar
-          types={types}
-          items={items}
-          rooms={plan.rooms}
-          filters={filters}
-          selectedItemId={selectedItemId}
-          onFiltersChange={(patch) => setFilters((current) => ({ ...current, ...patch }))}
-          onSelectItem={(id) => {
-            setSelectedItemId(id)
-            setSelectedId(null)
-            setSelectedRoomHash(null)
-          }}
-        />
         <main
           ref={hostRef}
-          className="relative min-w-0 flex-1 overflow-hidden"
+          className="relative min-w-0 flex-1 overflow-hidden bg-bg-canvas"
           onDragOver={(e) => {
+            if (effectiveMode !== 'edit') return
             e.preventDefault()
             e.dataTransfer.dropEffect = 'copy'
           }}
-          onDrop={(e) => void onDropType(e)}
+          onDrop={(e) => {
+            if (effectiveMode !== 'edit') return
+            void onDropType(e)
+          }}
         >
-        {selectedRoom && (
+        {effectiveMode === 'edit' && selectedRoom && (
           <RoomPanel
             room={selectedRoom}
             onClose={() => setSelectedRoomHash(null)}
@@ -1965,7 +1939,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             onClear={() => void forgetRoomName(selectedRoom.hash)}
           />
         )}
-        {selected && wallForm && (
+        {effectiveMode === 'edit' && selected && wallForm && (
           <div
             className="absolute right-3 top-3 z-10 w-56 rounded p-3 text-xs"
             style={{
@@ -1975,11 +1949,21 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <div className="mb-2 flex items-center justify-between">
-              <span className="font-semibold">墙属性</span>
-              <button onClick={() => setSelectedId(null)} style={{ color: 'var(--color-muted)' }}>
-                关闭
-              </button>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="font-semibold">墙属性（{formatLength(selected)}）</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void removeWall(selected.id)}
+                  disabled={saving}
+                  className="cursor-pointer text-status-danger hover:underline"
+                >
+                  删除
+                </button>
+                <button type="button" onClick={() => setSelectedId(null)} className="cursor-pointer text-text-muted hover:text-text-primary">
+                  关闭
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <label className="flex flex-col gap-0.5">
@@ -2063,18 +2047,16 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             </div>
           </div>
         )}
-        {/* 提示放左上角：下方与左方现在是尺寸标注的地盘，压在数字上会糊成一团 */}
+        {/* 提示放左上角：仅在编辑模式显示画墙提示，运行模式显示精简操控提示 */}
         <div
-          className="pointer-events-none absolute left-3 top-2 rounded px-2 py-1 text-xs transition-opacity duration-300"
-          style={{
-            color: 'var(--color-muted)',
-            background: 'color-mix(in srgb, var(--color-bg) 82%, transparent)',
-            opacity: hintDimmed ? 0.35 : 1,
-          }}
+          className="surface-glass pointer-events-none absolute left-3 top-2.5 rounded-full border px-3 py-1 text-[11px] text-text-muted transition-opacity duration-300"
+          style={{ opacity: hintDimmed ? 0.35 : 0.92 }}
         >
-          {arcModifier} 拖出弧 · 拖拽画墙 · 点墙选中后 Delete 删除 · 空格/中键平移 · 滚轮缩放 · Shift 自由角度 · 拖端点改墙
+          {effectiveMode === 'edit'
+            ? `${arcModifier} 拖出弧 · 拖拽画墙 · Delete 删墙 · 空格平移 · 滚轮缩放 · ? 快捷键`
+            : '点击设备操控 · 空格/中键平移 · 滚轮缩放 · 按 ? 查看快捷键'}
         </div>
-        {showUnderlay ? (
+        {effectiveMode === 'edit' && showUnderlay ? (
           <UnderlayPanel
             underlay={plan.underlay}
             isAdmin={user.role === 'admin'}
@@ -2109,7 +2091,13 @@ export default function PlanPage({ user, onSignedOut }: Props) {
             setDraft(null)
             setGuide({ kind: 'none' })
           }}
-          style={{ cursor: panRef.current ? 'grabbing' : spaceDown ? 'grab' : 'crosshair' }}
+          style={{
+            cursor: panRef.current
+              ? 'grabbing'
+              : spaceDown || effectiveMode !== 'edit'
+                ? 'grab'
+                : 'crosshair',
+          }}
         >
           <Layer>{gridLines}</Layer>
 
@@ -2120,6 +2108,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 key={room.hash}
                 room={room}
                 selected={room.hash === selectedRoomHash}
+                theme={canvasTheme}
               />
             ))}
           </Layer>
@@ -2209,6 +2198,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                 selected={w.id === selectedId}
                 hovered={w.id === hoverId}
                 scale={viewport.scale}
+                theme={canvasTheme}
               />
             ))}
             {renderWalls
@@ -2330,6 +2320,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
                   wall={wall}
                   scale={viewport.scale}
                   swing={swingSide(opening, wall, (x, y) => roomAt(x, y) !== null)}
+                  theme={canvasTheme}
                   onPick={() => {
                     setSelectedId(wall.id)
                     setSelectedItemId(null)
@@ -2343,22 +2334,30 @@ export default function PlanPage({ user, onSignedOut }: Props) {
           {/* 物品层在墙之上：家具要压在墙线上，但顺序反过来就点不到被盖住的墙了。
               选中用几何命中（wallAt/handleAt），不依赖 Konva 的 hit graph。 */}
           <Layer listening={!bend}>
-            {items.map((item) => (
-              <ItemShape
-                key={item.id}
-                item={item}
-                type={typeByKey.get(item.typeKey)}
-                selected={item.id === selectedItemId}
-                scale={viewport.scale}
-                summary={summaryOf(item)}
-                onSelect={() => {
-                  setSelectedItemId(item.id)
-                  setSelectedId(null)
-                  setSelectedRoomHash(null)
-                }}
-                onDragEnd={(e) => void onItemDragEnd(item, e)}
-              />
-            ))}
+            {items.map((item) => {
+              const typ = typeByKey.get(item.typeKey)
+              const vals = item.kind === 'device' ? liveValuesFor(liveStates, item.id, typ, nowMs) : {}
+              const isOn = vals.power === true || vals.on === true
+              return (
+                <ItemShape
+                  key={item.id}
+                  item={item}
+                  type={typ}
+                  selected={item.id === selectedItemId}
+                  draggable={effectiveMode === 'edit'}
+                  isOn={isOn}
+                  theme={canvasTheme}
+                  scale={viewport.scale}
+                  summary={summaryOf(item)}
+                  onSelect={() => {
+                    setSelectedItemId(item.id)
+                    setSelectedId(null)
+                    setSelectedRoomHash(null)
+                  }}
+                  onDragEnd={(e) => void onItemDragEnd(item, e)}
+                />
+              )
+            })}
           </Layer>
 
           {/* 房间名/面积/开间进深压在最上面：它们是读图的入口，不能被家具标签盖住 */}
@@ -2420,25 +2419,110 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         )}
 
         {saving && (
-          <div
-            className="absolute right-4 bottom-4 px-3 py-1 text-xs"
-            style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 6 }}
-          >
+          <div className="surface-glass absolute right-4 top-3 rounded-full border px-3 py-1 text-xs text-text-secondary shadow-sm">
             保存中…
           </div>
         )}
-        </main>
-        <ItemInspector
-          item={selectedItem}
-          type={selectedItemType}
-          rooms={plan.rooms}
-          onUpdate={updateItemFields}
-          onDelete={removeItem}
+
+        <CanvasFloatingBar
+          mode={effectiveMode}
+          scale={viewport.scale}
+          gridSnap={gridSnap}
+          gridCm={GRID_CM}
+          showDims={showDims}
+          arcMode={arcMode}
+          showUnderlay={showUnderlay}
+          canUndo={history.past.length > 0}
+          canRedo={history.future.length > 0}
+          saving={saving}
+          onZoomIn={() => zoomBy(1.2)}
+          onZoomOut={() => zoomBy(1 / 1.2)}
+          onFit={fitToContent}
+          onToggleGrid={() => setGridSnap((v) => !v)}
+          onToggleDims={() => setShowDims((v) => !v)}
+          onToggleArc={() => setArcMode((v) => !v)}
+          onToggleUnderlay={() => setShowUnderlay((v) => !v)}
+          onUndo={() => void undo()}
+          onRedo={() => void redo()}
+          onExportPng={() => {
+            const stage = stageRef.current
+            if (!stage) return
+            const url = stage.toDataURL({ pixelRatio: 2 })
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `户型-${new Date().toISOString().slice(0, 10)}.png`
+            a.click()
+            toast.success('已导出平面图 PNG')
+          }}
         />
+        </main>
+
+        {rightOpen ? (
+          <aside className="absolute inset-y-0 right-0 z-20 flex w-80 shrink-0 flex-col border-l border-border-default bg-bg-surface shadow-[var(--shadow-lg)] xl:static xl:shadow-none">
+            <Tabs
+              value={rightTab}
+              onValueChange={(v) => setRightTab(v as 'modes' | 'device')}
+              className="flex h-full min-h-0 flex-col"
+            >
+              <div className="border-b border-border-default px-3 py-2">
+                <TabsList className="w-full">
+                  <TabsTrigger value="modes">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    场景模式
+                  </TabsTrigger>
+                  <TabsTrigger value="device">
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                    设备详情
+                  </TabsTrigger>
+                </TabsList>
+              </div>
+              <TabsContent value="modes" className="min-h-0 flex-1 overflow-hidden">
+                <ModesPanel userRole={user.role} items={items} itemTypes={types} />
+              </TabsContent>
+              <TabsContent value="device" className="min-h-0 flex-1 overflow-hidden">
+                <ItemInspector
+                  item={selectedItem}
+                  type={selectedItemType}
+                  rooms={plan.rooms}
+                  mode={effectiveMode}
+                  isAdmin={user.role === 'admin'}
+                  onUpdate={updateItemFields}
+                  onDelete={removeItem}
+                />
+              </TabsContent>
+            </Tabs>
+          </aside>
+        ) : null}
       </div>
 
       {showTypes ? <TypeManager onClose={() => setShowTypes(false)} /> : null}
-      {showModes ? <ModesPanel userRole={user.role} onClose={() => setShowModes(false)} /> : null}
+      <ShortcutHelpDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
+
+      <AlertDialog
+        open={Boolean(pendingWallDelete)}
+        onOpenChange={(open) => {
+          if (!open) setPendingWallDelete(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认级联删除墙体？</AlertDialogTitle>
+            <AlertDialogDescription>{pendingWallDelete?.message}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const target = pendingWallDelete
+                setPendingWallDelete(null)
+                if (target) void executeRemoveWall(target.id)
+              }}
+            >
+              确认删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -2450,8 +2534,15 @@ type WallShapeProps = {
   scale: number
 }
 
-function WallLine({ wall, quad, selected, hovered, scale }: WallShapeProps & { quad?: Pt[] }) {
-  const fill = selected ? '#4f6bed' : hovered ? '#55557a' : '#3a3a4d'
+function WallLine({
+  wall,
+  quad,
+  selected,
+  hovered,
+  scale,
+  theme,
+}: WallShapeProps & { quad?: Pt[]; theme: CanvasTheme }) {
+  const fill = selected ? theme.wallSelected : hovered ? theme.wallHover : theme.wall
   // 没有四角数据（例如刚画完还没重算）时退回中心线描边，至少不会消失。
   const points = quad
     ? quad.flatMap((p) => [p.x, p.y])
@@ -2462,7 +2553,7 @@ function WallLine({ wall, quad, selected, hovered, scale }: WallShapeProps & { q
       closed={Boolean(quad)}
       // 同色描边 1px：相邻两面墙共用一条斜接线，两块多边形各自抗锯齿会在公共边上
       // 混进一点背景色，放大后能看到一条发丝缝；描一圈同色就把它盖住了。
-      stroke={quad ? (selected ? '#ffffff' : fill) : fill}
+      stroke={quad ? (selected ? theme.labelHalo : fill) : fill}
       strokeWidth={quad ? (selected ? 1.5 / scale : 2 / scale) : Math.max(wall.thickness, 4)}
       // 同色描边是为了盖住两块多边形公共边的发丝缝；但默认的 miter join 会在
       // 方角外侧顶出一个小尖，放大看就是「角上多出来一个小点」。圆角连接不会外凸。
@@ -2593,14 +2684,22 @@ function clamp(v: number, min: number, max: number): number {
  * 面积与顶点都来自后端，这里只画——前端若自己也推导一遍，两套实现迟早分叉，
  * 就会出现「画布上是一间、列表里是两间」。
  */
-function RoomShape({ room, selected }: { room: Room; selected: boolean }) {
+function RoomShape({
+  room,
+  selected,
+  theme,
+}: {
+  room: Room
+  selected: boolean
+  theme: CanvasTheme
+}) {
   const points = room.ring.flatMap((p) => [p.x, p.y])
   return (
     <Line
       points={points}
       closed
-      fill={selected ? 'rgba(79,107,237,0.22)' : 'rgba(79,107,237,0.10)'}
-      stroke={selected ? '#4f6bed' : 'rgba(79,107,237,0.35)'}
+      fill={selected ? theme.roomFillSelected : theme.roomFill}
+      stroke={selected ? theme.roomStrokeSelected : theme.roomStroke}
       strokeWidth={selected ? 2 : 1}
     />
   )
@@ -3045,12 +3144,14 @@ function OpeningShape({
   wall,
   scale,
   swing,
+  theme,
   onPick,
 }: {
   opening: Opening
   wall: Wall
   scale: number
   swing: 1 | -1
+  theme: CanvasTheme
   onPick: () => void
 }) {
   const length = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay)
@@ -3078,14 +3179,14 @@ function OpeningShape({
         y={-thickness / 2}
         width={opening.width}
         height={thickness + 2}
-        fill="#ffffff"
-        stroke="#94a3b8"
+        fill={theme.openingFill}
+        stroke={theme.openingStroke}
         strokeWidth={1 / scale}
       />
       {opening.kind === 'window' ? (
         <Line
           points={[0, 0, opening.width, 0]}
-          stroke="#4f6bed"
+          stroke={theme.openingWindow}
           strokeWidth={1.5 / scale}
           listening={false}
         />
@@ -3095,7 +3196,7 @@ function OpeningShape({
               门弧以合页为圆心、门宽为半径，从门洞另一侧扫到门扇端头——和制图规范一致。 */}
           <Line
             points={[0, 0, 0, swing * opening.width]}
-            stroke="#475569"
+            stroke={theme.openingDoor}
             strokeWidth={2 / scale}
             lineCap="round"
             listening={false}
@@ -3104,7 +3205,7 @@ function OpeningShape({
             data={`M ${opening.width} 0 A ${opening.width} ${opening.width} 0 0 ${
               swing > 0 ? 1 : 0
             } 0 ${swing * opening.width}`}
-            stroke="#94a3b8"
+            stroke={theme.openingStroke}
             strokeWidth={1 / scale}
             listening={false}
           />
@@ -3118,6 +3219,9 @@ function ItemShape({
   item,
   type,
   selected,
+  draggable,
+  isOn,
+  theme,
   scale,
   summary,
   onSelect,
@@ -3126,6 +3230,9 @@ function ItemShape({
   item: Item
   type?: ItemType
   selected: boolean
+  draggable: boolean
+  isOn: boolean
+  theme: CanvasTheme
   scale: number
   summary: string
   onSelect: () => void
@@ -3142,6 +3249,17 @@ function ItemShape({
     const p = node.position()
     labelRef.current?.position({ x: p.x - width / 2, y: p.y - 7 / scale })
   }
+  const fill =
+    item.kind === 'device'
+      ? isOn
+        ? theme.deviceOnGlow
+        : theme.deviceFill
+      : theme.furnitureFill
+  const stroke = selected
+    ? theme.selection
+    : isOn
+      ? theme.deviceOn
+      : theme.deviceOff
   return (
     <>
       <Group
@@ -3150,7 +3268,7 @@ function ItemShape({
         offsetX={width / 2}
         offsetY={depth / 2}
         rotation={item.rotation}
-        draggable
+        draggable={draggable}
         onMouseDown={(e) => {
           // 不让 Stage 把它当成"开始画墙"
           e.cancelBubble = true
@@ -3176,10 +3294,13 @@ function ItemShape({
         <Rect
           width={width}
           height={depth}
-          fill={item.kind === 'device' ? '#dbe6ff' : '#e8e1d4'}
-          stroke={selected ? '#4f6bed' : '#8a8a9e'}
-          strokeWidth={(selected ? 2 : 1) / scale}
-          cornerRadius={2 / scale}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={(selected || isOn ? 2 : 1) / scale}
+          shadowColor={isOn ? theme.deviceOn : undefined}
+          shadowBlur={isOn ? 10 / scale : 0}
+          shadowOpacity={isOn ? 0.55 : 0}
+          cornerRadius={4 / scale}
         />
       </Group>
       {selected || hovered || (summary && scale >= 0.35) ? (
@@ -3191,7 +3312,10 @@ function ItemShape({
           align="center"
           text={summary ? `${item.name} · ${summary}` : item.name}
           fontSize={11 / scale}
-          fill="#3a3a4d"
+          fill={theme.label}
+          stroke={theme.labelHalo}
+          strokeWidth={1.6 / scale}
+          fillAfterStrokeEnabled
           wrap="none"
           listening={false}
         />
