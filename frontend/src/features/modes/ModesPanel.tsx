@@ -1,15 +1,26 @@
+import {
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  Loader2,
+  Pencil,
+  Play,
+  Plus,
+  ShieldCheck,
+  Sparkles,
+  Square,
+  Trash2,
+} from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
 import {
   cancelRun,
   deleteMode,
   getRun,
-  getSimEnv,
   listItems,
   listItemTypes,
   listModes,
   runMode,
-  updateSimEnv,
-  type EffectiveSeason,
   type Item,
   type ItemType,
   type Mode,
@@ -17,49 +28,40 @@ import {
   type RunStatus,
   type RunStep,
   type RunStepStatus,
-  type SimEnv,
-  type SimSeason,
 } from '../../api/client.ts'
-import ModeEditor from './ModeEditor.tsx'
-
-const SEASON_LABEL: Record<SimSeason, string> = {
-  auto: '自动（按月份）',
-  spring: '春季',
-  summer: '夏季',
-  autumn: '秋季',
-  winter: '冬季',
-}
-
-const EFFECTIVE_SEASON_LABEL: Record<EffectiveSeason, string> = {
-  spring: '春季',
-  summer: '夏季',
-  autumn: '秋季',
-  winter: '冬季',
-}
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../../components/ui/alert-dialog.tsx'
+import { Badge, type BadgeVariant } from '../../components/ui/badge.tsx'
+import { Button } from '../../components/ui/button.tsx'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../../components/ui/sheet.tsx'
+import { Skeleton } from '../../components/ui/skeleton.tsx'
+import { cn } from '../../lib/utils.ts'
 import { useLiveStore } from '../../store/liveState.ts'
+import ModeEditor from './ModeEditor.tsx'
 
 const LAST_RUN_KEY = 'smarthome:lastRunId'
 
-const RUN_MODE_LABEL: Record<Mode['runMode'], string> = {
-  restart: '重跑',
-  single: '忽略重复',
-  queued: '排队',
-  parallel: '并发',
+const RUN_STATUS_META: Record<RunStatus, { text: string; variant: BadgeVariant }> = {
+  running: { text: '执行中', variant: 'accent' },
+  ok: { text: '已完成', variant: 'success' },
+  failed: { text: '失败', variant: 'danger' },
+  cancelled: { text: '已取消', variant: 'secondary' },
 }
 
-const RUN_STATUS_LABEL: Record<RunStatus, { text: string; bg: string; fg: string }> = {
-  running: { text: '执行中', bg: '#e0e7ff', fg: '#3730a3' },
-  ok: { text: '已完成', bg: '#dcfce7', fg: '#166534' },
-  failed: { text: '失败', bg: '#fee2e2', fg: '#991b1b' },
-  cancelled: { text: '已取消', bg: '#f3f4f6', fg: '#374151' },
-}
-
-const STEP_STATUS_LABEL: Record<RunStepStatus, { text: string; bg: string; fg: string }> = {
-  pending: { text: '等待中', bg: '#f3f4f6', fg: '#4b5563' },
-  running: { text: '执行中', bg: '#dbeafe', fg: '#1d4ed8' },
-  ok: { text: '成功', bg: '#dcfce7', fg: '#166534' },
-  failed: { text: '失败', bg: '#fee2e2', fg: '#991b1b' },
-  skipped: { text: '已跳过', bg: '#fef3c7', fg: '#92400e' },
+const STEP_STATUS_META: Record<RunStepStatus, { text: string; variant: BadgeVariant }> = {
+  pending: { text: '等待中', variant: 'secondary' },
+  running: { text: '执行中', variant: 'accent' },
+  ok: { text: '成功', variant: 'success' },
+  failed: { text: '失败', variant: 'danger' },
+  skipped: { text: '已跳过', variant: 'warning' },
 }
 
 function formatDuration(startedAt?: string, finishedAt?: string): string {
@@ -67,29 +69,35 @@ function formatDuration(startedAt?: string, finishedAt?: string): string {
   const ms = new Date(finishedAt).getTime() - new Date(startedAt).getTime()
   if (Number.isNaN(ms) || ms < 0) return ''
   if (ms < 1000) return `${ms} ms`
-  return `${(ms / 1000).toFixed(2)} s`
+  return `${(ms / 1000).toFixed(1)} s`
 }
 
 type Props = {
   userRole: 'admin' | 'member'
-  onClose: () => void
+  items?: Item[]
+  itemTypes?: ItemType[]
 }
 
-export default function ModesPanel({ userRole, onClose }: Props) {
+/**
+ * 右侧非遮罩「场景模式」Tab 面板：
+ * - 一键启动场景时户型图完全可见并实时联动；
+ * - 实时展示步骤进度与动态舒适温控 note；
+ * - 仅在新建/编辑模式时从右侧滑出宽 Sheet。
+ */
+export default function ModesPanel({ userRole, items: propItems, itemTypes: propTypes }: Props) {
   const [modes, setModes] = useState<Mode[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [selectedModeId, setSelectedModeId] = useState<string | null>(null)
   const [activeRun, setActiveRun] = useState<Run | null>(null)
   const [busyModeId, setBusyModeId] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
-  const [simEnv, setSimEnv] = useState<SimEnv | null>(null)
-  const [seasonDraft, setSeasonDraft] = useState<SimSeason>('auto')
-  const [outdoorTempDraft, setOutdoorTempDraft] = useState<string>('')
-  const [savingEnv, setSavingEnv] = useState(false)
-  const [items, setItems] = useState<Item[]>([])
-  const [itemTypes, setItemTypes] = useState<ItemType[]>([])
+  const [fallbackItems, setFallbackItems] = useState<Item[]>([])
+  const [fallbackTypes, setFallbackTypes] = useState<ItemType[]>([])
   const [editingMode, setEditingMode] = useState<Mode | 'new' | null>(null)
+  const [deletingMode, setDeletingMode] = useState<Mode | null>(null)
+
+  const items = propItems ?? fallbackItems
+  const itemTypes = propTypes ?? fallbackTypes
 
   const typeMap = useMemo(() => new Map(itemTypes.map((t) => [t.key, t])), [itemTypes])
   const deviceItems = useMemo(
@@ -103,15 +111,12 @@ export default function ModesPanel({ userRole, onClose }: Props) {
   const wsConnected = useLiveStore((s) => s.connected)
   const seedRun = useLiveStore((s) => s.seedRun)
 
-  // 初次打开：加载场景列表，并尝试恢复上次执行（刷新/重连恢复时间线）
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     listModes()
       .then((list) => {
-        if (cancelled) return
-        setModes(list)
-        if (list.length > 0) setSelectedModeId((prev) => prev ?? list[0].id)
+        if (!cancelled) setModes(list)
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : '读取场景列表失败')
@@ -120,21 +125,12 @@ export default function ModesPanel({ userRole, onClose }: Props) {
         if (!cancelled) setLoading(false)
       })
 
-    getSimEnv()
-      .then((env) => {
-        if (cancelled) return
-        setSimEnv(env)
-        setSeasonDraft(env.season)
-        setOutdoorTempDraft(env.outdoorTemp !== undefined ? String(env.outdoorTemp) : '')
-      })
-      .catch(() => {})
-
-    if (userRole === 'admin') {
+    if (userRole === 'admin' && (!propItems || !propTypes)) {
       Promise.all([listItems(), listItemTypes()])
         .then(([its, types]) => {
           if (cancelled) return
-          setItems(its)
-          setItemTypes(types)
+          setFallbackItems(its)
+          setFallbackTypes(types)
         })
         .catch(() => {})
     }
@@ -151,12 +147,11 @@ export default function ModesPanel({ userRole, onClose }: Props) {
           sessionStorage.removeItem(LAST_RUN_KEY)
         })
     }
-  return () => {
+    return () => {
       cancelled = true
     }
-  }, [seedRun])
+  }, [seedRun, userRole, propItems, propTypes])
 
-  // WS 断线重连后主动回拉当前执行详情，补齐断线期间漏掉的 run_step
   useEffect(() => {
     if (!wsConnected) return
     const runId = activeRun?.id ?? sessionStorage.getItem(LAST_RUN_KEY)
@@ -169,12 +164,11 @@ export default function ModesPanel({ userRole, onClose }: Props) {
         seedRun(run)
       })
       .catch(() => {})
-  return () => {
+    return () => {
       cancelled = true
     }
   }, [wsConnected, activeRun?.id, seedRun])
 
-  // 双标签页同步：另一个标签页触发新场景时，通过 WS latestRunId 自动拉取详情并展示实时时间线
   useEffect(() => {
     if (!latestRunId || (activeRun && activeRun.id === latestRunId)) return
     let cancelled = false
@@ -185,22 +179,15 @@ export default function ModesPanel({ userRole, onClose }: Props) {
         sessionStorage.setItem(LAST_RUN_KEY, run.id)
       })
       .catch(() => {})
-  return () => {
+    return () => {
       cancelled = true
     }
   }, [latestRunId, activeRun])
 
-  const selectedMode = useMemo(
-    () => modes.find((m) => m.id === selectedModeId) ?? null,
-    [modes, selectedModeId],
-  )
-
   const mergedSteps: RunStep[] = useMemo(() => {
     if (!activeRun) return []
     const map = new Map<string, RunStep>()
-    for (const st of activeRun.steps) {
-      map.set(st.nodeId, st)
-    }
+    for (const st of activeRun.steps) map.set(st.nodeId, st)
     if (liveRunSteps) {
       for (const live of Object.values(liveRunSteps)) {
         const prev = map.get(live.nodeId)
@@ -220,9 +207,7 @@ export default function ModesPanel({ userRole, onClose }: Props) {
     return Array.from(map.values()).sort((a, b) => a.path.localeCompare(b.path))
   }, [activeRun, liveRunSteps])
 
-  const effectiveRunStatus: RunStatus | null = activeRun
-    ? liveRunStatus ?? activeRun.status
-    : null
+  const effectiveRunStatus: RunStatus | null = activeRun ? liveRunStatus ?? activeRun.status : null
 
   const effectiveRunReason: string | null = useMemo(() => {
     if (activeRun?.reason) return activeRun.reason
@@ -243,18 +228,18 @@ export default function ModesPanel({ userRole, onClose }: Props) {
   const handleTrigger = async (mode: Mode) => {
     setError(null)
     setBusyModeId(mode.id)
-    setSelectedModeId(mode.id)
     try {
       const requestId =
-        typeof crypto !== 'undefined' && 'randomUUID' in crypto
-          ? crypto.randomUUID()
-          : undefined
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : undefined
       const run = await runMode(mode.id, requestId)
       setActiveRun(run)
       seedRun(run)
       sessionStorage.setItem(LAST_RUN_KEY, run.id)
+      toast.success(`已触发场景「${mode.name}」`)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : '触发场景执行失败')
+      const msg = e instanceof Error ? e.message : '触发场景执行失败'
+      setError(msg)
+      toast.error(msg)
     } finally {
       setBusyModeId(null)
     }
@@ -268,33 +253,35 @@ export default function ModesPanel({ userRole, onClose }: Props) {
       const updated = await cancelRun(activeRun.id)
       setActiveRun(updated)
       seedRun(updated)
+      toast.info('已取消当前场景执行')
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : '取消执行失败')
+      const msg = e instanceof Error ? e.message : '取消执行失败'
+      setError(msg)
+      toast.error(msg)
     } finally {
       setCancelling(false)
     }
   }
 
-  const handleDeleteMode = async (mode: Mode) => {
+  const confirmDelete = async () => {
+    if (!deletingMode) return
+    const target = deletingMode
+    setDeletingMode(null)
     setError(null)
     try {
-      await deleteMode(mode.id)
+      await deleteMode(target.id)
+      toast.success(`已删除场景「${target.name}」`)
       const list = await listModes()
       setModes(list)
-      if (selectedModeId === mode.id) {
-        setSelectedModeId(list[0]?.id ?? null)
-      }
-      if (editingMode !== 'new' && editingMode?.id === mode.id) {
-        setEditingMode(null)
-      }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : '删除场景失败')
+      const msg = e instanceof Error ? e.message : '删除场景失败'
+      setError(msg)
+      toast.error(msg)
     }
   }
 
   const handleModeSaved = async (saved: Mode) => {
     setEditingMode(null)
-    setSelectedModeId(saved.id)
     try {
       const list = await listModes()
       setModes(list)
@@ -306,419 +293,261 @@ export default function ModesPanel({ userRole, onClose }: Props) {
     }
   }
 
-  const handleSaveEnv = async () => {
-    setSavingEnv(true)
-    setError(null)
-    try {
-      const trimmed = outdoorTempDraft.trim()
-      const outdoorTemp = trimmed === '' ? undefined : Number(trimmed)
-      if (outdoorTemp !== undefined && (Number.isNaN(outdoorTemp) || outdoorTemp < -40 || outdoorTemp > 60)) {
-        setError('室外温度需在 -40 到 60℃ 之间（或留空表示未配置室外传感器）')
-        return
-      }
-      const updated = await updateSimEnv({ season: seasonDraft, outdoorTemp })
-      setSimEnv(updated)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : '更新仿真环境失败')
-    } finally {
-      setSavingEnv(false)
-    }
-  }
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(15, 23, 42, 0.45)' }}
-      role="dialog"
-      aria-label="场景编排与运行时间线"
-    >
-      <div
-        className="flex h-[80vh] w-full max-w-4xl flex-col overflow-hidden shadow-xl"
-        style={{
-          background: 'var(--color-surface, #ffffff)',
-          border: '1px solid var(--color-border)',
-          borderRadius: 'var(--radius-md, 8px)',
-        }}
-      >
-        <header
-          className="flex items-center justify-between px-4 py-3"
-          style={{ borderBottom: '1px solid var(--color-border)' }}
-        >
-          <div>
-            <h2 className="text-base font-semibold">场景模式与运行时间线</h2>
-            <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
-              一键触发内置场景，经由 WebSocket 实时回显每一步状态与耗时
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="px-2.5 py-1 text-xs"
-            style={{
-              border: '1px solid var(--color-border)',
-              borderRadius: 'var(--radius-sm)',
-              background: 'var(--color-bg)',
-            }}
-          >
-            关闭
-          </button>
-        </header>
+    <div className="flex h-full flex-col overflow-y-auto p-3.5">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div>
+          <h2 className="text-xs font-semibold text-text-secondary">一键场景模式</h2>
+          <p className="text-[11px] text-text-muted">启动时画布保持可见并实时联动</p>
+        </div>
+        {userRole === 'admin' ? (
+          <Button variant="soft" size="xs" onClick={() => setEditingMode('new')}>
+            <Plus className="h-3.5 w-3.5" />
+            新建
+          </Button>
+        ) : null}
+      </div>
 
-        {simEnv ? (
-          <div
-            className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-xs"
-            style={{
-              background: 'var(--color-bg)',
-              borderBottom: '1px solid var(--color-border)',
-            }}
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">温控策略仿真环境：</span>
-              <span
-                className="px-2 py-0.5 font-medium"
-                style={{ borderRadius: '999px', background: '#e0e7ff', color: '#3730a3' }}
+      {error ? (
+        <div
+          role="alert"
+          className="mb-3 flex items-start gap-2 rounded-[var(--radius-sm)] border border-status-danger/25 bg-status-danger-soft px-3 py-2 text-xs text-status-danger"
+        >
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      ) : null}
+
+      {/* 场景卡片列表 */}
+      {loading ? (
+        <div className="space-y-2">
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+        </div>
+      ) : modes.length === 0 ? (
+        <div className="flex flex-col items-center justify-center rounded-[var(--radius-md)] border border-dashed border-border-strong bg-bg-subtle/40 px-4 py-7 text-center">
+          <Sparkles className="mb-2 h-6 w-6 text-text-muted" />
+          <p className="text-xs font-medium text-text-primary">暂无场景模式</p>
+          <p className="mt-1 text-[11px] text-text-muted">
+            创建你的第一个一键联动场景，如回家、观影或睡眠模式
+          </p>
+          {userRole === 'admin' ? (
+            <Button variant="soft" size="xs" className="mt-3" onClick={() => setEditingMode('new')}>
+              <Plus className="h-3.5 w-3.5" />
+              新建场景
+            </Button>
+          ) : null}
+        </div>
+      ) : (
+        <ul className="space-y-2">
+          {modes.map((m) => {
+            const busy = busyModeId === m.id
+            const isActive = activeRun?.modeId === m.id && effectiveRunStatus === 'running'
+            return (
+              <li
+                key={m.id}
+                className={cn(
+                  'rounded-[var(--radius-md)] border p-2.5 transition-colors',
+                  isActive
+                    ? 'border-accent bg-accent-soft/50'
+                    : 'border-border-default bg-bg-surface hover:border-border-strong',
+                )}
               >
-                当前生效：{EFFECTIVE_SEASON_LABEL[simEnv.effectiveSeason]}
-              </span>
-              {simEnv.outdoorTemp !== undefined ? (
-                <span style={{ color: 'var(--color-muted)' }}>室外 {simEnv.outdoorTemp}℃</span>
-              ) : (
-                <span style={{ color: 'var(--color-muted)' }}>未配置室外温度</span>
-              )}
-            </div>
-            {userRole === 'admin' ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  aria-label="仿真季节"
-                  value={seasonDraft}
-                  onChange={(e) => setSeasonDraft(e.target.value as SimSeason)}
-                  className="px-2 py-1 text-xs"
-                  style={{
-                    border: '1px solid var(--color-border)',
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'var(--color-surface, #fff)',
-                  }}
-                >
-                  {(Object.keys(SEASON_LABEL) as SimSeason[]).map((k) => (
-                    <option key={k} value={k}>
-                      {SEASON_LABEL[k]}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="number"
-                  step="0.5"
-                  placeholder="室外℃（可选）"
-                  value={outdoorTempDraft}
-                  onChange={(e) => setOutdoorTempDraft(e.target.value)}
-                  className="w-28 px-2 py-1 text-xs"
-                  style={{
-                    border: '1px solid var(--color-border)',
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'var(--color-surface, #fff)',
-                  }}
-                />
-                <button
-                  type="button"
-                  disabled={savingEnv}
-                  onClick={() => void handleSaveEnv()}
-                  className="px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
-                  style={{
-                    background: 'var(--color-primary, #4f6bed)',
-                    borderRadius: 'var(--radius-sm)',
-                  }}
-                >
-                  {savingEnv ? '应用中…' : '应用季节'}
-                </button>
-              </div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-sm font-medium text-text-primary">{m.name}</span>
+                      {!m.enabled ? <Badge variant="secondary">已停用</Badge> : null}
+                    </div>
+                    <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-muted">
+                      <span>{m.definition.steps.length} 个步骤</span>
+                      {m.definition.guard ? (
+                        <span className="inline-flex items-center gap-0.5 text-accent">
+                          · <ShieldCheck className="h-3 w-3" /> 含前提条件
+                        </span>
+                      ) : null}
+                    </p>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-1">
+                    {userRole === 'admin' ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => setEditingMode(m)}
+                          aria-label={`编辑 ${m.name}`}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-status-danger hover:bg-status-danger-soft"
+                          onClick={() => setDeletingMode(m)}
+                          aria-label={`删除 ${m.name}`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </>
+                    ) : null}
+                    <Button
+                      variant={isActive ? 'soft' : 'default'}
+                      size="xs"
+                      disabled={busy || !m.enabled}
+                      onClick={() => void handleTrigger(m)}
+                    >
+                      {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
+                      {busy ? '启动中' : '执行'}
+                    </Button>
+                  </div>
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+
+      {/* 实时运行时间线 */}
+      <section className="mt-4 space-y-2.5 border-t border-border-default pt-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h3 className="truncate text-xs font-semibold text-text-secondary">
+              运行进度{activeRunModeName ? ` · ${activeRunModeName}` : ''}
+            </h3>
+            {effectiveRunStatus ? (
+              <Badge variant={RUN_STATUS_META[effectiveRunStatus].variant}>
+                {RUN_STATUS_META[effectiveRunStatus].text}
+              </Badge>
             ) : null}
           </div>
-        ) : null}
+          {activeRun && effectiveRunStatus === 'running' ? (
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={cancelling}
+              onClick={() => void handleCancel()}
+              className="border-status-danger/40 text-status-danger hover:bg-status-danger-soft"
+            >
+              <Square className="h-3 w-3" />
+              {cancelling ? '取消中' : '停止'}
+            </Button>
+          ) : null}
+        </div>
 
-        {error ? (
-          <div
-            className="mx-4 mt-3 px-3 py-2 text-xs"
-            style={{ background: '#fee2e2', color: '#991b1b', borderRadius: 'var(--radius-sm)' }}
-          >
-            {error}
+        {!activeRun ? (
+          <div className="rounded-[var(--radius-sm)] bg-bg-subtle/60 px-3 py-4 text-center text-[11px] text-text-muted">
+            点击上方任意场景的「执行」，这里会实时回显每一步状态与舒适温控依据。
           </div>
-        ) : null}
+        ) : (
+          <div className="space-y-2">
+            {effectiveRunReason ? (
+              <div
+                className={cn(
+                  'rounded-[var(--radius-sm)] border px-2.5 py-2 text-xs',
+                  effectiveRunStatus === 'failed'
+                    ? 'border-status-danger/25 bg-status-danger-soft text-status-danger'
+                    : 'border-status-warning/30 bg-status-warning-soft text-status-warning',
+                )}
+              >
+                {effectiveRunReason}
+              </div>
+            ) : null}
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-12">
-          {/* 左侧：场景列表 */}
-          <section
-            className="overflow-y-auto p-4 md:col-span-5"
-            style={{ borderRight: '1px solid var(--color-border)' }}
-          >
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <h3 className="text-xs font-medium uppercase" style={{ color: 'var(--color-muted)' }}>
-                场景列表（{modes.length}）
-              </h3>
-              {userRole === 'admin' ? (
-                <button
-                  type="button"
-                  onClick={() => setEditingMode('new')}
-                  className="px-2 py-0.5 text-xs font-medium text-white"
-                  style={{ background: 'var(--color-primary, #4f6bed)', borderRadius: '4px' }}
-                >
-                  + 新建场景
-                </button>
-              ) : null}
-            </div>
-            {loading ? (
-              <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
-                正在加载场景…
-              </p>
-            ) : modes.length === 0 ? (
-              <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
-                暂无场景模式
-              </p>
-            ) : (
-              <ul className="space-y-2">
-                {modes.map((m) => {
-                  const selected = m.id === selectedModeId
-                  const busy = busyModeId === m.id
-  return (
-                    <li
-                      key={m.id}
-                      onClick={() => setSelectedModeId(m.id)}
-                      className="flex cursor-pointer items-center justify-between gap-2 p-3 transition-colors"
-                      style={{
-                        border: `1px solid ${selected ? 'var(--color-primary)' : 'var(--color-border)'}`,
-                        borderRadius: 'var(--radius-sm)',
-                        background: selected ? 'var(--color-primary-weak)' : 'var(--color-bg)',
-                      }}
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate text-sm font-medium">{m.name}</span>
-                          <span
-                            className="px-1.5 py-0.5 text-[10px]"
-                            style={{
-                              borderRadius: '4px',
-                              background: '#e5e7eb',
-                              color: '#374151',
-                            }}
-                          >
-                            {RUN_MODE_LABEL[m.runMode]}
-                          </span>
-                        </div>
-                        <p className="mt-0.5 text-xs" style={{ color: 'var(--color-muted)' }}>
-                          {m.definition.steps.length} 个步骤
-                          {m.definition.guard ? ' · 含守卫条件' : ''}
-                        </p>
+            <ol className="space-y-1.5">
+              {mergedSteps.map((st, idx) => {
+                const meta = STEP_STATUS_META[st.status]
+                const dur = formatDuration(st.startedAt, st.finishedAt)
+                const depth = Math.max(0, st.path.split('.').length - 1)
+                return (
+                  <li
+                    key={st.nodeId}
+                    style={{ marginLeft: `${depth * 12}px` }}
+                    className="rounded-[var(--radius-sm)] border border-border-default bg-bg-subtle/40 p-2.5 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        {st.status === 'ok' ? (
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-status-success" />
+                        ) : st.status === 'running' ? (
+                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
+                        ) : (
+                          <Clock className="h-3.5 w-3.5 shrink-0 text-text-muted" />
+                        )}
+                        <span className="truncate font-medium text-text-primary">
+                          {idx + 1}. {st.alias || st.nodeId}
+                        </span>
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5">
-                        {userRole === 'admin' ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setEditingMode(m)
-                              }}
-                              className="px-2 py-1 text-xs"
-                              style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', background: '#fff' }}
-                            >
-                              编辑
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                void handleDeleteMode(m)
-                              }}
-                              className="px-2 py-1 text-xs"
-                              style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', color: '#dc2626', background: '#fff' }}
-                            >
-                              删
-                            </button>
-                          </>
-                        ) : null}
-                        <button
-                          type="button"
-                          disabled={busy || !m.enabled}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setEditingMode(null)
-                            void handleTrigger(m)
-                          }}
-                          className="shrink-0 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-                          style={{
-                            background: 'var(--color-primary, #4f6bed)',
-                            borderRadius: 'var(--radius-sm)',
-                          }}
-                        >
-                          {busy ? '启动中…' : '执行'}
-                        </button>
+                        {dur ? <span className="font-mono text-[10px] text-text-muted">{dur}</span> : null}
+                        <Badge variant={meta.variant}>{meta.text}</Badge>
                       </div>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
+                    </div>
 
-            {selectedMode ? (
-              <div className="mt-4 pt-3" style={{ borderTop: '1px solid var(--color-border)' }}>
-                <h4 className="mb-1.5 text-xs font-medium" style={{ color: 'var(--color-muted)' }}>
-                  「{selectedMode.name}」步骤预览
-                </h4>
-                <ol className="space-y-1 text-xs">
-                  {selectedMode.definition.steps.map((st, idx) => (
-                    <li key={st.nodeId} className="flex items-center justify-between gap-2 py-0.5">
-                      <span className="truncate">
-                        {idx + 1}. {st.alias || st.nodeId}
-                      </span>
-                      <span style={{ color: 'var(--color-muted)' }}>
-                        {st.type === 'delay' ? `延时 ${st.ms ?? 0}ms` : st.type}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            ) : null}
-          </section>
-
-          {/* 右侧：编辑器或实时运行时间线 */}
-          <section className="flex min-h-0 flex-col overflow-y-auto p-4 md:col-span-7">
-            {editingMode !== null && userRole === 'admin' ? (
-              <ModeEditor
-                key={editingMode === 'new' ? 'new' : editingMode.id}
-                initial={editingMode === 'new' ? null : editingMode}
-                devices={deviceItems}
-                typeMap={typeMap}
-                onSaved={(saved) => void handleModeSaved(saved)}
-                onCancel={() => setEditingMode(null)}
-              />
-            ) : (
-              <>
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-medium">
-                  运行时间线{activeRunModeName ? ` · ${activeRunModeName}` : ''}
-                </h3>
-                {effectiveRunStatus ? (
-                  <span
-                    className="px-2 py-0.5 text-xs font-medium"
-                    style={{
-                      borderRadius: '999px',
-                      background: RUN_STATUS_LABEL[effectiveRunStatus].bg,
-                      color: RUN_STATUS_LABEL[effectiveRunStatus].fg,
-                    }}
-                  >
-                    {RUN_STATUS_LABEL[effectiveRunStatus].text}
-                  </span>
-                ) : null}
-              </div>
-              {activeRun && effectiveRunStatus === 'running' ? (
-                <button
-                  type="button"
-                  disabled={cancelling}
-                  onClick={() => void handleCancel()}
-                  className="px-2.5 py-1 text-xs font-medium disabled:opacity-50"
-                  style={{
-                    border: '1px solid #ef4444',
-                    color: '#dc2626',
-                    borderRadius: 'var(--radius-sm)',
-                    background: '#fff',
-                  }}
-                >
-                  {cancelling ? '取消中…' : '取消执行'}
-                </button>
-              ) : null}
-            </div>
-
-            {!activeRun ? (
-              <div
-                className="flex flex-1 items-center justify-center text-xs"
-                style={{ color: 'var(--color-muted)' }}
-              >
-                点击左侧任意场景的「执行」按钮，这里会实时显示每一步的执行进度与耗时。
-              </div>
-            ) : (
-              <>
-                {effectiveRunReason ? (
-                  <div
-                    className="mb-3 px-3 py-2 text-xs"
-                    style={{
-                      background: effectiveRunStatus === 'failed' ? '#fee2e2' : '#fef3c7',
-                      color: effectiveRunStatus === 'failed' ? '#991b1b' : '#92400e',
-                      borderRadius: 'var(--radius-sm)',
-                    }}
-                  >
-                    {effectiveRunReason}
-                  </div>
-                ) : null}
-                <ol className="space-y-2">
-                  {mergedSteps.map((st, idx) => {
-                    const badge = STEP_STATUS_LABEL[st.status]
-                    const dur = formatDuration(st.startedAt, st.finishedAt)
-                    const depth = Math.max(0, st.path.split('.').length - 1)
-  return (
-                      <li
-                        key={st.nodeId}
-                        className="p-3"
-                        style={{
-                          marginLeft: `${depth * 18}px`,
-                          border: '1px solid var(--color-border)',
-                          borderRadius: 'var(--radius-sm)',
-                          background: 'var(--color-bg)',
-                        }}
+                    {st.note ? (
+                      <p className="mt-1.5 rounded bg-accent-soft/70 px-2 py-1 text-[11px] text-accent">
+                        {st.note}
+                      </p>
+                    ) : null}
+                    {st.error && st.error !== st.note ? (
+                      <p
+                        className={cn(
+                          'mt-1 text-[11px]',
+                          st.status === 'failed' ? 'text-status-danger' : 'text-text-muted',
+                        )}
                       >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <span className="text-xs font-mono" style={{ color: 'var(--color-muted)' }}>
-                            #{idx + 1}
-                          </span>
-                          <span className="truncate text-sm font-medium">
-                            {st.alias || st.nodeId}
-                          </span>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {dur ? (
-                            <span className="text-xs font-mono" style={{ color: 'var(--color-muted)' }}>
-                              {dur}
-                            </span>
-                          ) : null}
-                          <span
-                            className="px-2 py-0.5 text-xs font-medium"
-                            style={{
-                              borderRadius: '999px',
-                              background: badge.bg,
-                              color: badge.fg,
-                            }}
-                          >
-                            {badge.text}
-                          </span>
-                        </div>
-                      </div>
-                      {st.note ? (
-                        <p
-                          className="mt-1.5 px-2 py-1 text-xs"
-                          style={{
-                            background: '#eff6ff',
-                            color: '#1e40af',
-                            borderRadius: '4px',
-                          }}
-                        >
-                          调节依据：{st.note}
-                        </p>
-                      ) : null}
-                      {st.error && st.error !== st.note ? (
-                        <p className="mt-1 text-xs" style={{ color: st.status === 'failed' ? '#991b1b' : 'var(--color-muted)' }}>
-                          {st.error}
-                        </p>
-                      ) : null}
-                    </li>
-                  )
-                })}
-                </ol>
-              </>
-            )}
-              </>
-            )}
-          </section>
-        </div>
-      </div>
+                        {st.error}
+                      </p>
+                    ) : null}
+                  </li>
+                )
+              })}
+            </ol>
+          </div>
+        )}
+      </section>
+
+      {/* 右侧宽抽屉：新建/编辑场景模式 */}
+      <Sheet open={editingMode !== null && userRole === 'admin'} onOpenChange={(open) => { if (!open) setEditingMode(null) }}>
+        <SheetContent side="right" className="w-full max-w-[620px]">
+          <SheetHeader>
+            <SheetTitle>
+              {editingMode && editingMode !== 'new' ? `编辑场景 · ${editingMode.name}` : '新建自定义场景'}
+            </SheetTitle>
+            <SheetDescription>
+              使用自然语言步骤卡片编排前提条件、设备动作、等待与条件分支
+            </SheetDescription>
+          </SheetHeader>
+          {editingMode !== null && userRole === 'admin' ? (
+            <ModeEditor
+              key={editingMode === 'new' ? 'new' : editingMode.id}
+              initial={editingMode === 'new' ? null : editingMode}
+              devices={deviceItems}
+              typeMap={typeMap}
+              onSaved={(saved) => void handleModeSaved(saved)}
+              onCancel={() => setEditingMode(null)}
+            />
+          ) : null}
+        </SheetContent>
+      </Sheet>
+
+      {/* 删除确认 AlertDialog */}
+      <AlertDialog open={Boolean(deletingMode)} onOpenChange={(open) => { if (!open) setDeletingMode(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除场景「{deletingMode?.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>
+              删除后该场景将从列表中移除，历史运行记录保留只读。此操作无法撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmDelete()}>确认删除</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
