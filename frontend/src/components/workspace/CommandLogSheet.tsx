@@ -1,6 +1,6 @@
 import { RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { listCommandLogs, type CommandLog, type Item } from '../../api/client.ts'
+import { listCommandLogs, type Capability, type CommandLog, type Item, type ItemType } from '../../api/client.ts'
 import { cn } from '../../lib/utils.ts'
 import { Badge, type BadgeVariant } from '../ui/badge.tsx'
 import { Button } from '../ui/button.tsx'
@@ -27,17 +27,35 @@ type Props = {
   open: boolean
   onOpenChange: (open: boolean) => void
   items: Item[]
+  types?: ItemType[]
+}
+
+function formatTargetValue(cap: Capability | undefined, target: unknown): string {
+  if (target === undefined || target === null) return ''
+  if (cap?.type === 'bool' || typeof target === 'boolean') {
+    if (cap?.key === 'locked') return target ? '上锁' : '解锁'
+    return target ? '开启' : '关闭'
+  }
+  if (cap?.type === 'enum') {
+    const opt = cap.options?.find((o) => o.value === target)
+    if (opt) return opt.label
+  }
+  if (cap?.type === 'number' && cap.unit) {
+    return `${String(target)} ${cap.unit}`
+  }
+  return typeof target === 'string' ? target : JSON.stringify(target)
 }
 
 /**
  * F4 操作日志只读抽屉（对接 GET /api/command-logs）。
  */
-export default function CommandLogSheet({ open, onOpenChange, items }: Props) {
+export default function CommandLogSheet({ open, onOpenChange, items, types = [] }: Props) {
   const [logs, setLogs] = useState<CommandLog[]>([])
   const [loading, setLoading] = useState(false)
   const [filter, setFilter] = useState<StatusFilter>('all')
 
-  const itemNameById = useMemo(() => new Map(items.map((it) => [it.id, it.name])), [items])
+  const itemById = useMemo(() => new Map(items.map((it) => [it.id, it])), [items])
+  const typeByKey = useMemo(() => new Map(types.map((t) => [t.key, t])), [types])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -111,7 +129,14 @@ export default function CommandLogSheet({ open, onOpenChange, items }: Props) {
             <ul className="space-y-2">
               {visible.map((log) => {
                 const meta = STATUS_META[log.status]
-                const devName = log.itemId ? itemNameById.get(log.itemId) ?? log.itemId.slice(0, 8) : '未知设备'
+                const item = log.itemId ? itemById.get(log.itemId) : undefined
+                const devName = item?.name ?? (log.itemId ? log.itemId.slice(0, 8) : '未知设备')
+                const typ = item ? typeByKey.get(item.typeKey) : undefined
+                const cap = log.capabilityKey
+                  ? typ?.capabilities.find((c) => c.key === log.capabilityKey)
+                  : undefined
+                const capLabel = cap?.name ?? log.capabilityKey
+                const targetText = formatTargetValue(cap, log.target)
                 return (
                   <li
                     key={log.id}
@@ -120,14 +145,14 @@ export default function CommandLogSheet({ open, onOpenChange, items }: Props) {
                     <div className="flex items-center justify-between gap-2">
                       <span className="truncate font-medium text-text-primary">
                         {devName}
-                        {log.capabilityKey ? ` · ${log.capabilityKey}` : ''}
+                        {capLabel ? ` · ${capLabel}` : ''}
                       </span>
                       <Badge variant={meta.variant}>{meta.label}</Badge>
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-text-muted">
                       <span>
                         {SOURCE_LABEL[log.source]}
-                        {log.target !== undefined ? ` → ${JSON.stringify(log.target)}` : ''}
+                        {targetText ? ` → ${targetText}` : ''}
                       </span>
                       <span className="font-mono">
                         {log.durationMs !== undefined ? `${log.durationMs}ms · ` : ''}
@@ -136,7 +161,9 @@ export default function CommandLogSheet({ open, onOpenChange, items }: Props) {
                     </div>
                     {log.error ? (
                       <p className="rounded bg-status-danger-soft px-2 py-1 text-[11px] text-status-danger">
-                        {log.error}
+                        {log.capabilityKey && capLabel
+                          ? log.error.replaceAll(`「${log.capabilityKey}」`, `「${capLabel}」`)
+                          : log.error}
                       </p>
                     ) : null}
                   </li>

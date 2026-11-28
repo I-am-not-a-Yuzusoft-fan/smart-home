@@ -2523,7 +2523,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
       {showTypes ? <TypeManager onClose={() => setShowTypes(false)} /> : null}
       <ShortcutHelpDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
-      <CommandLogSheet open={showLogs} onOpenChange={setShowLogs} items={items} />
+      <CommandLogSheet open={showLogs} onOpenChange={setShowLogs} items={items} types={types} />
       {user.role === 'admin' ? (
         <ImportExportDialog
           open={showImportExport}
