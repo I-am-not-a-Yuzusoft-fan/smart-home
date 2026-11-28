@@ -23,6 +23,7 @@ import { Button } from './ui/button.tsx'
 import { Input } from './ui/input.tsx'
 import { Label } from './ui/label.tsx'
 import type { WorkspaceMode } from './workspace/AppHeader.tsx'
+import HistoryChart from './workspace/HistoryChart.tsx'
 
 type Props = {
   item: Item | null
@@ -129,6 +130,17 @@ export default function ItemInspector({
   const hasStale = Boolean(
     type?.capabilities.some((capability) => isCapabilityStale(capability, updatedAtOf(capability.key), nowMs)),
   )
+  const latestUpdatedAt = useMemo(() => {
+    if (!item || !type) return null
+    let maxTs = 0
+    for (const c of type.capabilities) {
+      const ts = updatedAtOf(c.key)
+      if (!ts) continue
+      const ms = new Date(ts).getTime()
+      if (Number.isFinite(ms) && ms > maxTs) maxTs = ms
+    }
+    return maxTs > 0 ? new Date(maxTs).toLocaleTimeString('zh-CN') : null
+  }, [item, type, liveStates, stateUpdatedAt])
 
   async function save() {
     if (!item) return
@@ -241,11 +253,16 @@ export default function ItemInspector({
       {/* 设备控制区（运行模式下放在最顶部） */}
       {item.kind === 'device' && type ? (
         <section className="space-y-2.5">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <h3 className="text-xs font-semibold text-text-secondary">实时控制与状态</h3>
-            {Object.keys(draftValues).length > 0 ? (
-              <Badge variant="warning">有未下发修改</Badge>
-            ) : null}
+            <div className="flex items-center gap-1.5">
+              {latestUpdatedAt ? (
+                <span className="font-mono text-[10px] text-text-muted">更新于 {latestUpdatedAt}</span>
+              ) : null}
+              {Object.keys(draftValues).length > 0 ? (
+                <Badge variant="warning">未下发</Badge>
+              ) : null}
+            </div>
           </div>
 
           {hasStale ? (
@@ -296,6 +313,8 @@ export default function ItemInspector({
                 ))}
             </div>
           ) : null}
+
+          <HistoryChart itemId={item.id} capabilities={type.capabilities} />
         </section>
       ) : null}
 

@@ -1,9 +1,11 @@
-import { CloudSun, FastForward, Loader2, Thermometer } from 'lucide-react'
+import { CloudSun, FastForward, Loader2, RotateCcw, Sliders, Thermometer } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
   advanceSimulation,
+  getSimConfig,
   getSimEnv,
+  updateSimConfig,
   updateSimEnv,
   type EffectiveSeason,
   type SimEnv,
@@ -15,6 +17,7 @@ import { Input } from '../ui/input.tsx'
 import { Label } from '../ui/label.tsx'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select.tsx'
+import { Slider } from '../ui/slider.tsx'
 
 const SEASON_LABEL: Record<SimSeason, string> = {
   auto: '自动（按月份）',
@@ -39,7 +42,10 @@ export default function SimEnvPopover({ isAdmin }: Props) {
   const [env, setEnv] = useState<SimEnv | null>(null)
   const [seasonDraft, setSeasonDraft] = useState<SimSeason>('auto')
   const [outdoorTempDraft, setOutdoorTempDraft] = useState('')
+  const [delayMs, setDelayMs] = useState(100)
+  const [failurePct, setFailurePct] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [savingCfg, setSavingCfg] = useState(false)
   const [advancing, setAdvancing] = useState(false)
   const [open, setOpen] = useState(false)
 
@@ -53,10 +59,19 @@ export default function SimEnvPopover({ isAdmin }: Props) {
         setOutdoorTempDraft(data.outdoorTemp !== undefined ? String(data.outdoorTemp) : '')
       })
       .catch(() => {})
+    if (isAdmin) {
+      getSimConfig()
+        .then((cfg) => {
+          if (cancelled) return
+          setDelayMs(cfg.delayMs)
+          setFailurePct(Math.round(cfg.failureRate * 100))
+        })
+        .catch(() => {})
+    }
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, isAdmin])
 
   async function handleSaveEnv() {
     const trimmed = outdoorTempDraft.trim()
@@ -74,6 +89,23 @@ export default function SimEnvPopover({ isAdmin }: Props) {
       toast.error(e instanceof Error ? e.message : '更新仿真环境失败')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleSaveSimConfig(nextDelay: number, nextFailurePct: number) {
+    setSavingCfg(true)
+    try {
+      const updated = await updateSimConfig({
+        delayMs: nextDelay,
+        failureRate: Math.max(0, Math.min(1, nextFailurePct / 100)),
+      })
+      setDelayMs(updated.delayMs)
+      setFailurePct(Math.round(updated.failureRate * 100))
+      toast.success(`模拟器参数已更新：延迟 ${updated.delayMs}ms，失败率 ${Math.round(updated.failureRate * 100)}%`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : '更新模拟器参数失败')
+    } finally {
+      setSavingCfg(false)
     }
   }
 
@@ -105,79 +137,140 @@ export default function SimEnvPopover({ isAdmin }: Props) {
       <PopoverContent className="w-80 space-y-4">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <h3 className="text-sm font-semibold text-text-primary">仿真环境与时间</h3>
-            <p className="text-xs text-text-muted">驱动动态舒适温控策略与传感器演化</p>
+            <h3 className="text-sm font-semibold text-text-primary">仿真环境与模拟器</h3>
+            <p className="text-xs text-text-muted">驱动动态舒适温控与命令容错演示</p>
           </div>
           {env && <Badge variant="accent">{EFFECTIVE_SEASON_LABEL[env.effectiveSeason]}</Badge>}
         </div>
 
         {isAdmin ? (
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>仿真季节</Label>
-              <Select value={seasonDraft} onValueChange={(v) => setSeasonDraft(v as SimSeason)}>
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {(Object.keys(SEASON_LABEL) as SimSeason[]).map((k) => (
-                    <SelectItem key={k} value={k}>
-                      {SEASON_LABEL[k]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+          <>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label>仿真季节</Label>
+                <Select value={seasonDraft} onValueChange={(v) => setSeasonDraft(v as SimSeason)}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(SEASON_LABEL) as SimSeason[]).map((k) => (
+                      <SelectItem key={k} value={k}>
+                        {SEASON_LABEL[k]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="sim-outdoor-temp">室外温度（℃，留空表示未配置）</Label>
-              <div className="relative">
-                <Thermometer className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted" />
-                <Input
-                  id="sim-outdoor-temp"
-                  type="number"
-                  step="0.5"
-                  placeholder="例如 32"
-                  value={outdoorTempDraft}
-                  onChange={(e) => setOutdoorTempDraft(e.target.value)}
-                  className="h-8 pl-8 text-xs"
-                />
+              <div className="space-y-1.5">
+                <Label htmlFor="sim-outdoor-temp">室外温度（℃，留空表示未配置）</Label>
+                <div className="relative">
+                  <Thermometer className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted" />
+                  <Input
+                    id="sim-outdoor-temp"
+                    type="number"
+                    step="0.5"
+                    placeholder="例如 32"
+                    value={outdoorTempDraft}
+                    onChange={(e) => setOutdoorTempDraft(e.target.value)}
+                    className="h-8 pl-8 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="flex-1"
+                  disabled={saving}
+                  onClick={() => void handleSaveEnv()}
+                >
+                  {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                  应用环境
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={advancing}
+                  onClick={() => void handleAdvance()}
+                  title="向前推进仿真时钟 60 分钟"
+                >
+                  {advancing ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <FastForward className="h-3.5 w-3.5" />
+                  )}
+                  +60 分钟
+                </Button>
               </div>
             </div>
 
-            <div className="flex gap-2">
+            {/* FR-4.6 运行时模拟器容错配置 */}
+            <div className="space-y-2.5 border-t border-border-default pt-3">
+              <div className="flex items-center justify-between">
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-text-secondary">
+                  <Sliders className="h-3.5 w-3.5 text-accent" />
+                  模拟器延迟与故障率
+                </span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={savingCfg}
+                  onClick={() => void handleSaveSimConfig(100, 0)}
+                  title="恢复默认（100ms / 0%）"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  重置
+                </Button>
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-text-muted">命令延迟</span>
+                  <span className="font-mono font-medium text-text-primary">{delayMs} ms</span>
+                </div>
+                <Slider
+                  min={0}
+                  max={3000}
+                  step={50}
+                  value={[delayMs]}
+                  onValueChange={([v]) => setDelayMs(v)}
+                />
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="text-text-muted">注入失败率</span>
+                  <span className="font-mono font-medium text-text-primary">{failurePct}%</span>
+                </div>
+                <Slider
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={[failurePct]}
+                  onValueChange={([v]) => setFailurePct(v)}
+                />
+              </div>
+
               <Button
-                variant="default"
-                size="sm"
-                className="flex-1"
-                disabled={saving}
-                onClick={() => void handleSaveEnv()}
+                variant="soft"
+                size="xs"
+                className="w-full"
+                disabled={savingCfg}
+                onClick={() => void handleSaveSimConfig(delayMs, failurePct)}
               >
-                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                应用环境
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={advancing}
-                onClick={() => void handleAdvance()}
-                title="向前推进仿真时钟 60 分钟"
-              >
-                {advancing ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <FastForward className="h-3.5 w-3.5" />
-                )}
-                +60 分钟
+                {savingCfg ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                应用模拟器参数
               </Button>
             </div>
-          </div>
+          </>
         ) : (
           <div className="rounded-[var(--radius-sm)] bg-bg-subtle p-3 text-xs text-text-secondary">
             当前生效季节：<strong>{seasonText}</strong>
             <br />
             室外温度：{tempText}
-            <p className="mt-1.5 text-[11px] text-text-muted">仅管理员可修改仿真季节与时间加速。</p>
+            <p className="mt-1.5 text-[11px] text-text-muted">仅管理员可修改仿真季节与模拟器参数。</p>
           </div>
         )}
       </PopoverContent>

@@ -52,6 +52,8 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.tsx'
 import AppHeader, { type WorkspaceMode } from '../components/workspace/AppHeader.tsx'
 import CanvasFloatingBar from '../components/workspace/CanvasFloatingBar.tsx'
+import CommandLogSheet from '../components/workspace/CommandLogSheet.tsx'
+import ImportExportDialog from '../components/workspace/ImportExportDialog.tsx'
 import RoomDeviceList from '../components/workspace/RoomDeviceList.tsx'
 import ShortcutHelpDialog from '../components/workspace/ShortcutHelpDialog.tsx'
 import ModesPanel from '../features/modes/ModesPanel.tsx'
@@ -360,6 +362,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
   const [rightOpen, setRightOpen] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 1280 : true))
   const [rightTab, setRightTab] = useState<'modes' | 'device'>('modes')
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [showLogs, setShowLogs] = useState(false)
+  const [showImportExport, setShowImportExport] = useState(false)
   const [pendingWallDelete, setPendingWallDelete] = useState<{ id: string; message: string } | null>(null)
   const canvasTheme = useCanvasTheme()
   const effectiveMode: WorkspaceMode = user.role === 'admin' ? workspaceMode : 'control'
@@ -1590,9 +1594,20 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       }
       return
     }
-    setItems((current) => current.map((row) => (row.id === item.id ? { ...row, x, y } : row)))
+    const namedRoomAt = (px: number, py: number): string | undefined => {
+      const h = roomAt(px, py)
+      if (!h) return undefined
+      const rm = planRef.current.rooms.find((r) => r.hash === h)
+      return rm?.name ? h : undefined
+    }
+    const inferredRoom = namedRoomAt(x, y)
+    setItems((current) =>
+      current.map((row) =>
+        row.id === item.id ? { ...row, x, y, ...(inferredRoom ? { roomHash: inferredRoom } : {}) } : row,
+      ),
+    )
     try {
-      await updateItemFields(item.id, { x, y })
+      await updateItemFields(item.id, { x, y, ...(inferredRoom ? { roomHash: inferredRoom } : {}) })
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存物品位置失败')
       void load()
@@ -1612,6 +1627,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     const world = toWorld({ x: e.clientX - rect.left, y: e.clientY - rect.top })
     const x = Math.max(0, Math.min(5000, Math.round(world.x)))
     const y = Math.max(0, Math.min(5000, Math.round(world.y)))
+    const inferNamedRoom = (px: number, py: number): string | undefined => {
+      const h = roomAt(px, py)
+      if (!h) return undefined
+      const rm = planRef.current.rooms.find((r) => r.hash === h)
+      return rm?.name ? h : undefined
+    }
     // 挂墙物品：落点必须在墙边 40 像素内，否则拒绝——窗帘凭空立在地板中间没有意义。
     if (typ.mount === 'wall') {
       const anchor = nearestWallAnchor(planRef.current.walls, world.x, world.y, 40 / viewport.scale)
@@ -1620,10 +1641,12 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         return
       }
       const offset = clampWallOffset(anchor.offset, typ.defaultWidth, anchor.length)
+      const inferredRoom = inferNamedRoom(world.x, world.y)
       try {
         const created = await createItem({
           typeKey,
           name: typ.name,
+          roomHash: inferredRoom,
           x: anchor.x,
           y: anchor.y,
           rotation: anchor.rotation,
@@ -1641,7 +1664,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       return
     }
     try {
-      const created = await createItem({ typeKey, name: typ.name, x, y, rotation: 0 })
+      const inferredRoom = inferNamedRoom(x, y)
+      const created = await createItem({ typeKey, name: typ.name, roomHash: inferredRoom, x, y, rotation: 0 })
       setItems((current) => [...current, created])
       setSelectedItemId(created.id)
       setSelectedId(null)
@@ -1847,6 +1871,8 @@ export default function PlanPage({ user, onSignedOut }: Props) {
         onToggleLeft={() => setLeftOpen((v) => !v)}
         onToggleRight={() => setRightOpen((v) => !v)}
         onOpenTypes={() => setShowTypes(true)}
+        onOpenLogs={() => setShowLogs(true)}
+        onOpenImportExport={() => setShowImportExport(true)}
         onOpenShortcuts={() => setShowShortcuts(true)}
         onLogout={() => void onLogout()}
       />
@@ -2497,6 +2523,16 @@ export default function PlanPage({ user, onSignedOut }: Props) {
 
       {showTypes ? <TypeManager onClose={() => setShowTypes(false)} /> : null}
       <ShortcutHelpDialog open={showShortcuts} onOpenChange={setShowShortcuts} />
+      <CommandLogSheet open={showLogs} onOpenChange={setShowLogs} items={items} />
+      {user.role === 'admin' ? (
+        <ImportExportDialog
+          open={showImportExport}
+          onOpenChange={setShowImportExport}
+          onImported={async () => {
+            setItems(await listItems())
+          }}
+        />
+      ) : null}
 
       <AlertDialog
         open={Boolean(pendingWallDelete)}

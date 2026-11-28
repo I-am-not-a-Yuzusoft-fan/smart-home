@@ -35,6 +35,12 @@ WHERE item_id = $1
 ORDER BY recorded_at DESC, id DESC
 LIMIT $2;
 
+-- name: CleanupOldStateHistory :execrows
+DELETE FROM state_history WHERE recorded_at < now() - interval '30 days';
+
+-- name: CleanupOldCommandLogs :execrows
+DELETE FROM command_log WHERE created_at < now() - interval '90 days';
+
 -- name: InsertCommand :one
 INSERT INTO command_log (request_id, item_id, capability_key, target, status, source, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

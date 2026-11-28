@@ -90,13 +90,64 @@ func (h *Handler) ListStates(ctx context.Context, itemID uuid.UUID) ([]storegen.
 	return storegen.New(h.pool).ListStatesByItem(ctx, pgUUID(itemID))
 }
 
+func (h *Handler) ListAllStates(ctx context.Context) ([]storegen.CapabilityState, error) {
+	return storegen.New(h.pool).ListAllStates(ctx)
+}
+
 func (h *Handler) ListHistory(ctx context.Context, itemID uuid.UUID, capabilityKey *string, limit int32) ([]storegen.StateHistory, error) {
-	key := pgTextPtr(capabilityKey)
-	return storegen.New(h.pool).ListStateHistory(ctx, storegen.ListStateHistoryParams{
-		ItemID:        pgUUID(itemID),
-		CapabilityKey: key,
-		Limit:         limit,
-	})
+	return h.ListHistoryRange(ctx, itemID, capabilityKey, nil, nil, limit)
+}
+
+func (h *Handler) ListHistoryRange(
+	ctx context.Context,
+	itemID uuid.UUID,
+	capabilityKey *string,
+	from, to *time.Time,
+	limit int32,
+) ([]storegen.StateHistory, error) {
+	var fromArg, toArg pgtype.Timestamptz
+	if from != nil {
+		fromArg = pgTime(*from)
+	}
+	if to != nil {
+		toArg = pgTime(*to)
+	}
+	rows, err := h.pool.Query(ctx, `
+		SELECT id, item_id, capability_key, value, source, recorded_at
+		FROM state_history
+		WHERE item_id = $1
+		  AND ($2::text IS NULL OR capability_key = $2)
+		  AND ($3::timestamptz IS NULL OR recorded_at >= $3)
+		  AND ($4::timestamptz IS NULL OR recorded_at <= $4)
+		ORDER BY recorded_at DESC, id DESC
+		LIMIT $5
+	`, pgUUID(itemID), pgTextPtr(capabilityKey), fromArg, toArg, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]storegen.StateHistory, 0)
+	for rows.Next() {
+		var r storegen.StateHistory
+		if err := rows.Scan(&r.ID, &r.ItemID, &r.CapabilityKey, &r.Value, &r.Source, &r.RecordedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CleanupRetention 按 NFR-16 清理超过 30 天的 state_history 与超过 90 天的 command_log。
+func (h *Handler) CleanupRetention(ctx context.Context) (int64, int64, error) {
+	tagHist, err := h.pool.Exec(ctx, `DELETE FROM state_history WHERE recorded_at < now() - interval '30 days'`)
+	if err != nil {
+		return 0, 0, err
+	}
+	tagCmd, err := h.pool.Exec(ctx, `DELETE FROM command_log WHERE created_at < now() - interval '90 days'`)
+	if err != nil {
+		return tagHist.RowsAffected(), 0, err
+	}
+	return tagHist.RowsAffected(), tagCmd.RowsAffected(), nil
 }
 
 func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, error) {

@@ -48,9 +48,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	simAdapter := device.NewSimulatorAdapter(cfg.simulatorDelay, cfg.simulatorFailureRate)
 	commandHandler := control.NewCommandHandler(
 		pool,
-		device.NewSimulatorAdapter(cfg.simulatorDelay, cfg.simulatorFailureRate),
+		simAdapter,
 		cfg.commandTimeout,
 	)
 	hub := api.NewHub(storegen.New(pool))
@@ -73,7 +74,27 @@ func main() {
 	modeRunner.SetYields(commandHandler.Yields())
 	srv.SetHub(hub)
 	srv.SetSimEnv(simEnv)
+	srv.SetSimulator(simAdapter)
 	srv.SetModeRunner(modeRunner)
+
+	// NFR-16: 每日定时清理超过 30 天的 state_history 与 90 天的 command_log
+	go func() {
+		if hist, cmd, err := commandHandler.CleanupRetention(ctx); err == nil && (hist > 0 || cmd > 0) {
+			log.Info("已执行历史与日志留存清理", "stateHistoryDeleted", hist, "commandLogDeleted", cmd)
+		}
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if hist, cmd, err := commandHandler.CleanupRetention(ctx); err == nil && (hist > 0 || cmd > 0) {
+					log.Info("已执行历史与日志留存清理", "stateHistoryDeleted", hist, "commandLogDeleted", cmd)
+				}
+			}
+		}
+	}()
 
 	sensorReporter := control.NewSensorReporter(pool, hub)
 	srv.SetSensorReporter(sensorReporter)
