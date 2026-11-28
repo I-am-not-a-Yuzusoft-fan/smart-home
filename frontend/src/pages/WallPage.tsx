@@ -1,8 +1,9 @@
 import { CloudSun, Home, LogIn, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { getWallSnapshot, type CapabilityState, type Item, type ItemType, type WallScreenSnapshot } from '../api/client.ts'
+import { getWallSnapshot, type Item, type WallScreenSnapshot } from '../api/client.ts'
 import { Badge } from '../components/ui/badge.tsx'
 import { Button } from '../components/ui/button.tsx'
+import { liveValuesFor, stateSummary } from '../features/control/live.ts'
 import { ItemIcon } from '../lib/icons.tsx'
 
 const SEASON_TEXT: Record<string, string> = {
@@ -10,28 +11,6 @@ const SEASON_TEXT: Record<string, string> = {
   summer: '夏季',
   autumn: '秋季',
   winter: '冬季',
-}
-
-function summarizeStates(type: ItemType | undefined, states: CapabilityState[]): string {
-  if (!type || states.length === 0) return '待机'
-  const map = new Map(states.map((s) => [s.capabilityKey, s.value]))
-  const parts: string[] = []
-  for (const cap of type.capabilities) {
-    const v = map.get(cap.key)
-    if (v === undefined) continue
-    if (cap.type === 'bool') {
-      if (cap.key === 'on' || cap.key === 'power') parts.push(v === true ? '开启' : '关闭')
-      else if (cap.key === 'occupied') parts.push(v === true ? '有人' : '无人')
-      else if (cap.key === 'locked') parts.push(v === true ? '已上锁' : '已解锁')
-      else if (cap.key === 'open') parts.push(v === true ? '打开' : '闭合')
-    } else if (cap.type === 'number') {
-      parts.push(`${v}${cap.unit ?? ''}`)
-    } else if (cap.type === 'enum') {
-      const opt = cap.options?.find((o) => o.value === v)
-      parts.push(opt?.label ?? String(v))
-    }
-  }
-  return parts.slice(0, 2).join(' · ') || '在线'
 }
 
 /**
@@ -64,15 +43,31 @@ export default function WallPage() {
   }, [refresh])
 
   const typeMap = useMemo(() => new Map((snap?.types ?? []).map((t) => [t.key, t])), [snap?.types])
-  const statesByItem = useMemo(() => {
-    const map = new Map<string, CapabilityState[]>()
+  const liveStateMap = useMemo(() => {
+    const map: Parameters<typeof liveValuesFor>[0] = {}
     for (const st of snap?.states ?? []) {
-      const arr = map.get(st.itemId)
-      if (arr) arr.push(st)
-      else map.set(st.itemId, [st])
+      map[`${st.itemId}:${st.capabilityKey}`] = {
+        itemId: st.itemId,
+        capabilityKey: st.capabilityKey,
+        value: st.value,
+        source: st.source,
+        ts: st.updatedAt,
+      }
     }
     return map
   }, [snap?.states])
+
+  const nowMs = now.getTime()
+  const deviceView = useCallback(
+    (dev: Item) => {
+      const typ = typeMap.get(dev.typeKey)
+      const vals = liveValuesFor(liveStateMap, dev.id, typ, nowMs)
+      const isOn = vals.on === true || vals.power === true
+      const summary = stateSummary(typ, vals) || '待机'
+      return { typ, isOn, summary }
+    },
+    [typeMap, liveStateMap, nowMs],
+  )
 
   const roomGroups = useMemo(() => {
     const map = new Map<string, { name: string; devices: Item[] }>()
@@ -182,11 +177,9 @@ export default function WallPage() {
               />
             ))}
             {(snap?.items ?? []).map((it) => {
-              const typ = typeMap.get(it.typeKey)
+              const { typ, isOn } = deviceView(it)
               const w = typ?.defaultWidth ?? 40
               const d = typ?.defaultDepth ?? 40
-              const stList = statesByItem.get(it.id) ?? []
-              const isOn = stList.some((s) => (s.capabilityKey === 'on' || s.capabilityKey === 'power') && s.value === true)
               return (
                 <g key={it.id} transform={`translate(${it.x}, ${it.y})`}>
                   <rect
@@ -229,9 +222,7 @@ export default function WallPage() {
                 <h3 className="text-xs font-semibold text-text-muted">{group.name}</h3>
                 <div className="grid gap-1.5">
                   {group.devices.map((dev) => {
-                    const typ = typeMap.get(dev.typeKey)
-                    const stList = statesByItem.get(dev.id) ?? []
-                    const isOn = stList.some((s) => (s.capabilityKey === 'on' || s.capabilityKey === 'power') && s.value === true)
+                    const { typ, isOn, summary } = deviceView(dev)
                     return (
                       <div
                         key={dev.id}
@@ -244,7 +235,7 @@ export default function WallPage() {
                           <span className="truncate text-xs font-medium text-text-primary">{dev.name}</span>
                         </div>
                         <Badge variant={isOn ? 'success' : 'secondary'}>
-                          {summarizeStates(typ, stList)}
+                          {summary}
                         </Badge>
                       </div>
                     )

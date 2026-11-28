@@ -13,7 +13,6 @@ import (
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api/gen"
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
-	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/device"
 )
 
 // SessionCookieName 是会话 Cookie 的名字，与契约里的 securityScheme 一致。
@@ -48,11 +47,10 @@ type Server struct {
 	plan      PlanStore
 	itemTypes ItemTypeStore
 	items     ItemStore
-	commands   CommandHandler
-	modes      *control.ModeRunner
-	simEnv     *control.SimEnvStore
-	simAdapter *device.SimulatorAdapter
-	ws         *Hub
+	commands CommandHandler
+	modes    *control.ModeRunner
+	simEnv   *control.SimEnvStore
+	ws       *Hub
 	sensors   *control.SensorReporter
 	session   *SessionCodec
 	secure    bool
@@ -79,10 +77,6 @@ func (s *Server) SetModeRunner(runner *control.ModeRunner) {
 
 func (s *Server) SetSimEnv(env *control.SimEnvStore) {
 	s.simEnv = env
-}
-
-func (s *Server) SetSimulator(adapter *device.SimulatorAdapter) {
-	s.simAdapter = adapter
 }
 
 // dummyHash 是固定口令 "dummy-password" 的 bcrypt 结果，只用来抹平时间差。

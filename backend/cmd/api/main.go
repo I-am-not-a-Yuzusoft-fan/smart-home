@@ -74,7 +74,6 @@ func main() {
 	modeRunner.SetYields(commandHandler.Yields())
 	srv.SetHub(hub)
 	srv.SetSimEnv(simEnv)
-	srv.SetSimulator(simAdapter)
 	srv.SetModeRunner(modeRunner)
 
 	// NFR-16: 每日定时清理超过 30 天的 state_history 与 90 天的 command_log

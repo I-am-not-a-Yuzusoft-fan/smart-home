@@ -2,19 +2,31 @@ package api
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/api/gen"
-	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/device"
+	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
 )
+
+type simConfigPayload struct {
+	DelayMs     int     `json:"delayMs"`
+	FailureRate float64 `json:"failureRate"`
+}
+
+// SimulatorController 由控制层实现，接口层不得直接依赖设备层。
+type SimulatorController interface {
+	GetSimulatorConfig() control.SimulatorConfig
+	UpdateSimulatorConfig(delayMs int, failureRate float64) (control.SimulatorConfig, bool)
+}
 
 // GetSimConfig 返回当前模拟器运行参数（延迟与失败率）。
 func (s *Server) GetSimConfig(w http.ResponseWriter, _ *http.Request) {
-	if s.simAdapter == nil {
-		writeJSON(w, http.StatusOK, device.SimulatorConfig{DelayMs: 0, FailureRate: 0})
+	ctrl, ok := s.commands.(SimulatorController)
+	if !ok || ctrl == nil {
+		writeJSON(w, http.StatusOK, simConfigPayload{DelayMs: 0, FailureRate: 0})
 		return
 	}
-	writeJSON(w, http.StatusOK, s.simAdapter.Config())
+	cfg := ctrl.GetSimulatorConfig()
+	writeJSON(w, http.StatusOK, simConfigPayload{DelayMs: cfg.DelayMs, FailureRate: cfg.FailureRate})
 }
 
 // UpdateSimConfig 动态调整模拟器延迟与失败率（仅管理员可用）。
@@ -28,11 +40,12 @@ func (s *Server) UpdateSimConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, gen.FORBIDDEN, "仅管理员可调整模拟器参数")
 		return
 	}
-	if s.simAdapter == nil {
+	ctrl, ok := s.commands.(SimulatorController)
+	if !ok || ctrl == nil {
 		writeError(w, http.StatusServiceUnavailable, gen.INTERNAL, "模拟器未初始化")
 		return
 	}
-	var body device.SimulatorConfig
+	var body simConfigPayload
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
@@ -44,6 +57,10 @@ func (s *Server) UpdateSimConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "failureRate 必须在 0–1 之间")
 		return
 	}
-	updated := s.simAdapter.UpdateConfig(time.Duration(body.DelayMs)*time.Millisecond, body.FailureRate)
-	writeJSON(w, http.StatusOK, updated)
+	updated, ok := ctrl.UpdateSimulatorConfig(body.DelayMs, body.FailureRate)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, gen.INTERNAL, "当前设备适配器不支持动态调参")
+		return
+	}
+	writeJSON(w, http.StatusOK, simConfigPayload{DelayMs: updated.DelayMs, FailureRate: updated.FailureRate})
 }

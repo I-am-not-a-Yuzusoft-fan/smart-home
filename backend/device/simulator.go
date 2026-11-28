@@ -29,8 +29,8 @@ type Adapter interface {
 }
 
 type SimulatorConfig struct {
-	DelayMs     int     `json:"delayMs"`
-	FailureRate float64 `json:"failureRate"`
+	DelayMs     int
+	FailureRate float64
 }
 
 type SimulatorAdapter struct {

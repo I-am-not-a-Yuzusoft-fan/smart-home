@@ -1562,6 +1562,13 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     setError(null)
   }
 
+  function inferNamedRoom(px: number, py: number): string | undefined {
+    const h = roomAt(px, py)
+    if (!h) return undefined
+    const rm = planRef.current.rooms.find((r) => r.hash === h)
+    return rm?.name ? h : undefined
+  }
+
   async function onItemDragEnd(item: Item, e: Konva.KonvaEventObject<Event>) {
     const node = e.target
     // Stage 已经应用了视口变换，子节点的 x/y 就是世界坐标（厘米），不用再换算。
@@ -1581,9 +1588,14 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       }
       const width = typeByKey.get(item.typeKey)?.defaultWidth ?? 60
       const offset = clampWallOffset(anchor.offset, width, anchor.length)
+      const inferredRoom = inferNamedRoom(x, y)
       setSaving(true)
       try {
-        const saved = await updateItem(item.id, { wallId: anchor.wallId, wallOffset: offset })
+        const saved = await updateItem(item.id, {
+          wallId: anchor.wallId,
+          wallOffset: offset,
+          ...(inferredRoom ? { roomHash: inferredRoom } : {}),
+        })
         setItems((current) => current.map((row) => (row.id === item.id ? saved : row)))
         setError(null)
       } catch (err) {
@@ -1594,13 +1606,7 @@ export default function PlanPage({ user, onSignedOut }: Props) {
       }
       return
     }
-    const namedRoomAt = (px: number, py: number): string | undefined => {
-      const h = roomAt(px, py)
-      if (!h) return undefined
-      const rm = planRef.current.rooms.find((r) => r.hash === h)
-      return rm?.name ? h : undefined
-    }
-    const inferredRoom = namedRoomAt(x, y)
+    const inferredRoom = inferNamedRoom(x, y)
     setItems((current) =>
       current.map((row) =>
         row.id === item.id ? { ...row, x, y, ...(inferredRoom ? { roomHash: inferredRoom } : {}) } : row,
@@ -1627,12 +1633,6 @@ export default function PlanPage({ user, onSignedOut }: Props) {
     const world = toWorld({ x: e.clientX - rect.left, y: e.clientY - rect.top })
     const x = Math.max(0, Math.min(5000, Math.round(world.x)))
     const y = Math.max(0, Math.min(5000, Math.round(world.y)))
-    const inferNamedRoom = (px: number, py: number): string | undefined => {
-      const h = roomAt(px, py)
-      if (!h) return undefined
-      const rm = planRef.current.rooms.find((r) => r.hash === h)
-      return rm?.name ? h : undefined
-    }
     // 挂墙物品：落点必须在墙边 40 像素内，否则拒绝——窗帘凭空立在地板中间没有意义。
     if (typ.mount === 'wall') {
       const anchor = nearestWallAnchor(planRef.current.walls, world.x, world.y, 40 / viewport.scale)

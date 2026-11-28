@@ -15,9 +15,37 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/control"
-	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/device"
 	itemstore "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store"
+	storegen "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
+
+type stubCommandHandler struct {
+	simCfg control.SimulatorConfig
+}
+
+func (s *stubCommandHandler) Handle(_ context.Context, _ control.Command) (control.CommandResult, error) {
+	return control.CommandResult{}, nil
+}
+func (s *stubCommandHandler) ListLogs(_ context.Context, _ int32) ([]storegen.ListCommandLogsRow, error) {
+	return nil, nil
+}
+func (s *stubCommandHandler) ListStates(_ context.Context, _ uuid.UUID) ([]storegen.CapabilityState, error) {
+	return nil, nil
+}
+func (s *stubCommandHandler) ListAllStates(_ context.Context) ([]storegen.CapabilityState, error) {
+	return nil, nil
+}
+func (s *stubCommandHandler) ListHistory(_ context.Context, _ uuid.UUID, _ *string, _ int32) ([]storegen.StateHistory, error) {
+	return nil, nil
+}
+func (s *stubCommandHandler) ListHistoryRange(_ context.Context, _ uuid.UUID, _ *string, _, _ *time.Time, _ int32) ([]storegen.StateHistory, error) {
+	return nil, nil
+}
+func (s *stubCommandHandler) GetSimulatorConfig() control.SimulatorConfig { return s.simCfg }
+func (s *stubCommandHandler) UpdateSimulatorConfig(delayMs int, failureRate float64) (control.SimulatorConfig, bool) {
+	s.simCfg = control.SimulatorConfig{DelayMs: delayMs, FailureRate: failureRate}
+	return s.simCfg, true
+}
 
 type stubAccountStore struct {
 	byID map[openapi_types.UUID]Account
@@ -134,9 +162,9 @@ func newUnitServer() (*Server, *SessionCodec, openapi_types.UUID, openapi_types.
 		{ID: uuid.New(), TypeKey: "sofa", Kind: "furniture", Name: "三人沙发", X: 100, Y: 100, Attrs: json.RawMessage(`{}`)},
 	}}
 	codec := NewSessionCodec("test-secret", time.Hour)
-	srv := New(accts, planStore, typeStore, itemStore, nil, codec, false, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	cmdStub := &stubCommandHandler{simCfg: control.SimulatorConfig{DelayMs: 100, FailureRate: 0}}
+	srv := New(accts, planStore, typeStore, itemStore, cmdStub, codec, false, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	srv.SetSimEnv(control.NewSimEnvStore())
-	srv.SetSimulator(device.NewSimulatorAdapter(100*time.Millisecond, 0))
 	return srv, codec, adminID, memberID
 }
 
@@ -192,8 +220,8 @@ func TestItemsExportImportAndPermissions(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	var overwriteReport importReport
 	_ = json.Unmarshal(rec.Body.Bytes(), &overwriteReport)
-	if overwriteReport.Updated != 1 || overwriteReport.Created != 0 {
-		t.Fatalf("unexpected overwrite report: %+v", overwriteReport)
+	if overwriteReport.Updated != 1 || overwriteReport.Created != 0 || overwriteReport.Errors == nil {
+		t.Fatalf("unexpected overwrite report (errors must be non-nil slice): %+v raw=%s", overwriteReport, rec.Body.String())
 	}
 }
 

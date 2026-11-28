@@ -116,14 +116,14 @@ export default function ImportExportDialog({ open, onOpenChange, onImported }: P
                 <Badge variant="success">新增 {report.created}</Badge>
                 <Badge variant="accent">覆盖 {report.updated}</Badge>
                 <Badge variant="secondary">跳过 {report.skipped}</Badge>
-                {report.errors.length > 0 ? (
-                  <Badge variant="danger">失败 {report.errors.length}</Badge>
+                {(report.errors ?? []).length > 0 ? (
+                  <Badge variant="danger">失败 {(report.errors ?? []).length}</Badge>
                 ) : null}
               </div>
 
-              {report.errors.length > 0 ? (
+              {(report.errors ?? []).length > 0 ? (
                 <ul className="max-h-32 space-y-1 overflow-y-auto border-t border-border-default pt-2 text-[11px] text-status-danger">
-                  {report.errors.map((err, i) => (
+                  {(report.errors ?? []).map((err, i) => (
                     <li key={i} className="flex items-start gap-1.5">
                       <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
                       <span>

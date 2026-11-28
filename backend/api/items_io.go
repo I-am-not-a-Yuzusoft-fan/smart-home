@@ -18,6 +18,7 @@ import (
 )
 
 type exportItemRecord struct {
+	RowNum   int     `json:"-"`
 	Name     string  `json:"name"`
 	TypeKey  string  `json:"typeKey"`
 	RoomName string  `json:"roomName,omitempty"`
@@ -158,7 +159,9 @@ func (s *Server) ImportItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	records, parseErrs := parseImportContent(format, req.Content)
-	report := importReport{Errors: parseErrs}
+	errs := make([]importRowError, 0, len(parseErrs))
+	errs = append(errs, parseErrs...)
+	report := importReport{Errors: errs}
 	if len(records) == 0 && len(report.Errors) > 0 {
 		writeJSON(w, http.StatusOK, report)
 		return
@@ -186,7 +189,10 @@ func (s *Server) ImportItems(w http.ResponseWriter, r *http.Request) {
 
 	typeCache := make(map[string]ItemType)
 	for i, rec := range records {
-		rowNum := i + 1
+		rowNum := rec.RowNum
+		if rowNum <= 0 {
+			rowNum = i + 1
+		}
 		name := strings.TrimSpace(rec.Name)
 		typeKey := strings.TrimSpace(rec.TypeKey)
 		if name == "" {
@@ -343,6 +349,7 @@ func parseImportContent(format, content string) ([]exportItemRecord, []importRow
 			continue
 		}
 		out = append(out, exportItemRecord{
+			RowNum:   row,
 			Name:     get("name"),
 			TypeKey:  get("typekey"),
 			RoomName: get("roomname"),

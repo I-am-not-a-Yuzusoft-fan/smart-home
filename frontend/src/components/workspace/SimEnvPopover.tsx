@@ -232,7 +232,7 @@ export default function SimEnvPopover({ isAdmin }: Props) {
                 </div>
                 <Slider
                   min={0}
-                  max={3000}
+                  max={5000}
                   step={50}
                   value={[delayMs]}
                   onValueChange={([v]) => setDelayMs(v)}
