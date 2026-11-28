@@ -1,11 +1,14 @@
 import {
   ChevronDown,
+  FileSpreadsheet,
   Home,
   Keyboard,
   LogOut,
+  Monitor,
   PanelLeft,
   PanelRight,
   PencilRuler,
+  ScrollText,
   Settings2,
   Shield,
   SlidersHorizontal,
@@ -36,6 +39,8 @@ type Props = {
   onToggleLeft: () => void
   onToggleRight: () => void
   onOpenTypes: () => void
+  onOpenLogs: () => void
+  onOpenImportExport: () => void
   onOpenShortcuts: () => void
   onLogout: () => void
 }
@@ -59,6 +64,8 @@ export default function AppHeader({
   onToggleLeft,
   onToggleRight,
   onOpenTypes,
+  onOpenLogs,
+  onOpenImportExport,
   onOpenShortcuts,
   onLogout,
 }: Props) {
@@ -155,9 +162,18 @@ export default function AppHeader({
         </div>
       )}
 
-      {/* 右段：仿真环境 Popover + 管理员类型管理（编辑态） + 右侧栏开关 + 用户菜单 */}
-      <div className="flex shrink-0 items-center gap-2">
+      {/* 右段：仿真环境 Popover + 操作日志 + 管理员类型管理（编辑态） + 用户菜单 + 右侧栏开关 */}
+      <div className="flex shrink-0 items-center gap-1.5">
         <SimEnvPopover isAdmin={isAdmin} />
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" onClick={onOpenLogs} aria-label="查看操作日志">
+              <ScrollText className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>查看操作与命令日志</TooltipContent>
+        </Tooltip>
 
         {isAdmin && mode === 'edit' ? (
           <Button variant="outline" size="sm" onClick={onOpenTypes} className="hidden md:inline-flex">
@@ -194,15 +210,34 @@ export default function AppHeader({
             </div>
             <div className="flex flex-col gap-0.5">
               {isAdmin ? (
-                <button
-                  type="button"
-                  onClick={onOpenTypes}
-                  className="flex w-full cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-xs text-text-secondary hover:bg-bg-subtle hover:text-text-primary"
-                >
-                  <Settings2 className="h-3.5 w-3.5" />
-                  设备/家具类型管理
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={onOpenTypes}
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-xs text-text-secondary hover:bg-bg-subtle hover:text-text-primary"
+                  >
+                    <Settings2 className="h-3.5 w-3.5" />
+                    设备/家具类型管理
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onOpenImportExport}
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-xs text-text-secondary hover:bg-bg-subtle hover:text-text-primary"
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5" />
+                    物品批量导入 / 导出
+                  </button>
+                </>
               ) : null}
+              <a
+                href="/wall"
+                target="_blank"
+                rel="noreferrer"
+                className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-xs text-text-secondary hover:bg-bg-subtle hover:text-text-primary"
+              >
+                <Monitor className="h-3.5 w-3.5" />
+                只读挂墙屏 (/wall)
+              </a>
               <button
                 type="button"
                 onClick={onOpenShortcuts}

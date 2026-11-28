@@ -513,6 +513,50 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
+  /api/items/export:
+    get:
+      summary: 批量导出物品清单（JSON 或 UTF-8 BOM CSV，仅管理员）
+      parameters:
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [json, csv]
+            default: json
+      responses:
+        "200":
+          description: 导出文件内容
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/items/import:
+    post:
+      summary: 批量导入物品清单（JSON 或 CSV，支持 skip/overwrite，仅管理员）
+      responses:
+        "200":
+          description: 逐行导入报告（created/updated/skipped/errors）
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/sim/config:
+    get:
+      summary: 读取模拟器运行时延迟与失败率配置
+      responses:
+        "200":
+          description: 当前配置
+    put:
+      summary: 动态更新模拟器延迟与失败率（仅管理员）
+      responses:
+        "200":
+          description: 更新后的配置
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/wall/snapshot:
+    get:
+      summary: 免登录只读挂墙屏聚合快照（FR-4.7）
+      security: []
+      responses:
+        "200":
+          description: 只读户型、物品、类型、最新状态与仿真环境快照
   /api/items:
     get:
       operationId: listItems
@@ -691,6 +735,20 @@ paths:
           schema:
             type: string
             maxLength: 64
+        - name: from
+          in: query
+          required: false
+          description: 起始时间（RFC3339）
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: 截止时间（RFC3339）
+          schema:
+            type: string
+            format: date-time
         - name: limit
           in: query
           required: false

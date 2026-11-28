@@ -14,6 +14,7 @@ import (
 
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/device"
 	"github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/policy"
+	itemstore "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store"
 	storegen "github.com/I-am-not-a-Yuzusoft-fan/smart-home/backend/store/gen"
 )
 
@@ -90,13 +91,50 @@ func (h *Handler) ListStates(ctx context.Context, itemID uuid.UUID) ([]storegen.
 	return storegen.New(h.pool).ListStatesByItem(ctx, pgUUID(itemID))
 }
 
+func (h *Handler) ListAllStates(ctx context.Context) ([]storegen.CapabilityState, error) {
+	return storegen.New(h.pool).ListAllStates(ctx)
+}
+
 func (h *Handler) ListHistory(ctx context.Context, itemID uuid.UUID, capabilityKey *string, limit int32) ([]storegen.StateHistory, error) {
-	key := pgTextPtr(capabilityKey)
-	return storegen.New(h.pool).ListStateHistory(ctx, storegen.ListStateHistoryParams{
-		ItemID:        pgUUID(itemID),
-		CapabilityKey: key,
-		Limit:         limit,
-	})
+	return h.ListHistoryRange(ctx, itemID, capabilityKey, nil, nil, limit)
+}
+
+// SimulatorConfig 是控制层对外暴露的模拟器运行配置视图（隔离设备层与接口层）。
+type SimulatorConfig struct {
+	DelayMs     int
+	FailureRate float64
+}
+
+func (h *Handler) GetSimulatorConfig() SimulatorConfig {
+	if sim, ok := h.adapter.(*device.SimulatorAdapter); ok && sim != nil {
+		c := sim.Config()
+		return SimulatorConfig{DelayMs: c.DelayMs, FailureRate: c.FailureRate}
+	}
+	return SimulatorConfig{}
+}
+
+func (h *Handler) UpdateSimulatorConfig(delayMs int, failureRate float64) (SimulatorConfig, bool) {
+	sim, ok := h.adapter.(*device.SimulatorAdapter)
+	if !ok || sim == nil {
+		return SimulatorConfig{}, false
+	}
+	c := sim.UpdateConfig(time.Duration(delayMs)*time.Millisecond, failureRate)
+	return SimulatorConfig{DelayMs: c.DelayMs, FailureRate: c.FailureRate}, true
+}
+
+func (h *Handler) ListHistoryRange(
+	ctx context.Context,
+	itemID uuid.UUID,
+	capabilityKey *string,
+	from, to *time.Time,
+	limit int32,
+) ([]storegen.StateHistory, error) {
+	return itemstore.ListStateHistoryRange(ctx, h.pool, itemID, capabilityKey, from, to, limit)
+}
+
+// CleanupRetention 按 NFR-16 清理超过 30 天的 state_history 与超过 90 天的 command_log。
+func (h *Handler) CleanupRetention(ctx context.Context) (int64, int64, error) {
+	return itemstore.CleanupRetention(ctx, h.pool)
 }
 
 func (h *Handler) Handle(ctx context.Context, command Command) (CommandResult, error) {

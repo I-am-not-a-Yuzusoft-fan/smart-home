@@ -454,6 +454,73 @@ export type CapabilityState = {
 export const listItemStates = (itemId: string) =>
   request<CapabilityState[]>(`/api/items/${encodeURIComponent(itemId)}/states`)
 
+export type StateHistory = {
+  id: number
+  itemId: string
+  capabilityKey: string
+  value: unknown
+  source: 'manual' | 'automation' | 'device' | 'timeout'
+  recordedAt: string
+}
+
+export const listItemHistory = (
+  itemId: string,
+  opts?: { key?: string; from?: string; to?: string; limit?: number },
+) => {
+  const qs = new URLSearchParams()
+  if (opts?.key) qs.set('key', opts.key)
+  if (opts?.from) qs.set('from', opts.from)
+  if (opts?.to) qs.set('to', opts.to)
+  if (opts?.limit) qs.set('limit', String(opts.limit))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return request<StateHistory[]>(`/api/items/${encodeURIComponent(itemId)}/history${suffix}`)
+}
+
+export type ImportRowError = { row: number; message: string }
+export type ImportReport = {
+  created: number
+  updated: number
+  skipped: number
+  errors: ImportRowError[]
+}
+
+export const exportItemsUrl = (format: 'json' | 'csv') =>
+  `/api/items/export?format=${encodeURIComponent(format)}`
+
+export const importItems = (input: {
+  format: 'json' | 'csv'
+  mode: 'skip' | 'overwrite'
+  content: string
+}) =>
+  request<ImportReport>('/api/items/import', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+
+export type SimConfig = {
+  delayMs: number
+  failureRate: number
+}
+
+export const getSimConfig = () => request<SimConfig>('/api/sim/config')
+
+export const updateSimConfig = (input: SimConfig) =>
+  request<SimConfig>('/api/sim/config', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+
+export type WallScreenSnapshot = {
+  plan: Plan
+  items: Item[]
+  types: ItemType[]
+  states: CapabilityState[]
+  simEnv?: SimEnv
+  serverTime: string
+}
+
+export const getWallSnapshot = () => request<WallScreenSnapshot>('/api/wall/snapshot')
+
 export type SimTickResult = { minutes: number; simulatedAt: string }
 
 export const advanceSimulation = (minutes: number) =>

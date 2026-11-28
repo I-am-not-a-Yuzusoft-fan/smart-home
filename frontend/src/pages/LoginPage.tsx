@@ -162,6 +162,14 @@ export default function LoginPage({ onSignedIn, notice }: Props) {
                 <span>家庭成员 (li)</span>
               </Button>
             </div>
+            <div className="pt-1 text-center">
+              <a
+                href="/wall"
+                className="text-xs text-accent hover:underline"
+              >
+                免登录进入只读挂墙大屏 (/wall) →
+              </a>
+            </div>
           </div>
         </CardContent>
       </Card>

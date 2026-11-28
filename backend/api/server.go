@@ -47,10 +47,10 @@ type Server struct {
 	plan      PlanStore
 	itemTypes ItemTypeStore
 	items     ItemStore
-	commands  CommandHandler
-	modes     *control.ModeRunner
-	simEnv    *control.SimEnvStore
-	ws        *Hub
+	commands CommandHandler
+	modes    *control.ModeRunner
+	simEnv   *control.SimEnvStore
+	ws       *Hub
 	sensors   *control.SensorReporter
 	session   *SessionCodec
 	secure    bool

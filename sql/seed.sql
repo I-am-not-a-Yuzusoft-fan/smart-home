@@ -9,11 +9,14 @@ INSERT INTO app_user (id, username, display_name, password_hash, role) VALUES
   ('00000000-0000-4000-8000-000000000001', 'zhang', '张先生', '$2a$12$vCKdg0kYy.teFm0UFH6GIux0GDDz3tGuGNg2P8MI29OXdZq4ErO/O', 'admin'),
   ('00000000-0000-4000-8000-000000000002', 'li',    '李女士', '$2a$12$vCKdg0kYy.teFm0UFH6GIux0GDDz3tGuGNg2P8MI29OXdZq4ErO/O', 'member');
 
--- 类型模板（家具 2 个 + 设备 10 个）
+-- 类型模板（覆盖 6 大类：照明 / 暖通空调 / 遮阳门窗 / 影音厨电 / 环境传感 / 客厅卧室家具，共 22 个模板）
 -- capabilities 的 options 一律是 {value,label} 对象：value 入库，label 给人看。
 INSERT INTO item_type (key, kind, name, icons, default_width, default_depth, capabilities, driver) VALUES
   ('sofa', 'furniture', '沙发', 'sofa', 180, 80, '[]'::jsonb, NULL),
   ('table', 'furniture', '茶几', 'table', 90, 50, '[]'::jsonb, NULL),
+  ('bed', 'furniture', '双人床', 'bed', 200, 180, '[]'::jsonb, NULL),
+  ('wardrobe', 'furniture', '衣柜', 'home', 160, 60, '[]'::jsonb, NULL),
+  ('desk', 'furniture', '书桌', 'desk', 140, 70, '[]'::jsonb, NULL),
   ('ceiling_light', 'device', '吸顶灯', 'light', 40, 40,
    '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
      {"key":"brightness","name":"亮度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true,"default":0},
@@ -22,19 +25,40 @@ INSERT INTO item_type (key, kind, name, icons, default_width, default_depth, cap
    '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
      {"key":"brightness","name":"亮度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true,"default":0},
      {"key":"color_temp","name":"色温","type":"number","unit":"K","min":2700,"max":6500,"step":100,"writable":true,"history":true,"default":4000}]'::jsonb, 'simulator'),
+  ('desk_lamp', 'device', '智能台灯', 'lamp', 24, 24,
+   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
+     {"key":"brightness","name":"亮度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true,"default":50},
+     {"key":"color_temp","name":"色温","type":"number","unit":"K","min":2700,"max":6500,"step":100,"writable":true,"history":true,"default":4500}]'::jsonb, 'simulator'),
+  ('light_strip', 'device', '氛围灯带', 'lightbulb', 120, 10,
+   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
+     {"key":"brightness","name":"亮度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true,"default":40},
+     {"key":"color_temp","name":"色温","type":"number","unit":"K","min":2700,"max":6500,"step":100,"writable":true,"history":true,"default":3200}]'::jsonb, 'simulator'),
   ('ac', 'device', '空调', 'ac', 60, 25,
    '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
      {"key":"mode","name":"模式","type":"enum","options":[{"value":"cool","label":"制冷"},{"value":"heat","label":"制热"},{"value":"fan","label":"送风"}],"writable":true,"history":true,"default":"cool"},
      {"key":"target_temp","name":"目标温度","type":"number","unit":"℃","min":16,"max":30,"step":0.5,"writable":true,"history":true,"default":26},
      {"key":"fan_speed","name":"风速","type":"enum","options":[{"value":"low","label":"低"},{"value":"mid","label":"中"},{"value":"high","label":"高"},{"value":"auto","label":"自动"}],"writable":true,"history":true,"default":"auto"}]'::jsonb, 'simulator'),
+  ('fan', 'device', '落地扇', 'fan', 40, 40,
+   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
+     {"key":"speed","name":"风速","type":"enum","options":[{"value":"low","label":"低"},{"value":"mid","label":"中"},{"value":"high","label":"高"}],"writable":true,"history":true,"default":"low"}]'::jsonb, 'simulator'),
   ('curtain', 'device', '窗帘', 'curtain', 200, 10,
    '[{"key":"position","name":"开合度","type":"number","unit":"%","min":0,"max":100,"step":1,"writable":true,"history":true,"default":0}]'::jsonb, 'simulator'),
+  ('smart_window', 'device', '电动推窗器', 'blinds', 150, 12,
+   '[{"key":"position","name":"开启度","type":"number","unit":"%","min":0,"max":100,"step":5,"writable":true,"history":true,"default":0}]'::jsonb, 'simulator'),
+  ('smart_lock', 'device', '智能门锁', 'lock', 18, 12,
+   '[{"key":"locked","name":"上锁","type":"bool","writable":true,"history":true,"default":true}]'::jsonb, 'simulator'),
   ('humidifier', 'device', '加湿器', 'humidifier', 25, 25,
    '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
      {"key":"level","name":"档位","type":"enum","options":[{"value":"low","label":"低"},{"value":"mid","label":"中"},{"value":"high","label":"高"}],"writable":true,"history":true,"default":"low"}]'::jsonb, 'simulator'),
   ('purifier', 'device', '空气净化器', 'purifier', 30, 30,
    '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
      {"key":"level","name":"档位","type":"enum","options":[{"value":"low","label":"低"},{"value":"mid","label":"中"},{"value":"high","label":"高"},{"value":"auto","label":"自动"}],"writable":true,"history":true,"default":"low"}]'::jsonb, 'simulator'),
+  ('smart_tv', 'device', '智能电视', 'tv', 130, 20,
+   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
+     {"key":"volume","name":"音量","type":"number","unit":"%","min":0,"max":100,"step":2,"writable":true,"history":true,"default":30}]'::jsonb, 'simulator'),
+  ('smart_plug', 'device', '智能插座', 'plug', 12, 12,
+   '[{"key":"on","name":"开关","type":"bool","writable":true,"history":true,"default":false},
+     {"key":"power_w","name":"实时功率","type":"number","unit":"W","min":0,"max":3500,"writable":false,"history":true,"default":0}]'::jsonb, 'simulator'),
   ('sensor_th', 'device', '温湿度传感器', 'sensor', 8, 8,
    '[{"key":"temperature","name":"温度","type":"number","unit":"℃","min":-10,"max":50,"writable":false,"history":true,"default":25},
      {"key":"humidity","name":"湿度","type":"number","unit":"%RH","min":0,"max":100,"writable":false,"history":true,"default":50}]'::jsonb, 'simulator'),
@@ -43,10 +67,11 @@ INSERT INTO item_type (key, kind, name, icons, default_width, default_depth, cap
   ('sensor_pir', 'device', '人体存在传感器', 'sensor', 8, 8,
    '[{"key":"occupied","name":"有人","type":"bool","writable":false,"history":true,"default":false}]'::jsonb, 'simulator'),
   ('door_sensor', 'device', '门磁', 'sensor', 6, 6,
-   '[{"key":"open","name":"开合","type":"bool","writable":false,"history":true,"default":false}]'::jsonb, 'simulator');
+   '[{"key":"open","name":"开合","type":"bool","writable":false,"history":true,"default":false}]'::jsonb, 'simulator')
+ON CONFLICT (key) DO NOTHING;
 
 -- 挂墙与吸顶：mount 决定物品默认贴在哪面（0002 引入），其余类型落地。
-UPDATE item_type SET mount = 'wall' WHERE key = 'curtain';
+UPDATE item_type SET mount = 'wall' WHERE key IN ('curtain', 'light_strip', 'smart_window', 'smart_lock');
 UPDATE item_type SET mount = 'ceiling' WHERE key = 'ceiling_light';
 
 -- 平面图：一个 400×300 cm 的闭合矩形（客厅），墙端点被相邻墙共享

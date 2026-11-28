@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	openapi_types "github.com/oapi-codegen/runtime/types"
@@ -19,7 +21,9 @@ type CommandHandler interface {
 	Handle(context.Context, control.Command) (control.CommandResult, error)
 	ListLogs(context.Context, int32) ([]storegen.ListCommandLogsRow, error)
 	ListStates(context.Context, uuid.UUID) ([]storegen.CapabilityState, error)
+	ListAllStates(context.Context) ([]storegen.CapabilityState, error)
 	ListHistory(context.Context, uuid.UUID, *string, int32) ([]storegen.StateHistory, error)
+	ListHistoryRange(context.Context, uuid.UUID, *string, *time.Time, *time.Time, int32) ([]storegen.StateHistory, error)
 }
 
 func (s *Server) SendItemCommand(w http.ResponseWriter, r *http.Request, id openapi_types.UUID) {
@@ -149,7 +153,24 @@ func (s *Server) ListItemHistory(w http.ResponseWriter, r *http.Request, id open
 		}
 		limit = int32(*params.Limit)
 	}
-	history, err := s.commands.ListHistory(r.Context(), uuid.UUID(id), params.Key, limit)
+	var fromTime, toTime *time.Time
+	if rawFrom := strings.TrimSpace(r.URL.Query().Get("from")); rawFrom != "" {
+		t, err := time.Parse(time.RFC3339, rawFrom)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "from 必须是合法的 RFC3339 时间戳")
+			return
+		}
+		fromTime = &t
+	}
+	if rawTo := strings.TrimSpace(r.URL.Query().Get("to")); rawTo != "" {
+		t, err := time.Parse(time.RFC3339, rawTo)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, gen.VALIDATIONFAILED, "to 必须是合法的 RFC3339 时间戳")
+			return
+		}
+		toTime = &t
+	}
+	history, err := s.commands.ListHistoryRange(r.Context(), uuid.UUID(id), params.Key, fromTime, toTime, limit)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "读取状态历史失败", "err", err)
 		writeError(w, http.StatusInternalServerError, gen.INTERNAL, "读取状态历史失败")
